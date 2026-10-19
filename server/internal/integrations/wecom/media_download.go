@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"mime"
 	"net/http"
@@ -97,7 +98,7 @@ func downloadMediaCapped(ctx context.Context, hc *http.Client, rawURL string, li
 	if err != nil {
 		return downloadedMedia{}, fmt.Errorf("wecom: media request: %w", stripURL(err))
 	}
-	resp, err := hc.Do(req)
+	resp, err := sourceguard.Do(hc, req)
 	if err != nil {
 		return downloadedMedia{}, fmt.Errorf("wecom: media download: %w", stripURL(err))
 	}
@@ -370,7 +371,7 @@ func openMedia(ctx context.Context, hc *http.Client, rawURL string) (io.ReadClos
 	if err != nil {
 		return nil, mediaHeaders{}, fmt.Errorf("wecom: media request: %w", stripURL(err))
 	}
-	resp, err := hc.Do(req)
+	resp, err := sourceguard.Do(hc, req)
 	if err != nil {
 		return nil, mediaHeaders{}, fmt.Errorf("wecom: media download: %w", stripURL(err))
 	}

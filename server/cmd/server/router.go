@@ -38,6 +38,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/r2dgit"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -217,6 +218,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 }
 
 type RouterOptions struct {
+	// SourceRestore is independent of worker enablement. The persistent default
+	// directory below also pins protection across nil-worker restarts/restores.
+	SourceRestore       *r2dgit.RestoreGuard
 	HTTPMetrics         *obsmetrics.HTTPMetrics
 	BusinessMetrics     *obsmetrics.BusinessMetrics
 	ChannelLeaseMetrics *obsmetrics.ChannelLeaseMetrics
@@ -448,6 +452,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		ServerVersion:            normalizeServerVersion(version),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	h.TaskService.SourceAuthority = h.GitSecurity
+	h.GitSecurity = sourceAuthority(pool, opts.SourceRestore)
+	h.TaskService.SourceAuthority = h.GitSecurity
 	invitationRateLimits := handler.DefaultInvitationRateLimits()
 	invitationRateLimits.Actor.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_ACTOR_10M", invitationRateLimits.Actor.Limit)
 	invitationRateLimits.Workspace.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_WORKSPACE_24H", invitationRateLimits.Workspace.Limit)
@@ -1403,6 +1410,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub.SetRPCHandler(h.DaemonRPCHandler)
 	health := newServerHealth(pool)
 
+	bus.SetDeliveryGuard(func(e events.Event) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		blocked, err := h.GitSecurity.ReaderlessSourceBlocked(ctx)
+		return err == nil && !blocked
+	})
+
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -1432,6 +1446,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	// CORS preflights contain no stored source; the data guard still precedes
+	// every authentication/session-cookie middleware on an actual application.
+	if pool != nil {
+		r.Use(h.GitSourceBoundary)
+	}
 
 	// Health / readiness checks
 	r.Get("/health", health.liveHandler)
@@ -1450,7 +1469,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Get("/health/realtime", realtimeMetricsHandler(os.Getenv("REALTIME_METRICS_TOKEN")))
 
 	// WebSocket
-	mc := &membershipChecker{queries: queries}
+	mc := &membershipChecker{queries: queries, source: h.GitSecurity}
 	hub.SetMembershipChecker(mc)
 	pr := &patResolver{queries: queries, cache: patCache}
 	slugResolver := realtime.SlugResolver(func(ctx context.Context, slug string) (string, error) {
@@ -1471,7 +1490,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// static route instead of hitting the global frame-ancestors 'none' CSP.
 	// See MUL-3821 / #4477.
 	if _, ok := store.(*storage.LocalStorage); ok {
-		r.Get("/uploads/*", h.ServeLocalUpload)
+		r.With(h.GitReaderlessBoundary).Get("/uploads/*", h.ServeLocalUpload)
 	}
 
 	// Capability-authenticated attachment download (MUL-5292). Public by
@@ -1483,7 +1502,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// /api/attachments/{id} after that request's membership check passed.
 	// The authenticated /api/attachments/{id}/download route below is
 	// unchanged — this one is purely additive.
-	r.Get("/api/attachments/{id}/signed-download", h.DownloadAttachmentWithCapability)
+	r.With(h.GitReaderlessBoundary).Get("/api/attachments/{id}/signed-download", h.DownloadAttachmentWithCapability)
 
 	// Avatar serving. Public for the same reason as the capability download
 	// above: the auth cookie is SameSite=Strict, so an auth-gated URL cannot
@@ -1492,13 +1511,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// It covers the storage key, only image keys resolve, and the object must
 	// be avatar-class — see server/internal/handler/avatar.go (MUL-5393 /
 	// #6024).
-	r.Get("/api/avatars/{sig}/*", h.ServeAvatar)
+	r.With(h.GitReaderlessBoundary).Get("/api/avatars/{sig}/*", h.ServeAvatar)
 
 	// Hosted plugin documents are capability-authenticated and intentionally
 	// outside the session middleware: the configured content origin must stay
 	// cookie-free. The encrypted path token binds the installation, immutable
 	// version, surface and one bridge challenge.
-	r.Get("/plugin-surfaces/{token}", h.ServePluginSurface)
+	r.With(h.GitReaderlessBoundary).Get("/plugin-surfaces/{token}", h.ServePluginSurface)
 
 	// Auth (public) — per-IP rate limiting.
 	if rdb == nil {
@@ -1558,6 +1577,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
+		r.Use(h.GitReaderlessBoundary)
 
 		r.Post("/register", h.DaemonRegister)
 		r.Post("/deregister", h.DaemonDeregister)
@@ -1618,6 +1638,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// boundary even when both hostnames route to the same Go service.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.PluginBearerOnly)
+		r.Use(h.GitReaderlessBoundary)
 		r.Use(middleware.PluginRateLimit(rdb, envPositiveInt("RATE_LIMIT_PLUGIN_API", 120), time.Minute))
 		r.Route(publicapiv1.BasePath, func(r chi.Router) {
 			registerPluginActionRoutes(r, h)
@@ -1632,6 +1653,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// /v1 prevents the Public API from accepting session cookies.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier, cfSigner))
+		r.Use(h.GitSourceBoundary)
 		r.Route(pluginBridgePrefix, func(r chi.Router) {
 			registerPluginActionRoutes(r, h)
 			// ui / manual only. `event` is dispatched by the host off the event
@@ -1642,6 +1664,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier, cfSigner))
+		r.Use(h.GitSourceBoundary)
 		r.Use(middleware.RefreshCloudFrontCookies(cfSigner))
 
 		// Plugin Action API. Called by the HOST PAGE on the signed-in user's
@@ -1654,6 +1677,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// no workspace in the path to gate on.
 		// --- User-scoped routes (no workspace context required) ---
 		r.Get("/api/me", h.GetMe)
+		h.MountGitAccountRoutes(r)
 		r.Patch("/api/me", h.UpdateMe)
 		r.Patch("/api/me/onboarding", h.PatchOnboarding)
 		r.Post("/api/me/onboarding/complete", h.CompleteOnboarding)
@@ -2550,10 +2574,17 @@ func buildLarkConnector(installSvc *lark.InstallationService, apiClient lark.API
 
 // membershipChecker implements realtime.MembershipChecker using database queries.
 type membershipChecker struct {
+	source  *r2dgit.Service
 	queries *db.Queries
 }
 
 func (mc *membershipChecker) IsMember(ctx context.Context, userID, workspaceID string) (bool, error) {
+	if mc.source != nil {
+		blocked, err := mc.source.ReaderlessSourceBlocked(ctx)
+		if err != nil || blocked {
+			return false, err
+		}
+	}
 	_, err := mc.queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
 		UserID:      parseUUID(userID),
 		WorkspaceID: parseUUID(workspaceID),
@@ -2565,6 +2596,15 @@ func (mc *membershipChecker) IsMember(ctx context.Context, userID, workspaceID s
 }
 
 func (mc *membershipChecker) Members(ctx context.Context, identities []realtime.MembershipIdentity) (map[realtime.MembershipIdentity]bool, error) {
+	if mc.source != nil {
+		blocked, err := mc.source.ReaderlessSourceBlocked(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if blocked {
+			return map[realtime.MembershipIdentity]bool{}, nil
+		}
+	}
 	params := db.GetRealtimeMembershipsParams{}
 	for _, identity := range identities {
 		userID, err := util.ParseUUID(identity.UserID)
@@ -2592,6 +2632,7 @@ func (mc *membershipChecker) Members(ctx context.Context, identities []realtime.
 	members := make(map[realtime.MembershipIdentity]bool, len(rows))
 	for i, identity := range identities {
 		if current[pair{params.WorkspaceIds[i], params.UserIds[i]}] {
+
 			members[identity] = true
 		}
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/inbox"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/r2dgit"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -38,13 +39,14 @@ import (
 )
 
 type TaskService struct {
-	Queries   *db.Queries
-	TxStarter TxStarter
-	Hub       *realtime.Hub
-	Bus       *events.Bus
-	Analytics analytics.Client
-	Metrics   *obsmetrics.BusinessMetrics
-	Wakeup    TaskWakeupNotifier
+	SourceAuthority *r2dgit.Service
+	Queries         *db.Queries
+	TxStarter       TxStarter
+	Hub             *realtime.Hub
+	Bus             *events.Bus
+	Analytics       analytics.Client
+	Metrics         *obsmetrics.BusinessMetrics
+	Wakeup          TaskWakeupNotifier
 	// PRSnapshotsEnabled reports whether the server can refresh GitHub check snapshots.
 	PRSnapshotsEnabled bool
 	// Entitlements supplies Cloud's workspace-scoped issue-count instruction.
@@ -3827,6 +3829,13 @@ func (s *TaskService) FinalizeTaskClaim(
 	}
 	receipt := task.DeliveredCommentIds
 	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		protected, err := qtx.IsR2DGitProtectedTask(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("protected Git policy unavailable: %w", err)
+		}
+		if !protected.Valid || protected.Bool {
+			return &ClaimDeliveryAuthzError{Reason: "runtime_access_denied", Detail: "git_runtime_ineligible"}
+		}
 		if authorize != nil {
 			if err := authorize(qtx, &token); err != nil {
 				return fmt.Errorf("authorize claim delivery: %w", err)
@@ -4205,16 +4214,45 @@ func (s *TaskService) maybeLogClaimSlow(agentID pgtype.UUID, outcome string, sta
 // StartTask transitions a dispatched task to running.
 // Issue status is NOT changed here — the agent manages it via the CLI.
 func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID, supplementSupport ...bool) (*db.AgentTaskQueue, error) {
+	if s.TxStarter == nil {
+		return nil, fmt.Errorf("begin legacy task start: transaction adapter unavailable")
+	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin legacy task start: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	if _, err := tx.Exec(ctx, `SELECT id FROM agent_task_queue WHERE id=$1 FOR UPDATE`, taskID); err != nil {
+		return nil, fmt.Errorf("lock legacy task start: %w", err)
+	}
+	if err := denyProtectedGitStart(ctx, qtx, taskID); err != nil {
+		return nil, err
+	}
 	enableTaskSupplement := len(supplementSupport) > 0 && supplementSupport[0]
-	task, err := s.Queries.StartAgentTaskWithSupplement(ctx, db.StartAgentTaskWithSupplementParams{
+	task, err := qtx.StartAgentTaskWithSupplement(ctx, db.StartAgentTaskWithSupplementParams{
 		TaskID:               taskID,
 		EnableTaskSupplement: enableTaskSupplement,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start task: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit legacy task start: %w", err)
+	}
 	s.taskStarted(ctx, task)
 	return &task, nil
+}
+
+func denyProtectedGitStart(ctx context.Context, qtx *db.Queries, taskID pgtype.UUID) error {
+	protected, err := qtx.IsR2DGitProtectedTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("protected Git policy unavailable: %w", err)
+	}
+	if !protected.Valid || protected.Bool {
+		return fmt.Errorf("git_runtime_ineligible: protected execution unavailable")
+	}
+	return nil
 }
 
 // StartTaskForClaim serializes the ownership check and transition with reclaim,
@@ -4233,6 +4271,9 @@ func (s *TaskService) StartTaskForClaim(ctx context.Context, claim db.LockAgentT
 	task, err := qtx.LockAgentTaskStartClaim(ctx, claim)
 	if err != nil {
 		return nil, fmt.Errorf("lock task start claim: %w", err)
+	}
+	if err := denyProtectedGitStart(ctx, qtx, task.ID); err != nil {
+		return nil, err
 	}
 	replay := task.Status == "running"
 	if !replay {
@@ -4275,6 +4316,9 @@ func (s *TaskService) taskStarted(ctx context.Context, task db.AgentTaskQueue) {
 // ExtendTaskPrepareLease keeps a claimed-but-not-started task protected while
 // the daemon resolves cached inputs and prepares the execution environment.
 func (s *TaskService) ExtendTaskPrepareLease(ctx context.Context, taskID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	if err := denyProtectedGitStart(ctx, s.Queries, taskID); err != nil {
+		return nil, err
+	}
 	task, err := s.Queries.ExtendAgentTaskPrepareLease(ctx, db.ExtendAgentTaskPrepareLeaseParams{
 		ID:        taskID,
 		RuntimeID: runtimeID,
@@ -4410,6 +4454,9 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 // must only run them when transitioned is true; a replay against an already
 // terminal task is still an idempotent success but must not emit them again.
 func (s *TaskService) CompleteTaskWithTransition(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir, branchName string, sessionRolloutMissing bool, retiredSessionID, durableWorkDir string) (*db.AgentTaskQueue, bool, error) {
+	if err := denyProtectedGitStart(ctx, s.Queries, taskID); err != nil {
+		return nil, false, err
+	}
 	var task db.AgentTaskQueue
 	// chatAssistantMsg is the single assistant outcome row written for a chat
 	// task inside the completion transaction below. It is broadcast (chat:done)
@@ -4417,6 +4464,9 @@ func (s *TaskService) CompleteTaskWithTransition(ctx context.Context, taskID pgt
 	var chatAssistantMsg *db.ChatMessage
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		if err := lockChatSessionForTaskWrite(ctx, qtx, taskID); err != nil {
+			return err
+		}
+		if err := denyProtectedGitStart(ctx, qtx, taskID); err != nil {
 			return err
 		}
 		t, err := qtx.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
@@ -4835,6 +4885,13 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // CompleteTaskWithTransition. The bool is false for an idempotent replay that
 // observed an already-terminal row.
 func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, branchName, failureReason string, sessionRolloutMissing bool, retiredSessionID, durableWorkDir string) (*db.AgentTaskQueue, bool, error) {
+	classified, policyErr := s.taskProtection(ctx, s.Queries, taskID)
+	if policyErr != nil {
+		return nil, false, fmt.Errorf("git_policy_unavailable: %w", policyErr)
+	}
+	if classified {
+		return s.refuseProtectedTask(ctx, taskID)
+	}
 	// Strip bytes PostgreSQL cannot store before anything else reads errMsg, so
 	// the classifier, the transaction and every downstream consumer see the one
 	// text we will actually persist (GH #7098). Kept at the service boundary
@@ -4907,6 +4964,9 @@ func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.
 	var retried *db.AgentTaskQueue
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		if err := lockChatSessionForTaskWrite(ctx, qtx, taskID); err != nil {
+			return err
+		}
+		if err := denyProtectedGitStart(ctx, qtx, taskID); err != nil {
 			return err
 		}
 		t, err := qtx.FailAgentTask(ctx, db.FailAgentTaskParams{
@@ -5445,6 +5505,11 @@ func hasRunnableSuccessor(ctx context.Context, q *db.Queries, task db.AgentTaskQ
 // Autopilot tasks are NOT auto-retried here; the autopilot scheduler owns
 // its own re-run cadence and we don't want to double-fire it.
 func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentTaskQueue) (*db.AgentTaskQueue, error) {
+	// Protected retries need a newly authorized immutable attempt. The ambient
+	// retry path must not copy source/context/session state into a generic run.
+	if !s.taskAllowsPublicDetail(ctx, parent.ID) {
+		return nil, nil
+	}
 	if parent.Status != "failed" {
 		return nil, nil
 	}
@@ -6047,6 +6112,13 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 	retried := 0
 
 	for _, t := range tasks {
+		if !s.taskAllowsPublicDetail(ctx, t.ID) {
+			// Legacy recovery may publish errors as comments/outbound messages
+			// or create unsealed retries. Only emit server-owned progress here.
+			s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, t)
+			affectedAgents[util.UUIDToString(t.AgentID)] = t.AgentID
+			continue
+		}
 		// Auto-retry first so the issue stays in_progress rather than
 		// flapping todo → in_progress within a tick.
 		retryPending := false
@@ -6347,6 +6419,16 @@ func (s *TaskService) ensureDelegatedFailureRecoveryComment(ctx context.Context,
 		if err != nil || target == nil {
 			return err
 		}
+		for _, id := range []pgtype.UUID{target.failed.ID, target.source.ID} {
+			protected, err := s.taskProtection(ctx, qtx, id)
+			if err != nil {
+				return err
+			}
+			if protected {
+				target = nil
+				return nil
+			}
+		}
 		comment, err := qtx.GetDelegatedFailureRecoveryComment(ctx, db.GetDelegatedFailureRecoveryCommentParams{
 			IssueID:      target.issue.ID,
 			WorkspaceID:  target.issue.WorkspaceID,
@@ -6582,6 +6664,9 @@ func (s *TaskService) exhaustDelegatedFailureRecovery(ctx context.Context, targe
 // reconciliation schedule the follow-up. The three-pass loop closes state
 // changes around those writes.
 func (s *TaskService) dispatchDelegatedFailureRecovery(ctx context.Context, target *delegatedFailureRecoveryTarget, excludeTaskID pgtype.UUID) (delegatedFailureRecoveryDispatchOutcome, error) {
+	if !s.taskAllowsPublicDetail(ctx, target.failed.ID) || !s.taskAllowsPublicDetail(ctx, target.source.ID) {
+		return delegatedFailureRecoveryCovered, nil
+	}
 	// Signal creation has committed before reaching this shared dispatch path.
 	// Refresh the issue because its status may have changed since creation or
 	// sweep selection; a paused/unreadable lifecycle never settles the signal.
@@ -6811,6 +6896,10 @@ func (s *TaskService) runInTx(ctx context.Context, fn func(*db.Queries) error) e
 
 // ReportProgress broadcasts a progress update via the event bus.
 func (s *TaskService) ReportProgress(ctx context.Context, taskID string, workspaceID string, summary string, step, total int) {
+	id, err := util.ParseUUID(taskID)
+	if err != nil || !s.taskAllowsPublicDetail(ctx, id) {
+		return
+	}
 	s.Bus.Publish(events.Event{
 		Type:        protocol.EventTaskProgress,
 		WorkspaceID: workspaceID,
@@ -7231,7 +7320,7 @@ func (s *TaskService) notifyRuntimeMayHaveWork(runtimeID pgtype.UUID, taskID str
 
 func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTaskQueue) {
 	var payload map[string]any
-	if task.Context != nil {
+	if task.Context != nil && s.taskAllowsPublicDetail(ctx, task.ID) {
 		json.Unmarshal(task.Context, &payload)
 	}
 	if payload == nil {
@@ -7297,7 +7386,67 @@ func (s *TaskService) publishTaskEvent(eventType, workspaceID string, task db.Ag
 	if workspaceID == "" {
 		return
 	}
+	// Shared workspace events carry structured progress only for protected or
+	// unclassifiable runs. Error strings and future extra fields may hold source.
+	if len(extra) > 0 {
+		if !s.taskAllowsPublicDetail(context.Background(), task.ID) {
+			extra = nil
+		}
+	}
 	s.Bus.Publish(taskEvent(eventType, workspaceID, task, extra...))
+}
+
+func (s *TaskService) taskAllowsPublicDetail(ctx context.Context, id pgtype.UUID) bool {
+	protected, err := s.taskProtection(ctx, s.Queries, id)
+	return err == nil && !protected
+}
+
+func (s *TaskService) taskProtection(ctx context.Context, q *db.Queries, id pgtype.UUID) (bool, error) {
+	if s.SourceAuthority != nil {
+		blocked, err := s.SourceAuthority.ReaderlessSourceBlocked(ctx)
+		if err != nil || blocked {
+			return true, err
+		}
+	}
+	if q == nil || !id.Valid {
+		return true, fmt.Errorf("git_policy_unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	rows, err := q.ListR2DGitTaskProtection(ctx, []pgtype.UUID{id})
+	if err != nil {
+		return true, err
+	}
+	if len(rows) != 1 {
+		return true, fmt.Errorf("git_policy_unavailable")
+	}
+	return rows[0].Protected, nil
+}
+
+// Refusing an unsupported protected launch is a metadata-only transition. It
+// must not run ambient retry/recovery, persist caller error/session bytes or
+// create chat/comment/outbound narratives through the ordinary failure pipeline.
+func (s *TaskService) refuseProtectedTask(ctx context.Context, id pgtype.UUID) (*db.AgentTaskQueue, bool, error) {
+	var task db.AgentTaskQueue
+	err := s.runInTx(ctx, func(q *db.Queries) error {
+		var err error
+		task, err = q.FailAgentTask(ctx, db.FailAgentTaskParams{ID: id, Error: pgtype.Text{String: "git_runtime_ineligible", Valid: true}, FailureReason: pgtype.Text{String: "runtime_access_denied", Valid: true}})
+		if err != nil {
+			return err
+		}
+		return SettleTerminalTaskState(ctx, q, task)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, lookupErr := s.Queries.GetAgentTask(ctx, id)
+		return &existing, false, lookupErr
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, task)
+	s.ReconcileAgentStatus(ctx, task.AgentID)
+	s.NotifyTaskFinished(task)
+	return &task, true, nil
 }
 
 func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, task db.AgentTaskQueue, extra ...map[string]any) {

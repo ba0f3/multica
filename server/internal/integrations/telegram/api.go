@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -126,7 +127,7 @@ func (a *botAPI) call(ctx context.Context, method string, params any, out any) e
 
 // do performs one prepared Bot API request and decodes the envelope.
 func (a *botAPI) do(req *http.Request, method string, out any) error {
-	resp, err := a.client.Do(req)
+	resp, err := sourceguard.Do(a.client, req)
 	if err != nil {
 		return &requestError{method: method, cause: err}
 	}
@@ -238,7 +239,7 @@ func (a *botAPI) DownloadFile(ctx context.Context, filePath string, maxBytes int
 	if err != nil {
 		return nil, "", errors.New("telegram: build file download request failed")
 	}
-	resp, err := a.client.Do(req)
+	resp, err := sourceguard.Do(a.client, req)
 	if err != nil {
 		return nil, "", &requestError{method: "downloadFile", cause: err}
 	}

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -77,7 +79,7 @@ func (c *slackChannel) Connect(ctx context.Context) error {
 	}
 	// The Socket Mode connection authenticates with the app-level token alone;
 	// the bot token is only for outbound Web API calls.
-	api := slack.New("", slack.OptionAppLevelToken(c.appToken))
+	api := slack.New("", slack.OptionAppLevelToken(c.appToken), slack.OptionHTTPClient(sourceguard.HTTPClient(&http.Client{})))
 	sm := socketmode.New(api)
 
 	// Each connection runs under its OWN cancellable context. Every exit path
@@ -259,7 +261,7 @@ func newSlackFactory(deps ChannelDeps) channel.Factory {
 			appID:     ic.AppID,
 			botUserID: ic.BotUserID,
 			appToken:  appToken,
-			botAPI:    slack.New(botToken),
+			botAPI:    slack.New(botToken, slack.OptionHTTPClient(sourceguard.HTTPClient(&http.Client{}))),
 			handler:   cfg.Handler,
 			slash:     deps.Slash,
 			logger:    logger,

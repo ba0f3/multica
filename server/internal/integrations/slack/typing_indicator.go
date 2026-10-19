@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -101,8 +103,10 @@ func NewTypingIndicatorManager(q TypingIndicatorQueries, decrypt Decrypter, logg
 		q:       q,
 		decrypt: decrypt,
 		log:     logger,
-		newAPI:  func(c credentials) reactionAPI { return slack.New(c.BotToken) },
-		states:  make(map[string][]typingState),
+		newAPI: func(c credentials) reactionAPI {
+			return slack.New(c.BotToken, slack.OptionHTTPClient(sourceguard.HTTPClient(&http.Client{})))
+		},
+		states: make(map[string][]typingState),
 	}
 }
 

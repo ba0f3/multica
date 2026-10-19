@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -78,7 +79,7 @@ func openConnection(ctx context.Context, httpClient *http.Client, apiBase, appKe
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := sourceguard.Do(httpClient, req)
 	if err != nil {
 		return "", fmt.Errorf("open connection: %w", err)
 	}

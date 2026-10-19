@@ -123,6 +123,15 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				if rejectTemporarilyDisabledUser(w, r, userID, "", "task_token") {
 					return
 				}
+				protected, policyErr := queries.IsR2DGitProtectedTask(r.Context(), tt.TaskID)
+				if policyErr != nil || !protected.Valid {
+					http.Error(w, `{"error":"git_policy_unavailable"}`, http.StatusServiceUnavailable)
+					return
+				}
+				if protected.Bool && !protectedGitTaskRoute(r) {
+					http.Error(w, `{"error":"git_restricted_output_required"}`, http.StatusForbidden)
+					return
+				}
 				r.Header.Set("X-User-ID", userID)
 				r.Header.Set("X-Agent-ID", uuidToString(tt.AgentID))
 				r.Header.Set("X-Task-ID", uuidToString(tt.TaskID))
@@ -133,6 +142,7 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				// this header is allowed to carry — strip anything else a
 				// client tried to send.
 				r.Header.Set("X-Actor-Source", "task_token")
+				r = r.WithContext(context.WithValue(r.Context(), taskSessionKey{}, TaskSession{TaskID: uuidToString(tt.TaskID), AgentID: uuidToString(tt.AgentID), WorkspaceID: uuidToString(tt.WorkspaceID)}))
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -280,6 +290,13 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				return
 			}
 			r.Header.Set("X-User-ID", sub)
+			if sid, _ := claims["sid"].(string); sid != "" {
+				var authenticatedAt time.Time
+				if seconds, ok := claims["auth_time"].(float64); ok && seconds > 0 {
+					authenticatedAt = time.Unix(int64(seconds), 0)
+				}
+				r = humanSessionContext(r, HumanSession{UserID: sub, SessionID: sid, AuthenticatedAt: authenticatedAt})
+			}
 			if email != "" {
 				r.Header.Set("X-User-Email", email)
 			}

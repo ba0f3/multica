@@ -43,6 +43,15 @@ func (w *rpcResponseCapture) Write(b []byte) (int, error) {
 // set at connect, so the reused handler's per-runtime daemon/workspace checks
 // see the same scope as the HTTP path.
 func (h *Handler) DaemonRPCHandler(ctx context.Context, identity daemonws.ClientIdentity, method string, body json.RawMessage) (int, json.RawMessage, error) {
+	if h.TaskService != nil && h.TaskService.SourceAuthority != nil {
+		blocked, err := h.TaskService.SourceAuthority.ReaderlessSourceBlocked(ctx)
+		if err != nil {
+			return http.StatusServiceUnavailable, nil, err
+		}
+		if blocked {
+			return http.StatusForbidden, nil, fmt.Errorf("git_historical_source_quarantined")
+		}
+	}
 	switch method {
 	case "tasks.claim":
 		return h.rpcClaimTasks(ctx, identity, body)

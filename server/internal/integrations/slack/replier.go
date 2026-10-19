@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -103,7 +105,7 @@ func NewOutboundReplier(cfg OutboundReplierConfig) *OutboundReplier {
 		ledger:      cfg.Queries,
 	}
 	r.newSender = func(c credentials) replySender {
-		return newSlackSender(c, slack.New(c.BotToken), logger)
+		return newSlackSender(c, slack.New(c.BotToken, slack.OptionHTTPClient(sourceguard.HTTPClient(&http.Client{}))), logger)
 	}
 	return r
 }

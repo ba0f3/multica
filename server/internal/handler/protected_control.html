@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multica protected controls</title>
+<script src="/auth/script" defer></script>
+<h1>Multica protected controls</h1>
+<section id="login">
+<form method="post" id="request-code"><label>Email <input name="email" type="email" autocomplete="email" required></label><button>Send sign-in code</button></form>
+<form method="post" id="verify-code" hidden><label>Sign-in code <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>Sign in</button></form>
+</section>
+<section id="controls" hidden>
+<p id="session"></p><button id="logout" type="button">Sign out</button>
+<h2>Git identities</h2>
+<button id="identities" type="button">Refresh identities</button>
+<pre id="identity-list"></pre>
+<form method="post" id="generate"><label>Provider ID <input name="provider_id" required></label><label>Consent project IDs, comma separated <input name="projects" required></label><button>Generate dedicated key</button></form>
+<form method="post" id="key-action"><label>Identity ID <input name="identity" required></label><label>Generation <input name="generation" type="number" min="1"></label><select name="action"><option>verify</option><option>activate</option><option>revoke</option><option>cleanup</option></select><button>Apply</button></form>
+<h2>Run</h2>
+<form method="post" id="run"><label>Workspace ID <input name="workspace" required></label><label>Agent ID <input name="agent_id" required></label><label>Issue ID <input name="issue_id" required></label><label>Repository ID <input name="repository_id" required></label><button>Start read run</button></form>
+<form method="post" id="run-status"><label>Context ID <input name="context" required></label><button>Read status</button><button type="button" id="revoke-run">Revoke run</button></form>
+<h2>Output</h2>
+<form method="post" id="output"><label>Output ID <input name="output" required></label><button>Read output</button></form>
+<h2>Project grants</h2>
+<form method="post" id="grant"><label>Project ID <input name="project" required></label><label>Subject ID <input name="subject_id" required></label><select name="subject_kind"><option>user</option><option>workspace</option></select><select name="role"><option>viewer</option><option>member</option><option>manager</option><option value="">Remove</option></select><button>Update grant</button></form>
+<pre id="result"></pre>
+</section>
+<p id="message" role="status"></p>
+</html>

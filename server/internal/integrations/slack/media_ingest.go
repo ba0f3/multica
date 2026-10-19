@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"log/slog"
 	"mime"
@@ -266,7 +267,7 @@ func (r *slackMediaResolver) download(ctx context.Context, rawURL, botToken stri
 		return nil, "", errors.New("build file download request failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+botToken)
-	resp, err := r.fetch.Do(req)
+	resp, err := sourceguard.Do(r.fetch, req)
 	if err != nil {
 		// net/http's *url.Error echoes the full request URL; keep private
 		// Slack file URLs out of the logs.

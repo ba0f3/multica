@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -985,6 +986,9 @@ func (s *wsSender) writeStreamFrame(ctx context.Context, reqID, streamID string,
 // and be descheduled before it gets its turn, and the log then names the wrong
 // frame as first.
 func (s *wsSender) writeLocked(ctx context.Context, payload []byte, t *outTrace) error {
+	if err := sourceguard.Check(ctx); err != nil {
+		return err
+	}
 	s.seq++
 	seq := s.seq
 	traceOutAttempt(s.log, seq, t)

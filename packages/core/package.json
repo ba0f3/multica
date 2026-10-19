@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "exports": {
+    "./git-identities": "./git-identities/index.ts",
     ".": "./index.ts",
     "./markdown": "./markdown/index.ts",
     "./types": "./types/index.ts",

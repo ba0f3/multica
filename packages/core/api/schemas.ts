@@ -1909,6 +1909,8 @@ export const AgentTaskSchema = z.object({
   dispatched_at: z.string().nullable().default(null),
   started_at: z.string().nullable().default(null),
   completed_at: z.string().nullable().default(null),
+  // Protected task history carries structured progress only. Source detail
+  // is absent here and is fetched through the separate authorized output API.
   result: z.unknown().default(null),
   error: z.string().nullable().default(null),
   failure_reason: z.string().optional(),

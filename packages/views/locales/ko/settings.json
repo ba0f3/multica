@@ -1426,5 +1426,33 @@
     "mcp": "관리자가 추가해 워크스페이스에서 공유하고, 에이전트별로 할당합니다.",
     "apps": "내 계정으로 Composio를 통해 승인하고, 내가 소유한 에이전트에서 사용합니다.",
     "plugins": "설치하면 도구, 예약 훅, 저장소를 추가할 수 있으며 플러그인마다 권한을 부여합니다."
+  },
+  "git_identities": {
+    "title": "Git ID",
+    "custody": "비공개 키는 백엔드에 암호화되어 보관됩니다. 여기에는 공개 키만 표시됩니다.",
+    "loading": "Git ID 불러오는 중…",
+    "failed": "Git ID를 불러오거나 업데이트할 수 없습니다.",
+    "unavailable": "이 서버에서는 Git 키 관리를 사용할 수 없습니다.",
+    "provider": "Git 제공업체",
+    "choose": "제공업체 선택",
+    "projects": "이 ID를 사용할 수 있는 프로젝트",
+    "generate": "키 생성",
+    "registration": "공개 인증 키를 본인의 계정에 추가한 다음 여기에서 확인하세요.",
+    "generation": "세대",
+    "active": "사용 중",
+    "public_key": "공개 키",
+    "copy": "공개 키 복사",
+    "copied": "공개 키를 복사했습니다.",
+    "verify": "확인",
+    "activate": "활성화",
+    "rotate": "키 교체",
+    "revoke": "해지",
+    "cleanup_pending": "로컬에서 해지되었으며 암호화된 키 삭제를 기다리고 있습니다.",
+    "cleanup": "삭제 재시도",
+    "revoke_warning": "로컬 사용이 즉시 중지됩니다. 제공업체 계정에서도 공개 키를 삭제하세요.",
+    "confirm_revoke": "해지 확인",
+    "cancel": "취소",
+    "reauth": "Git ID를 관리하기 전에 다시 로그인하세요.",
+    "diagnostic": "키 저장 또는 확인에 문제가 있습니다. 확인을 다시 시도하거나 ID를 해지하세요."
   }
 }

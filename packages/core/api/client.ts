@@ -1,4 +1,5 @@
 import type { ZodType } from "zod";
+import { parseGitProfile, parseGitIdentity, parseGitRun, parseGitAcknowledgement, parseGitOutputReceipt, type GitProfile, type GitIdentity, type GitRun, type GitRunRequest } from "./git-schemas";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
 import { WorkspaceWakeupPageSchema, IssueWakeupSchema, IssueWakeupSummaryRowSchema, PausedWakeupSchema, SystemWakeupSchema, WakeupRunSchema, WorkspaceSystemWakeupSchema } from "./schemas";
@@ -3583,6 +3584,32 @@ export class ApiClient {
   // Personal Access Tokens
   async listPersonalAccessTokens(): Promise<PersonalAccessToken[]> {
     return this.fetch("/api/tokens");
+  }
+
+  async getGitIdentities(): Promise<GitProfile> {
+    return parseGitProfile(await this.fetch<unknown>("/api/me/git-identities"));
+  }
+  async generateGitIdentity(providerId: string, projectIds: string[], requestId: string): Promise<GitIdentity> {
+    return parseGitIdentity(await this.fetch<unknown>("/api/me/git-identities", { method: "POST", body: JSON.stringify({ provider_id: providerId, consent_project_ids: projectIds, request_id: requestId }) }));
+  }
+  async gitIdentityAction(id: string, generation: number, action: "verify" | "activate"): Promise<GitIdentity> {
+    return parseGitIdentity(await this.fetch<unknown>(`/api/me/git-identities/${encodeURIComponent(id)}/${generation}/${action}`, { method: "POST" }));
+  }
+  async revokeGitIdentity(id: string): Promise<void> {
+    parseGitAcknowledgement(await this.fetch<unknown>(`/api/me/git-identities/${encodeURIComponent(id)}/revoke`, { method: "POST" }), "locally_revoked");
+  }
+  async cleanupGitIdentity(id: string): Promise<void> {
+    parseGitAcknowledgement(await this.fetch<unknown>(`/api/me/git-identities/${encodeURIComponent(id)}/cleanup`, { method: "POST" }), "cleanup_complete");
+  }
+  async enqueueGitRun(request: GitRunRequest): Promise<GitRun> {
+    return parseGitRun(await this.fetch<unknown>("/api/me/git-runs", { method: "POST", body: JSON.stringify(request) }));
+  }
+  async getGitRun(id: string): Promise<GitRun> {
+    return parseGitRun(await this.fetch<unknown>(`/api/me/git-runs/${encodeURIComponent(id)}`));
+  }
+
+  async storeGitOutput(contextId: string, kind: "transcript" | "tool" | "diff" | "artifact", content: string): Promise<{ id: string }> {
+    return parseGitOutputReceipt(await this.fetch<unknown>(`/api/git-runs/${encodeURIComponent(contextId)}/outputs`, { method: "POST", body: JSON.stringify({ kind, content }) }));
   }
 
   async createPersonalAccessToken(data: CreatePersonalAccessTokenRequest): Promise<CreatePersonalAccessTokenResponse> {

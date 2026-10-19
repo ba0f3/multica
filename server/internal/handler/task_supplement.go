@@ -385,6 +385,10 @@ func (h *Handler) ClaimTaskSupplement(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "taskId")) {
+		return
+	}
+
 	row, err := h.Queries.ClaimNextTaskSupplement(r.Context(), parseUUID(taskID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, map[string]any{})
@@ -404,6 +408,10 @@ func (h *Handler) AckTaskSupplement(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "taskId")) {
+		return
+	}
+
 	commentID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "commentId"), "comment id")
 	if !ok {
 		return

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -326,7 +327,7 @@ func (s *PluginService) callHookEndpoint(ctx context.Context, invocation HookInv
 	request.Header.Set("X-Multica-Plugin-Installation", uuidString(installation.ID))
 	request.Header.Set("User-Agent", "Multica-Hooks/1")
 
-	response, err := client.Do(request)
+	response, err := sourceguard.Do(client, request)
 	if err != nil {
 		return nil, &PluginError{Kind: PluginErrorUnavailable, Message: "hook endpoint did not answer", Err: err}
 	}

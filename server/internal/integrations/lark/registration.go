@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -429,7 +430,7 @@ func (c *RegistrationClient) doForm(ctx context.Context, domain string, form url
 		return fmt.Errorf("registration: new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := sourceguard.Do(c.cfg.HTTPClient, req)
 	if err != nil {
 		return fmt.Errorf("registration: http do: %w", err)
 	}

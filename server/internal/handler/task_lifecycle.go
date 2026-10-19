@@ -72,6 +72,9 @@ func (h *Handler) PinTaskSession(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "taskId")) {
+		return
+	}
 
 	var req PinTaskSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -227,7 +230,7 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := taskToResponse(*task, uuidToString(issue.WorkspaceID))
 	h.hydrateTaskAttributions(r.Context(), []*TaskAttribution{resp.Attribution})
-	writeJSON(w, http.StatusAccepted, resp)
+	h.writeTaskHistoryRow(w, r, http.StatusAccepted, resp)
 }
 
 // RetrySourceContextQuickCreate manually re-enqueues a failed issue-less
@@ -276,5 +279,5 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 	}
 	resp := taskToResponse(*task, uuidToString(workspaceID))
 	h.hydrateTaskAttributions(r.Context(), []*TaskAttribution{resp.Attribution})
-	writeJSON(w, http.StatusAccepted, resp)
+	h.writeTaskHistoryRow(w, r, http.StatusAccepted, resp)
 }

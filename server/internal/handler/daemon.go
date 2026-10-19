@@ -2409,6 +2409,16 @@ func claimResponseAgentIdentityMatches(resp AgentTaskResponse) bool {
 // means the task must not be dispatched; the builder has already cancelled it
 // where the failure semantics require it.
 func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQueue, runtime db.AgentRuntime, runtimeID, runtimeWorkspaceID string) (resp AgentTaskResponse, deliveredCommentIDs []pgtype.UUID, issueSnapshot []byte, agentSkillCount, builtinSkillCount int, failure *claimBuildFailure) {
+	if err := h.GitSecurity.CheckSourceState(r.Context()); err != nil {
+		return resp, nil, nil, 0, 0, h.rejectClaimSourceLoad(r.Context(), task, err, "git_restore", "")
+	}
+	protected, err := h.Queries.IsR2DGitProtectedTask(r.Context(), task.ID)
+	if err != nil {
+		return resp, nil, nil, 0, 0, h.rejectClaimSourceLoad(r.Context(), task, err, "git_security", "")
+	}
+	if !protected.Valid || protected.Bool {
+		return resp, nil, nil, 0, 0, h.failClaimedTaskBeforeLaunch(r.Context(), task, "Protected Git execution is unavailable on this runtime.", taskfailure.ReasonRuntimeAccessDenied, "git_runtime_ineligible", http.StatusConflict, "git_runtime_ineligible")
+	}
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp = taskToResponse(*task, runtimeWorkspaceID)
 	if err := (&service.IssueWakeupService{Tasks: h.TaskService}).CheckClaim(r.Context(), *task); err != nil {
@@ -3997,6 +4007,9 @@ func (h *Handler) ResolveTaskSkillBundles(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
+	if h.denyProtectedGitReport(w, r, taskID) {
+		return
+	}
 	if task.Status != "dispatched" && task.Status != "waiting_local_directory" {
 		writeError(w, http.StatusConflict, "task is not preparing")
 		return
@@ -4106,7 +4119,7 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 	for i, t := range tasks {
 		resp[i] = taskToResponse(t, workspaceID)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	h.writeTaskHistory(w, r, resp)
 }
 
 // Task Lifecycle (called by daemon)
@@ -4130,6 +4143,9 @@ func (h *Handler) ExtendTaskPrepareLease(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if h.denyProtectedGitReport(w, r, taskID) {
+		return
+	}
 	updated, err := h.TaskService.ExtendTaskPrepareLease(r.Context(), parseUUID(taskID), parseUUID(runtimeID))
 	if err != nil {
 		slog.Warn("extend task prepare lease failed", "task_id", taskID, "runtime_id", runtimeID, "error", err)
@@ -4137,7 +4153,7 @@ func (h *Handler) ExtendTaskPrepareLease(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, taskToResponse(*updated, taskWorkspaceID))
+	h.writeTaskHistoryRow(w, r, http.StatusOK, taskToResponse(*updated, taskWorkspaceID))
 }
 
 // StartTask marks a dispatched task as running.
@@ -4211,7 +4227,7 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("start task: failed to load negotiated supplement capability", "task_id", taskID, "error", capabilityErr)
 		}
 	}
-	writeJSON(w, http.StatusOK, resp)
+	h.writeTaskHistoryRow(w, r, http.StatusOK, resp)
 }
 
 // TaskWaitLocalDirectoryRequest is the body the daemon POSTs when it parks
@@ -4235,6 +4251,9 @@ func (h *Handler) MarkTaskWaitingLocalDirectory(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, taskID) {
+		return
+	}
 
 	var req TaskWaitLocalDirectoryRequest
 	if r.ContentLength != 0 {
@@ -4251,7 +4270,7 @@ func (h *Handler) MarkTaskWaitingLocalDirectory(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+	h.writeTaskHistoryRow(w, r, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // ReportTaskProgress broadcasts a progress update.
@@ -4273,6 +4292,9 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 	// Verify ownership and resolve workspace ID.
 	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
 	if !ok {
+		return
+	}
+	if h.denyProtectedGitReport(w, r, taskID) {
 		return
 	}
 
@@ -4346,6 +4368,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, taskID) {
+		return
+	}
 
 	var req TaskCompleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -4411,7 +4436,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !transitioned {
-		writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+		h.writeTaskHistoryRow(w, r, http.StatusOK, taskToResponse(*task, workspaceID))
 		return
 	}
 
@@ -4439,7 +4464,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
-	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+	h.writeTaskHistoryRow(w, r, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at
@@ -4921,6 +4946,9 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, taskID) {
+		return
+	}
 
 	var req struct {
 		Usage []TaskUsagePayload `json:"usage"`
@@ -5050,6 +5078,9 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, taskID) {
+		return
+	}
 
 	var req TaskFailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -5089,7 +5120,7 @@ func (h *Handler) failTask(w http.ResponseWriter, r *http.Request, taskID, works
 		return
 	}
 	if !transitioned {
-		writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+		h.writeTaskHistoryRow(w, r, http.StatusOK, taskToResponse(*task, workspaceID))
 		return
 	}
 	h.TaskService.NotifyTaskFinished(*task)
@@ -5102,7 +5133,7 @@ func (h *Handler) failTask(w http.ResponseWriter, r *http.Request, taskID, works
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
-	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+	h.writeTaskHistoryRow(w, r, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // Task Messages (live agent output)
@@ -5152,6 +5183,9 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 	// the system (MUL-6523).
 	task, wsID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
+		return
+	}
+	if h.denyProtectedGitReport(w, r, taskID) {
 		return
 	}
 
@@ -5303,6 +5337,10 @@ func (h *Handler) AckTaskCancelled(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "taskId")) {
+		return
+	}
+
 	// Body is optional: older daemons send `{}`, and a decode failure must not
 	// break the cancellation contract this endpoint exists for.
 	var req TaskCancelAckRequest
@@ -5454,6 +5492,9 @@ func (h *Handler) ListTaskMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "taskId")) {
+		return
+	}
 
 	var (
 		messages []db.TaskMessage
@@ -5509,6 +5550,11 @@ func (h *Handler) GetActiveTaskForIssue(w http.ResponseWriter, r *http.Request) 
 	// Same issue-facing attribution surface as ListTasksByIssue — hydrate names.
 	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
 
+	if err := h.restrictTaskHistory(r.Context(), resp); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "git_policy_unavailable")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": resp})
 }
 
@@ -5548,7 +5594,7 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// Keep this issue-scoped surface consistent with the list endpoints so a
 	// cancelled row keeps its resolved "on behalf of" name in the UI.
 	h.hydrateTaskAttributions(r.Context(), []*TaskAttribution{resp.Attribution})
-	writeJSON(w, http.StatusOK, resp)
+	h.writeTaskHistoryRow(w, r, http.StatusOK, resp)
 }
 
 // familyActiveRunCap bounds a scope=family read.
@@ -5722,7 +5768,7 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 		h.hydrateTaskUsage(r.Context(), issue.ID, resp)
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	h.writeTaskHistory(w, r, resp)
 }
 
 // hydrateTaskUsage attaches each run's own token usage to the execution-log
@@ -5852,6 +5898,10 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 	// be indistinguishable from one that does not exist.
 	if wsID == "" || wsID != middleware.WorkspaceIDFromContext(r.Context()) {
 		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	if h.denyProtectedGitReport(w, r, taskID) {
 		return
 	}
 

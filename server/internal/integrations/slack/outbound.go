@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -60,7 +62,7 @@ func NewOutbound(q outboundQueries, decrypt Decrypter, logger *slog.Logger) *Out
 	o.newSender = func(c credentials) replySender {
 		// Only the bot token is needed to post; inbound Socket Mode uses the
 		// installation's separate app-level token (see slack_channel.go).
-		return newSlackSender(c, slack.New(c.BotToken), logger)
+		return newSlackSender(c, slack.New(c.BotToken, slack.OptionHTTPClient(sourceguard.HTTPClient(&http.Client{}))), logger)
 	}
 	return o
 }

@@ -1436,5 +1436,33 @@
     "mcp": "Added by admins and shared across the workspace, then assigned per agent.",
     "apps": "Authorized with your own account through Composio and enabled on agents you own.",
     "plugins": "Installed packages that can add tools, scheduled hooks, and storage, each with its own permissions."
+  },
+  "git_identities": {
+    "title": "Git identities",
+    "custody": "Private keys stay in encrypted backend custody. Only public keys are shown here.",
+    "loading": "Loading Git identities…",
+    "failed": "Git identities could not be loaded or updated.",
+    "unavailable": "Git key management is unavailable on this server.",
+    "provider": "Git provider",
+    "choose": "Choose a provider",
+    "projects": "Projects this identity may be used for",
+    "generate": "Generate key",
+    "registration": "Add the public authentication key to your own provider account, then verify it here.",
+    "generation": "Generation",
+    "active": "Active",
+    "public_key": "Public key",
+    "copy": "Copy public key",
+    "copied": "Public key copied.",
+    "verify": "Verify",
+    "activate": "Activate",
+    "rotate": "Rotate key",
+    "revoke": "Revoke",
+    "cleanup_pending": "Locally revoked; encrypted-key cleanup is pending.",
+    "cleanup": "Retry cleanup",
+    "revoke_warning": "This stops local use immediately. Remove the public key from your provider account too.",
+    "confirm_revoke": "Confirm revocation",
+    "cancel": "Cancel",
+    "reauth": "Sign in again before managing Git identities.",
+    "diagnostic": "Key storage or verification needs attention. Retry verification or revoke the identity."
   }
 }

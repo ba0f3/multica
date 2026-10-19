@@ -1365,6 +1365,141 @@ type QuickAction struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type R2dGitIdentity struct {
+	ID               pgtype.UUID        `json:"id"`
+	UserID           pgtype.UUID        `json:"user_id"`
+	ProviderID       pgtype.UUID        `json:"provider_id"`
+	ActiveGeneration int64              `json:"active_generation"`
+	Epoch            int64              `json:"epoch"`
+	Revoked          bool               `json:"revoked"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitKey struct {
+	IdentityID        pgtype.UUID        `json:"identity_id"`
+	Generation        int64              `json:"generation"`
+	PublicKey         string             `json:"public_key"`
+	Fingerprint       string             `json:"fingerprint"`
+	InternalSecretRef string             `json:"internal_secret_ref"`
+	State             string             `json:"state"`
+	AccountID         string             `json:"account_id"`
+	Login             string             `json:"login"`
+	VerifiedAt        pgtype.Timestamptz `json:"verified_at"`
+	CleanupPending    bool               `json:"cleanup_pending"`
+	Diagnostic        string             `json:"diagnostic"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ConsentProjectIds []byte             `json:"consent_project_ids"`
+}
+
+type R2dGitKeyJob struct {
+	ID             pgtype.UUID        `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	IdentityID     pgtype.UUID        `json:"identity_id"`
+	Generation     int64              `json:"generation"`
+	Kind           string             `json:"kind"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	State          string             `json:"state"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	WorkerToken    pgtype.UUID        `json:"worker_token"`
+	LeaseUntil     pgtype.Timestamptz `json:"lease_until"`
+}
+
+type R2dGitOperation struct {
+	ID        string             `json:"id"`
+	Spec      []byte             `json:"spec"`
+	Outcome   string             `json:"outcome"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitOutput struct {
+	ID             pgtype.UUID        `json:"id"`
+	ContextID      pgtype.UUID        `json:"context_id"`
+	Classification []byte             `json:"classification"`
+	Kind           string             `json:"kind"`
+	Body           []byte             `json:"body"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitOutputInput struct {
+	OutputID pgtype.UUID `json:"output_id"`
+	InputID  pgtype.UUID `json:"input_id"`
+}
+
+type R2dGitProjectGrant struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	SubjectKind string      `json:"subject_kind"`
+	SubjectID   pgtype.UUID `json:"subject_id"`
+	Role        string      `json:"role"`
+}
+
+type R2dGitProjectPolicy struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Epoch       int64       `json:"epoch"`
+}
+
+type R2dGitProvider struct {
+	ID       pgtype.UUID `json:"id"`
+	Label    string      `json:"label"`
+	Kind     string      `json:"kind"`
+	Host     string      `json:"host"`
+	Port     int32       `json:"port"`
+	HostPins []byte      `json:"host_pins"`
+	Enabled  bool        `json:"enabled"`
+}
+
+type R2dGitRepository struct {
+	ID                  pgtype.UUID `json:"id"`
+	ProjectID           pgtype.UUID `json:"project_id"`
+	ProviderID          pgtype.UUID `json:"provider_id"`
+	CanonicalRepository string      `json:"canonical_repository"`
+	Epoch               int64       `json:"epoch"`
+	Protected           bool        `json:"protected"`
+	AllowRead           bool        `json:"allow_read"`
+	AllowWrite          bool        `json:"allow_write"`
+	WriteRefs           []byte      `json:"write_refs"`
+}
+
+type R2dGitRestoreCheckpoint struct {
+	ID         pgtype.UUID `json:"id"`
+	Checkpoint pgtype.UUID `json:"checkpoint"`
+}
+
+type R2dGitRunContext struct {
+	ID                pgtype.UUID        `json:"id"`
+	TaskID            pgtype.UUID        `json:"task_id"`
+	RootID            pgtype.UUID        `json:"root_id"`
+	ParentID          pgtype.UUID        `json:"parent_id"`
+	AuthorizingUserID pgtype.UUID        `json:"authorizing_user_id"`
+	Spec              []byte             `json:"spec"`
+	Derivation        string             `json:"derivation"`
+	State             string             `json:"state"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitRunGrant struct {
+	ID         pgtype.UUID `json:"id"`
+	ContextID  pgtype.UUID `json:"context_id"`
+	IdentityID pgtype.UUID `json:"identity_id"`
+	Spec       []byte      `json:"spec"`
+	State      string      `json:"state"`
+}
+
+type R2dGitSecurityEvent struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	SubjectID pgtype.UUID        `json:"subject_id"`
+	Action    string             `json:"action"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Details   []byte             `json:"details"`
+}
+
+type R2dGitSourceQuarantine struct {
+	Kind      string             `json:"kind"`
+	SubjectID pgtype.UUID        `json:"subject_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type RuntimeProfile struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

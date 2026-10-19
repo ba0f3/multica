@@ -3,11 +3,14 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
@@ -441,5 +444,34 @@ func TestChatStream(t *testing.T) {
 	}
 	if content.String() != "Hello" {
 		t.Fatalf("expected assembled content %q, got %q", "Hello", content.String())
+	}
+}
+
+func TestCustomLLMClientCannotBypassHistoricalSourceHold(t *testing.T) {
+	var calls atomic.Int32
+	server := stubUpstream(t, func(w http.ResponseWriter, body map[string]any) {
+		calls.Add(1)
+		io.WriteString(w, `{"id":"synthetic","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	})
+	c := New(Config{APIKey: "synthetic", BaseURL: server.URL, HTTPClient: server.Client(), MaxRetries: retries(0)})
+	sourceguard.Install(func(context.Context) error { return sourceguard.ErrUnavailable })
+	defer sourceguard.Install(nil)
+	_, err := c.Chat(context.Background(), openai.ChatCompletionNewParams{Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("synthetic historical text")}})
+	if err == nil || calls.Load() != 0 {
+		t.Fatal("custom client bypassed hold", err, calls.Load())
+	}
+}
+
+func TestDefaultLLMClientRetainsSDKIsolationFromGlobalClient(t *testing.T) {
+	server := stubUpstream(t, func(w http.ResponseWriter, body map[string]any) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"synthetic","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	})
+	original := http.DefaultClient
+	http.DefaultClient = &http.Client{Timeout: time.Nanosecond}
+	defer func() { http.DefaultClient = original }()
+	c := New(Config{APIKey: "synthetic", BaseURL: server.URL, MaxRetries: retries(0)})
+	if _, err := c.Chat(context.Background(), openai.ChatCompletionNewParams{Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("synthetic")}}); err != nil {
+		t.Fatal("SDK default inherited mutable global client", err)
 	}
 }

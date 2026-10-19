@@ -3,6 +3,10 @@ package protocol
 import "encoding/json"
 
 const (
+	// DaemonCapabilityR2DGitSecurityV1 is reserved for a certified protected
+	// execution adapter. Declaring the contract is not support: legacy/local
+	// daemon capability lists must omit it until the integrated security gate.
+	DaemonCapabilityR2DGitSecurityV1    = "r2d-git-security-v1"
 	DaemonCapabilitySkillBundlesV1      = "skill-bundles-v1"
 	DaemonCapabilityCoalescedCommentsV1 = "coalesced-comments-v1"
 	DaemonCapabilityExecutionManifestV1 = "execution-manifest-v1"

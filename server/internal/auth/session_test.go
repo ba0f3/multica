@@ -51,6 +51,32 @@ func signSession(t *testing.T, claims jwt.MapClaims) string {
 	return signed
 }
 
+func TestRenewSessionPreservesOriginalAuthenticationTime(t *testing.T) {
+	for _, authenticated := range []bool{false, true} {
+		claims := sessionClaims(t, time.Now().Add(time.Hour), "synthetic-session")
+		original := float64(time.Now().Add(-24 * time.Hour).Unix())
+		if authenticated {
+			claims["auth_time"] = original
+		}
+		signed, _, err := RenewSessionToken(claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := jwt.Parse(signed, func(*jwt.Token) (any, error) { return JWTSecret(), nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := token.Claims.(jwt.MapClaims)
+		if authenticated {
+			if next["auth_time"] != original {
+				t.Fatal("renewal refreshed recent-auth consent")
+			}
+		} else if _, ok := next["auth_time"]; ok {
+			t.Fatal("renewal invented human authentication proof")
+		}
+	}
+}
+
 // The renewal window is the defining behaviour of a sliding session: too
 // eager and every response carries a Set-Cookie, too lazy and an active user
 // still gets logged out. Half the TTL is the contract Bohan approved on

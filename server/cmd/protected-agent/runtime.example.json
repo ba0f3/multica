@@ -1,0 +1,9 @@
+{
+  "socket_path": "/run/multica/broker.sock",
+  "git_executable": "/usr/bin/git",
+  "provider_executable": "/opt/multica/provider",
+  "workspace_root": "/workspace",
+  "home_root": "/home/agent",
+  "tmp_root": "/tmp",
+  "timeout_seconds": 45
+}

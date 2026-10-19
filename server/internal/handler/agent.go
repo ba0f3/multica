@@ -2765,7 +2765,7 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	if nextCursor != "" {
 		w.Header().Set(HeaderAgentTasksNextCursor, nextCursor)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	h.writeTaskHistory(w, r, resp)
 }
 
 // AgentActivityBucket is one day-bucketed throughput sample for the
@@ -3049,5 +3049,5 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 	}
 	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
 
-	writeJSON(w, http.StatusOK, resp)
+	h.writeTaskHistory(w, r, resp)
 }

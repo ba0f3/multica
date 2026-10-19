@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,7 +75,7 @@ func NewHistory(q historyQueries, decrypt Decrypter, logger *slog.Logger) *Histo
 	h.newClient = func(botToken string) historyClient {
 		// Only the bot token is needed to read; the app-level token is for the
 		// inbound Socket Mode connection (slack_channel.go).
-		return slack.New(botToken)
+		return slack.New(botToken, slack.OptionHTTPClient(sourceguard.HTTPClient(&http.Client{})))
 	}
 	return h
 }

@@ -1871,6 +1871,9 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if h.denyProtectedGitReport(w, r, uuidToString(taskUUID)) {
+		return
+	}
 	cancelled, err := h.TaskService.CancelTaskWithResult(r.Context(), taskUUID, service.CancelTaskOptions{
 		ClientSupportsDraftRestore: requestHasClientCapability(r, protocol.AppCapabilityChatDraftRestoreV1),
 		QueuedOnly:                 queuedOnly,

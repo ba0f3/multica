@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
 	"net/http"
 	"time"
@@ -71,7 +72,7 @@ func renewCookieSession(w http.ResponseWriter, r *http.Request, claims jwt.MapCl
 	// next to the renewal itself, is what keeps the two in lockstep on EVERY
 	// route group that can renew, not only the ones that also mount
 	// RefreshCloudFrontCookies.
-	if cfSigner != nil {
+	if cfSigner != nil && sourceguard.Check(r.Context()) == nil {
 		for _, cookie := range cfSigner.SignedCookies(expiresAt) {
 			http.SetCookie(w, cookie)
 		}

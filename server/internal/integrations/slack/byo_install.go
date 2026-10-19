@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"net/http"
 	"strings"
 
@@ -137,7 +138,7 @@ func (s *InstallService) slackOpts() []slack.Option {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	opts := []slack.Option{slack.OptionHTTPClient(httpClient)}
+	opts := []slack.Option{slack.OptionHTTPClient(sourceguard.HTTPClient(httpClient))}
 	if s.apiURL != "" {
 		base := s.apiURL
 		if !strings.HasSuffix(base, "/") {

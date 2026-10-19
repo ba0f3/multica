@@ -1,10 +1,10 @@
 # Per-user Git credentials — implementation plan
 
-**Decision date:** 2026-10-16 (Asia/Ho_Chi_Minh)  
-**State:** architecture direction accepted; implementation and production enablement are not complete.  
-**Feature tracker:** [#84](https://github.com/r2d-ai/multica/issues/84)  
-**Patch-stack / upstream cursor:** [#12](https://github.com/r2d-ai/multica/issues/12)  
-**Planning baseline:** `231dedb55287ab6e40fd103634a024e4d9d1baeb`.  
+**Decision date:** 2026-10-16 (Asia/Ho_Chi_Minh)
+**State:** architecture direction accepted; implementation and production enablement are not complete.
+**Feature tracker:** [#84](https://github.com/r2d-ai/multica/issues/84)
+**Patch-stack / upstream cursor:** [#12](https://github.com/r2d-ai/multica/issues/12)
+**Planning baseline:** `231dedb55287ab6e40fd103634a024e4d9d1baeb`.
 **Delivery:** commits and PRs on `r2d-ai/multica` only; upstream is read-only reference.
 
 ## 1. Quyết định đã chốt

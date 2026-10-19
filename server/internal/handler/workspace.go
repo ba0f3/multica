@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/r2dgit"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -1186,6 +1187,12 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		{
 			name: "prepare relationship graph",
 			run:  func() error { return qtx.PrepareWorkspaceDeletionLinks(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "settle protected Git authorization",
+			run: func() error {
+				return r2dgit.SettleWorkspaceDeletion(ctx, tx, uuidToString(requester.WorkspaceID), uuidToString(requester.UserID))
+			},
 		},
 		{
 			// These FK-free intents deliberately survive the transaction so the

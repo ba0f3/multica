@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"strings"
@@ -172,7 +173,7 @@ func (c *Client) postJSON(ctx context.Context, path, accessToken string, body, o
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-acs-dingtalk-access-token", accessToken)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := sourceguard.Do(c.httpClient, req)
 	if err != nil {
 		return fmt.Errorf("dingtalk: request %s: %w", path, err)
 	}

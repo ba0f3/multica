@@ -1,13 +1,16 @@
 package service
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"html"
 	"mime"
 	"mime/quotedprintable"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
 	"strings"
@@ -221,7 +224,7 @@ func NewEmailService() *EmailService {
 
 	var client *resend.Client
 	if apiKey != "" {
-		client = resend.NewClient(apiKey)
+		client = resend.NewCustomClient(sourceguard.HTTPClient(&http.Client{Timeout: time.Minute}), strings.Trim(strings.TrimSpace(apiKey), "'"))
 	}
 
 	switch {
@@ -312,6 +315,9 @@ func (s *EmailService) sendSMTP(to, subject, htmlBody string) error {
 	if err = c.Rcpt(to); err != nil {
 		return fmt.Errorf("smtp RCPT TO <%s>: %w", to, err)
 	}
+	if err := sourceguard.Check(context.Background()); err != nil {
+		return err
+	}
 	w, err := c.Data()
 	if err != nil {
 		return fmt.Errorf("smtp DATA: %w", err)
@@ -366,6 +372,9 @@ func (s *EmailService) SendVerificationCode(to, code string) error {
 // SendInvitationEmail notifies the invitee that they have been invited to a workspace.
 // invitationID is included in the URL so the email deep-links to /invite/{id}.
 func (s *EmailService) SendInvitationEmail(to, inviterName, workspaceName, invitationID string) error {
+	if err := sourceguard.Check(context.Background()); err != nil {
+		return err
+	}
 	appURL := strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
 	if appURL == "" {
 		appURL = "https://multica.ai"

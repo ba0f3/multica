@@ -116,6 +116,21 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"project_resource":                   workspaceDelete,
 	"quick_action":                       workspaceDelete,
 	"runtime_profile":                    workspaceDelete,
+	"r2d_git_provider":                   workspaceDeleteKeep, // Approved global provider registry.
+	"r2d_git_identity":                   workspaceDeleteKeep, // Human-owned identities survive team deletion.
+	"r2d_git_key":                        workspaceDeleteKeep,
+	"r2d_git_key_job":                    workspaceDeleteKeep, // Durable custody/cleanup intents.
+	"r2d_git_project_policy":             workspaceDelete,
+	"r2d_git_project_grant":              workspaceDelete,
+	"r2d_git_repository":                 workspaceDelete,
+	"r2d_git_run_context":                workspaceDeleteKeep, // Revoked in teardown; immutable history retained.
+	"r2d_git_run_grant":                  workspaceDeleteKeep, // Revoked with its context; retained for audit.
+	"r2d_git_security_event":             workspaceDeleteKeep,
+	"r2d_git_operation":                  workspaceDeleteKeep,
+	"r2d_git_output":                     workspaceDeleteKeep,
+	"r2d_git_output_input":               workspaceDeleteKeep, // Immutable derivation history follows its retained outputs.
+	"r2d_git_source_quarantine":          workspaceDeleteKeep, // Monotonic source holds survive team deletion.
+	"r2d_git_restore_checkpoint":         workspaceDeleteKeep, // Instance anchor is outside workspace ownership.
 	"schema_migrations":                  workspaceDeleteKeep,
 	"search_index_change":                workspaceDelete,
 	"search_index_prune_mark":            workspaceDeleteKeep,

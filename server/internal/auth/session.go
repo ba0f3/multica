@@ -240,6 +240,9 @@ func RenewSessionToken(claims jwt.MapClaims) (string, time.Time, error) {
 		"iat":          now.Unix(),
 		sessionIDClaim: sid,
 	}
+	if authenticatedAt, ok := claims["auth_time"]; ok {
+		next["auth_time"] = authenticatedAt
+	}
 	if email != "" {
 		next["email"] = email
 	}

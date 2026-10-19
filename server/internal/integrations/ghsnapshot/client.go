@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"os"
@@ -173,7 +174,7 @@ func (c *Client) mintInstallationToken(ctx context.Context, installationID int64
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", "Bearer "+appJWT)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := sourceguard.Do(c.httpClient, req)
 	if err != nil {
 		return "", err
 	}
@@ -231,7 +232,7 @@ func (c *Client) graphQL(ctx context.Context, installationID int64, query string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := sourceguard.Do(c.httpClient, req)
 	if err != nil {
 		return nil, err
 	}

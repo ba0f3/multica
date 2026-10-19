@@ -407,6 +407,15 @@ func main() {
 	stopStartup()
 	slog.Info("connected to database")
 	logPoolConfig("primary", pool)
+	sourceState := sourceAuthority(pool, nil)
+	defer sourceState.Store.Restore.Close()
+	sourceCtx, sourceCancel := context.WithTimeout(context.Background(), time.Second)
+	sourceBlocked, sourceErr := sourceState.ReaderlessSourceBlocked(sourceCtx)
+	sourceCancel()
+	if sourceErr != nil || sourceBlocked {
+		slog.Error("legacy startup refused: protected source requires explicit isolated deployment")
+		os.Exit(1)
+	}
 
 	// The replica is an optional capacity optimization, never a startup
 	// dependency. Invalid configuration preserves primary-only behavior. New
@@ -680,6 +689,7 @@ func main() {
 	}
 
 	r, h := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
+		SourceRestore:       sourceState.Store.Restore,
 		HTTPMetrics:         httpMetrics,
 		BusinessMetrics:     businessMetrics,
 		ChannelLeaseMetrics: channelLeaseMetrics,
@@ -695,6 +705,12 @@ func main() {
 		LLMDisableThinking:  llmDisableThinking,
 	})
 	var replicaQueries *db.Queries
+	stopProtectedRuntime, protectedErr := startProtectedRuntime(context.Background(), h)
+	if protectedErr != nil {
+		slog.Error("protected runtime startup refused")
+		os.Exit(1)
+	}
+	defer stopProtectedRuntime()
 	if replicaPool != nil {
 		replicaQueries = db.New(replicaPool)
 	}

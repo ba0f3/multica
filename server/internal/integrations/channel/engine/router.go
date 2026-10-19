@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
 	"strings"
 	"sync"
@@ -1057,6 +1058,9 @@ func (r *Router) scheduleReply(set ResolverSet, inst ResolvedInstallation, msg c
 		defer r.replyWg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), r.replyTimeout)
 		defer cancel()
+		if sourceguard.Check(ctx) != nil {
+			return
+		}
 		set.Replier.Reply(ctx, inst, msg, res)
 		if ctx.Err() == context.DeadlineExceeded {
 			r.logger.Warn("channel router: outbound reply timed out",

@@ -625,6 +625,8 @@ func TestPiExecuteRetainsOnlyLastTurnOutput(t *testing.T) {
 		t.Fatalf("new pi backend: %v", err)
 	}
 
+	isolatePiSessionAllocator(t, backend)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
@@ -671,6 +673,8 @@ func TestPiExecuteFailsOnUnretriedTurnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new pi backend: %v", err)
 	}
+
+	isolatePiSessionAllocator(t, backend)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -724,6 +728,8 @@ func TestPiExecuteSucceedsWhenRetryFollowsTurnError(t *testing.T) {
 		t.Fatalf("new pi backend: %v", err)
 	}
 
+	isolatePiSessionAllocator(t, backend)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
@@ -773,6 +779,8 @@ func TestPiExecuteKeepsTurnErrorWhenProcessExitsNonZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new pi backend: %v", err)
 	}
+
+	isolatePiSessionAllocator(t, backend)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1287,4 +1295,10 @@ func TestPreparePiMcpExtensionSkipsOmp(t *testing.T) {
 		removePiMcpExtension(path)
 		t.Fatalf("omp wrote a pi extension at %s", path)
 	}
+}
+
+func isolatePiSessionAllocator(t *testing.T, backend Backend) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	backend.(*piBackend).newSessionPath = func() (string, error) { return path, nil }
 }

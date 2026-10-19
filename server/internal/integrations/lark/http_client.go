@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"log/slog"
 	"mime"
@@ -803,7 +804,7 @@ func (c *httpAPIClient) downloadMessageResourceStreamOnce(ctx context.Context, c
 		return DownloadedResourceStream{}, fmt.Errorf("lark http client: download resource: new request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.cfg.ResourceHTTPClient.Do(req)
+	resp, err := sourceguard.Do(c.cfg.ResourceHTTPClient, req)
 	if err != nil {
 		if cancel != nil {
 			cancel()
@@ -1244,7 +1245,7 @@ func (c *httpAPIClient) doJSON(ctx context.Context, baseURL, method, path, token
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := sourceguard.Do(c.cfg.HTTPClient, req)
 	if err != nil {
 		return fmt.Errorf("http do: %w", err)
 	}

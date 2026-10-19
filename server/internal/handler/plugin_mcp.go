@@ -135,6 +135,9 @@ func (h *Handler) ResolvePluginMCPCredential(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "id")) {
+		return
+	}
 
 	installationID, hookKey, ok := splitPluginContributionID(chi.URLParam(r, "contributionId"))
 	if !ok {

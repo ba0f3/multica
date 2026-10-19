@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
 	"sync"
 	"time"
@@ -171,6 +172,9 @@ func (w *Worker) runOnce(ctx context.Context, now time.Time) (next time.Time, er
 		return *state.NextAttemptAt, nil
 	}
 
+	if err := sourceguard.Check(ctx); err != nil {
+		return now.Add(collectionRetry), err
+	}
 	switch w.sender.Send(ctx, state.PendingBody) {
 	case deliverySuccess:
 		if err := session.MarkSuccessful(ctx, today); err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"strings"
@@ -211,7 +212,7 @@ func (gitlabProvider) ValidateToken(ctx context.Context, instanceURL, token stri
 	req.Header.Set("PRIVATE-TOKEN", token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := sourceguard.Do(httpClient, req)
 	if err != nil {
 		return Account{}, fmt.Errorf("gitlab: request: %w", err)
 	}

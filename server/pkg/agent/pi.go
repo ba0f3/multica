@@ -37,6 +37,9 @@ type piBackend struct {
 	// error. Production uses defaultPiTurnErrorGrace; tests shorten it without
 	// changing concurrent executions through package-global state.
 	turnErrorGrace time.Duration
+	// A per-backend allocator keeps isolated callers off the process-wide home
+	// while preserving an empty ResumeSessionID for a genuinely cold run.
+	newSessionPath func() (string, error)
 }
 
 var (
@@ -393,7 +396,11 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		}
 	} else {
 		if sessionPath == "" {
-			sessionPath, err = newPiSessionPath()
+			allocate := newPiSessionPath
+			if b.newSessionPath != nil {
+				allocate = b.newSessionPath
+			}
+			sessionPath, err = allocate()
 			if err != nil {
 				return nil, fmt.Errorf("%s session path: %w", label, err)
 			}

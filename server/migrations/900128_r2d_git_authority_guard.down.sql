@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS r2d_git_member_guard ON member;
+DROP TRIGGER IF EXISTS r2d_git_user_guard ON "user";
+DROP TRIGGER IF EXISTS r2d_git_workspace_guard ON workspace;
+DROP TRIGGER IF EXISTS r2d_git_agent_guard ON agent;
+DROP TRIGGER IF EXISTS r2d_git_runtime_guard ON agent_runtime;
+DROP TRIGGER IF EXISTS r2d_git_invocation_guard ON agent_invocation_target;
+DROP TRIGGER IF EXISTS r2d_git_project_guard ON project;
+DROP TRIGGER IF EXISTS r2d_git_issue_guard ON issue;
+DROP TRIGGER IF EXISTS r2d_git_task_guard ON agent_task_queue;
+DROP FUNCTION IF EXISTS r2d_git_authority_guard();

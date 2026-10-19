@@ -38,6 +38,15 @@ type Bus struct {
 	mu             sync.RWMutex
 	listeners      map[string][]Handler
 	globalHandlers []Handler
+	deliveryGuard  func(Event) bool
+}
+
+// SetDeliveryGuard installs the server-owned source boundary before listeners.
+// Denied events reach no relay, notification, plugin or legacy workflow handler.
+func (b *Bus) SetDeliveryGuard(guard func(Event) bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.deliveryGuard = guard
 }
 
 // New creates a new event bus.
@@ -81,9 +90,13 @@ func (b *Bus) SubscribeAll(h Handler) {
 // recovered so one failing handler does not prevent others from executing.
 func (b *Bus) Publish(e Event) {
 	b.mu.RLock()
+	guard := b.deliveryGuard
 	handlers := b.listeners[e.Type]
 	globals := b.globalHandlers
 	b.mu.RUnlock()
+	if guard != nil && !guard(e) {
+		return
+	}
 
 	for _, h := range handlers {
 		func() {

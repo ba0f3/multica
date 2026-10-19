@@ -5653,6 +5653,15 @@ func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID string, pollI
 }
 
 func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
+	if err := validateProtectedGitTask(task); err != nil {
+		if reportErr := d.reportTerminalTask(ctx, terminalTaskReport{
+			kind: terminalTaskReportFail, taskID: task.ID,
+			errorMessage: err.Error(), failureReason: taskfailure.ReasonRuntimeAccessDenied.String(),
+		}); reportErr != nil {
+			d.logger.Error("protected Git refusal callback failed", "task", task.ID, "error", reportErr)
+		}
+		return
+	}
 	d.mu.Lock()
 	rt, tracked := d.runtimeIndex[task.RuntimeID]
 	d.mu.Unlock()
@@ -5940,6 +5949,9 @@ func (e *environmentSetupError) Unwrap() error { return e.err }
 func asEnvironmentSetupFailure(err error) error { return &environmentSetupError{err: err} }
 
 func taskRunFailureReason(err error) string {
+	if errors.Is(err, errProtectedGitUnsupported) {
+		return taskfailure.ReasonRuntimeAccessDenied.String()
+	}
 	if errors.Is(err, errInvalidTaskIdentity) {
 		return taskfailure.ReasonInvalidTaskIdentity.String()
 	}
@@ -7604,6 +7616,9 @@ func qualifyTaskModel(
 }
 
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
+	if err := validateProtectedGitTask(task); err != nil {
+		return TaskResult{}, err
+	}
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	phaseRecorder.Mark(taskPhasePrepareStarted)
 	// A claim carries the task-row agent id both at the top level and inside
@@ -9720,6 +9735,10 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 
 	select {
 	case result := <-session.Result:
+		// The backend may finish cancellation before this select runs. Capture
+		// the same upstream boundary as the Done branch before transcript drain
+		// can allow a later cancellation to overwrite an already received result.
+		upstreamCancelled := errors.Is(ctx.Err(), context.Canceled)
 		stopWatchdog()
 		waitForDrain()
 		// terminalObserved outranks a watchdog that fired anyway: if the backend
@@ -9735,6 +9754,9 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			if result.Error == "" {
 				result.Error = idleWatchdogReason(time.Duration(idleWatchdogThreshold.Load()))
 			}
+		} else if upstreamCancelled && !terminalObserved() {
+			result.Status = "cancelled"
+			result.Error = "task cancelled by upstream context (server cancel or daemon shutdown)"
 		}
 		return result, toolCount.Load(), nil
 	case <-drainCtx.Done():

@@ -83,6 +83,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"net/http"
 	"strings"
 	"time"
@@ -240,12 +241,24 @@ type Client struct {
 	retry           RetryBudget
 }
 
+// Preserve the pinned SDK's default header bound, including streaming calls,
+// while checking each network attempt. Supplied clients keep their own policy.
+func defaultGuardedHTTPClient() *http.Client {
+	transport := http.DefaultTransport
+	if base, ok := transport.(*http.Transport); ok {
+		clone := base.Clone()
+		clone.ResponseHeaderTimeout = 10 * time.Minute
+		transport = clone
+	}
+	return sourceguard.HTTPClient(&http.Client{Transport: transport})
+}
+
 // New builds a Client from cfg. It never returns an error: an unconfigured
 // Config produces a disabled client whose calls return ErrNotConfigured, which
 // keeps wiring in main/router simple (no boot-time failure when the LLM layer
 // is simply not set up on a given deployment).
 func New(cfg Config) *Client {
-	opts := make([]option.RequestOption, 0, 4)
+	opts := []option.RequestOption{option.WithHTTPClient(defaultGuardedHTTPClient())}
 	if key := strings.TrimSpace(cfg.APIKey); key != "" {
 		opts = append(opts, option.WithAPIKey(key))
 	}
@@ -276,7 +289,7 @@ func New(cfg Config) *Client {
 		opts = append(opts, option.WithJSONSet("chat_template_kwargs", map[string]any{"enable_thinking": false}))
 	}
 	if cfg.HTTPClient != nil {
-		opts = append(opts, option.WithHTTPClient(cfg.HTTPClient))
+		opts = append(opts, option.WithHTTPClient(sourceguard.Client(cfg.HTTPClient)))
 	}
 
 	defaultModel := strings.TrimSpace(cfg.DefaultModel)

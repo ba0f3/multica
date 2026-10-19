@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"log/slog"
 	"net/http"
@@ -190,7 +191,7 @@ func (p forgejoProvider) ValidateToken(ctx context.Context, instanceURL, token s
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := sourceguard.Do(httpClient, req)
 	if err != nil {
 		return Account{}, fmt.Errorf("forgejo: request: %w", err)
 	}

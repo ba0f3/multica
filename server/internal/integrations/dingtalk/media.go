@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"log/slog"
 	"net"
@@ -334,7 +335,7 @@ func (m *mediaResolver) fetchBytes(ctx context.Context, rawURL string) ([]byte, 
 	if err != nil {
 		return nil, "", errors.New("build image download request failed")
 	}
-	resp, err := m.fetch.Do(req)
+	resp, err := sourceguard.Do(m.fetch, req)
 	if err != nil {
 		// net/http's *url.Error includes the full request URL. DingTalk download
 		// URLs are short-lived bearer credentials, so unwrap it before the caller

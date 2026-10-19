@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"net/http"
 	"time"
 
@@ -24,7 +25,7 @@ func RefreshCloudFrontCookies(signer *auth.CloudFrontSigner) func(http.Handler) 
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, err := r.Cookie("CloudFront-Policy")
-			if err != nil && !SessionRenewed(r) {
+			if err != nil && !SessionRenewed(r) && sourceguard.Check(r.Context()) == nil {
 				ttl := auth.AuthTokenTTL()
 				for _, cookie := range signer.SignedCookies(time.Now().Add(ttl)) {
 					http.SetCookie(w, cookie)

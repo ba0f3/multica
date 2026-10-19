@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"log/slog"
 	"net/http"
@@ -142,7 +143,7 @@ func (f *HTTPConnectionTokenFetcher) Endpoint(ctx context.Context, creds Install
 	// the audience Multica server logs are read by today; if i18n
 	// matters later this becomes an env or a per-installation knob.
 	req.Header.Set("locale", "zh")
-	resp, err := f.cfg.HTTPClient.Do(req)
+	resp, err := sourceguard.Do(f.cfg.HTTPClient, req)
 	if err != nil {
 		return WSEndpoint{}, fmt.Errorf("http do: %w", err)
 	}

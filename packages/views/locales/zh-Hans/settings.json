@@ -1426,5 +1426,33 @@
     "mcp": "由管理员添加、在工作区内共享，再按智能体分配。",
     "apps": "用你自己的账号通过 Composio 授权，在你拥有的智能体上启用。",
     "plugins": "安装后可提供工具、定时 hook 和存储，每个插件单独授权。"
+  },
+  "git_identities": {
+    "title": "Git 身份",
+    "custody": "私钥保存在后端加密存储中。这里只显示公钥。",
+    "loading": "正在加载 Git 身份…",
+    "failed": "无法加载或更新 Git 身份。",
+    "unavailable": "此服务器暂不支持 Git 密钥管理。",
+    "provider": "Git 服务",
+    "choose": "选择服务",
+    "projects": "允许使用此身份的项目",
+    "generate": "生成密钥",
+    "registration": "将公钥作为身份验证密钥添加到你自己的服务账号，然后在此验证。",
+    "generation": "版本",
+    "active": "使用中",
+    "public_key": "公钥",
+    "copy": "复制公钥",
+    "copied": "已复制公钥。",
+    "verify": "验证",
+    "activate": "启用",
+    "rotate": "轮换密钥",
+    "revoke": "撤销",
+    "cleanup_pending": "已在本地撤销，等待清理加密密钥。",
+    "cleanup": "重试清理",
+    "revoke_warning": "此操作立即停止本地使用。还需从服务账号中移除公钥。",
+    "confirm_revoke": "确认撤销",
+    "cancel": "取消",
+    "reauth": "管理 Git 身份前请重新登录。",
+    "diagnostic": "密钥存储或验证需要处理。请重试验证或撤销此身份。"
   }
 }

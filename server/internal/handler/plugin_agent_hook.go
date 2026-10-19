@@ -34,6 +34,9 @@ func (h *Handler) InvokeAgentPluginHook(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	if h.denyProtectedGitReport(w, r, chi.URLParam(r, "id")) {
+		return
+	}
 
 	var req invokeAgentHookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

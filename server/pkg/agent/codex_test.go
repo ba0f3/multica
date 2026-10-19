@@ -4099,14 +4099,14 @@ func TestCodexExecuteLegacyFirstTurnMessageSatisfiesProgress(t *testing.T) {
 		`read line`+"\n"+
 		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"task_started"}}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"agent_message","message":"legacy alive"}}}'`+"\n"+
-		`sleep 0.07`+"\n"+
+		`sleep 0.7`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"task_complete"}}}'`+"\n")
 
 	result := executeFakeCodex(t, fakePath, ExecOptions{
 		Timeout:                   5 * time.Second,
-		SemanticInactivityTimeout: 100 * time.Millisecond,
+		SemanticInactivityTimeout: time.Second,
 	})
 	if result.Status != "completed" {
 		t.Fatalf("expected completed, got status=%q error=%q", result.Status, result.Error)
@@ -4122,6 +4122,10 @@ func TestCodexExecuteSemanticInactivityAllowsContinuousMessages(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
+	// Three progress gaps each stay below the inactivity budget while the
+	// whole turn exceeds it. Keep the ratio, with enough scheduling margin
+	// for a race-instrumented subprocess instead of assuming sleep 50ms
+	// places an upper bound on wall time.
 	fakePath := writeFakeCodexAppServer(t, ""+
 		`read line`+"\n"+
 		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
@@ -4131,19 +4135,44 @@ func TestCodexExecuteSemanticInactivityAllowsContinuousMessages(t *testing.T) {
 		`read line`+"\n"+
 		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-progress","turn":{"id":"turn-progress"}}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-progress","item":{"type":"agentMessage","id":"msg-1","text":"still working"}}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-progress","item":{"type":"commandExecution","id":"cmd-1","aggregatedOutput":"ok"}}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-progress","turn":{"id":"turn-progress","status":"completed"}}}'`+"\n")
 
-	result := executeFakeCodex(t, fakePath, ExecOptions{
+	var logs bytes.Buffer
+	result, _ := executeFakeCodexCollectingMessagesWithConfig(t, fakePath, Config{Logger: slog.New(slog.NewJSONHandler(&logs, nil))}, ExecOptions{
 		Timeout:                   5 * time.Second,
-		SemanticInactivityTimeout: 90 * time.Millisecond,
-	})
+		SemanticInactivityTimeout: 900 * time.Millisecond,
+	}, 10*time.Second)
 	if result.Status != "completed" {
 		t.Fatalf("expected completed, got status=%q error=%q", result.Status, result.Error)
+	}
+	var started, finished time.Time
+	sawText, sawTool := false, false
+	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+		var event struct {
+			Time              time.Time
+			Msg, Type, Status string
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("decode lifecycle record: %v", err)
+		}
+		if event.Msg == "codex agent message received" {
+			if event.Type == string(MessageStatus) && event.Status == "running" {
+				started = event.Time
+			}
+			sawText = sawText || event.Type == string(MessageText)
+			sawTool = sawTool || event.Type == string(MessageToolResult)
+		}
+		if event.Msg == "codex finished" {
+			finished = event.Time
+		}
+	}
+	if started.IsZero() || finished.IsZero() || finished.Sub(started) <= 900*time.Millisecond || !sawText || !sawTool {
+		t.Fatalf("progress did not span the inactivity window: elapsed=%s text=%t tool=%t", finished.Sub(started), sawText, sawTool)
 	}
 	if !strings.Contains(result.Output, "still working") {
 		t.Fatalf("expected streamed text in output, got %q", result.Output)
@@ -4166,18 +4195,18 @@ func TestCodexExecuteSemanticInactivityAllowsContinuousDeltaProgress(t *testing.
 		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-delta","turn":{"id":"turn-delta"}}}'`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"threadId":"thr-delta","item":{"type":"commandExecution","id":"cmd-1"},"delta":"line 1\n"}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thr-delta","turnId":"turn-delta","itemId":"msg-1","delta":"thinking"}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"item/fileChange/outputDelta","params":{"threadId":"thr-delta","item":{"type":"fileChange","id":"patch-1"},"delta":"patched"}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"item/mcpToolCall/progress","params":{"threadId":"thr-delta","item":{"type":"mcpToolCall","id":"mcp-1"},"progress":{"message":"still running"}}}'`+"\n"+
-		`sleep 0.05`+"\n"+
+		`sleep 0.5`+"\n"+
 		`echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-delta","turn":{"id":"turn-delta","status":"completed"}}}'`+"\n")
 
 	result := executeFakeCodex(t, fakePath, ExecOptions{
 		Timeout:                   5 * time.Second,
-		SemanticInactivityTimeout: 150 * time.Millisecond,
+		SemanticInactivityTimeout: 1500 * time.Millisecond,
 	})
 	if result.Status != "completed" {
 		t.Fatalf("expected completed, got status=%q error=%q", result.Status, result.Error)

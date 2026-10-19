@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -207,7 +208,7 @@ func (c *PostHogClient) send(batch []Event) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := sourceguard.Do(c.cfg.HTTPClient, req)
 	if err != nil {
 		c.failed.Add(uint64(len(batch)))
 		slog.Warn("analytics: send batch failed", "error", err, "events", len(batch))

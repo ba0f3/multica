@@ -1,11 +1,13 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -197,4 +199,27 @@ func cloudFrontPolicies(rec *httptest.ResponseRecorder) []*http.Cookie {
 		}
 	}
 	return out
+}
+
+func TestProtectedControlRenewalCannotMintLegacyCDNCookies(t *testing.T) {
+	signer := testSigner(t)
+	sourceguard.Install(func(context.Context) error { return sourceguard.ErrUnavailable })
+	defer sourceguard.Install(nil)
+	handler := Auth(nil, nil, nil, signer)(RefreshCloudFrontCookies(signer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })))
+	req := cookieRequest(http.MethodGet, sessionToken(t, auth.AuthRenewThreshold()/2, "sid-protected"))
+	req.URL.Path = "/api/me/git-identities"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != 200 || len(cloudFrontPolicies(rec)) != 0 {
+		t.Fatal("protected control minted a broad source capability", rec.Code)
+	}
+	renewed := false
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == auth.AuthCookieName {
+			renewed = true
+		}
+	}
+	if !renewed {
+		t.Fatal("session renewal was lost while suppressing CDN capability")
+	}
 }

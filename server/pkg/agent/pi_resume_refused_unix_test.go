@@ -56,6 +56,8 @@ func TestPiExecuteReportsRefusedResume(t *testing.T) {
 				t.Fatalf("New(pi): %v", err)
 			}
 
+			isolatePiSessionAllocator(t, backend)
+
 			opts := ExecOptions{Timeout: 30 * time.Second, Cwd: base}
 			if test.resume {
 				opts.ResumeSessionID = sessionPath

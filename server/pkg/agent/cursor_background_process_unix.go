@@ -78,34 +78,41 @@ func (p *cursorUnixBackgroundProcess) alive() (bool, error) {
 
 func (p *cursorUnixBackgroundProcess) terminate() error {
 	deadline := time.Now().Add(time.Second)
+	return terminateCursorOwnedGroup(p.pgid, p.groupOwned, func() error {
+		if err := p.validateLeaderIdentity(); err != nil {
+			return err
+		}
+		return p.group.signal(syscall.SIGKILL)
+	}, func() bool { return time.Now().After(deadline) }, func() { time.Sleep(10 * time.Millisecond) })
+}
+
+func terminateCursorOwnedGroup(pgid int, owned func() (bool, error), signal func() error, expired func() bool, pause func()) error {
 	for {
-		owned, err := p.groupOwned()
+		// The retained group handle and signal callback establish ownership.
+		// Stop work before an expensive process-table observation consumes the
+		// cleanup budget, then classify only an observation made after signalling.
+		if err := signal(); err != nil && err != syscall.ESRCH {
+			return err
+		}
+		active, err := owned()
 		if err != nil {
 			return err
 		}
-		if !owned {
+		if !active {
 			return nil
 		}
-		// A shell can fork during cleanup. Revalidate and stop newly proven
-		// members within this existing cleanup bound, without a liveness timer.
-		if err := p.group.signal(syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-			return err
+		if expired() {
+			return fmt.Errorf("Cursor background process group %d still active after %s", pgid, time.Second)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("Cursor background process group %d still active after %s", p.pgid, time.Second)
-		}
-		time.Sleep(10 * time.Millisecond)
+		pause()
 	}
 }
 
 func (p *cursorUnixBackgroundProcess) close() { p.group.close() }
 
 func (p *cursorUnixBackgroundProcess) groupOwned() (bool, error) {
-	leader, leaderErr := readCursorUnixProcessInfo(p.pgid)
-	if leaderErr == nil && !leader.zombie && leader.pid == p.pgid && leader.pgid == p.pgid {
-		if leader.start != p.leaderStart {
-			return false, errCursorBackgroundProcessIdentity
-		}
+	if err := p.validateLeaderIdentity(); err != nil {
+		return false, err
 	}
 	// Linux retains a kernel group reference; Darwin verifies individual birth
 	// identities and lineage. Neither signals an unverified numeric PGID.
@@ -120,6 +127,16 @@ func (p *cursorUnixBackgroundProcess) groupOwned() (bool, error) {
 		return false, err
 	}
 	return len(members) > 0, nil
+}
+
+func (p *cursorUnixBackgroundProcess) validateLeaderIdentity() error {
+	leader, leaderErr := readCursorUnixProcessInfo(p.pgid)
+	if leaderErr == nil && !leader.zombie && leader.pid == p.pgid && leader.pgid == p.pgid {
+		if leader.start != p.leaderStart {
+			return errCursorBackgroundProcessIdentity
+		}
+	}
+	return nil
 }
 
 func listCursorUnixProcessGroup(pgid int) (map[int]uint64, error) {

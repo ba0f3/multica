@@ -55,8 +55,9 @@ func (r *mockRow) Scan(dest ...any) error {
 	return nil
 }
 
-// mockDBTX routes QueryRow calls: complete/fail queries return ErrNoRows,
-// getAgentTask returns the stored task.
+// mockDBTX models an ordinary task: policy reads explicitly allow ordinary
+// lifecycle handling, complete/fail return ErrNoRows, and GetAgentTask returns
+// the stored terminal row.
 type mockDBTX struct {
 	task db.AgentTaskQueue
 }
@@ -65,11 +66,17 @@ func (m *mockDBTX) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.C
 	return pgconn.NewCommandTag(""), nil
 }
 
-func (m *mockDBTX) Query(_ context.Context, _ string, _ ...interface{}) (pgx.Rows, error) {
+func (m *mockDBTX) Query(_ context.Context, sql string, _ ...interface{}) (pgx.Rows, error) {
+	if strings.Contains(sql, "-- name: ListR2DGitTaskProtection") {
+		return &sliceRows{rows: [][]any{{m.task.ID, false}}}, nil
+	}
 	return nil, pgx.ErrNoRows
 }
 
 func (m *mockDBTX) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+	if strings.Contains(sql, "-- name: IsR2DGitProtectedTask") {
+		return startPolicyRow{value: pgtype.Bool{Valid: true}}
+	}
 	// CompleteAgentTask and FailAgentTask SQL contain "SET status ="
 	if strings.Contains(sql, "SET status =") {
 		return &mockRow{err: pgx.ErrNoRows}

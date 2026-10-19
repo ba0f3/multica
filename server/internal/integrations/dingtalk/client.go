@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/sourceguard"
 	"io"
 	"net/http"
 	"strings"
@@ -95,7 +96,7 @@ func fetchAccessToken(ctx context.Context, httpClient *http.Client, baseURL, app
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := sourceguard.Do(httpClient, req)
 	if err != nil {
 		return "", 0, fmt.Errorf("dingtalk: access token request: %w", err)
 	}

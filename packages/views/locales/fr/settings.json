@@ -1436,5 +1436,33 @@
     "mcp": "Ajoutés par les administrateurs, partagés dans l'espace de travail puis attribués agent par agent.",
     "apps": "Autorisées avec votre propre compte via Composio et activées sur les agents qui vous appartiennent.",
     "plugins": "Paquets installés pouvant ajouter des outils, des hooks planifiés et du stockage, chacun avec ses propres autorisations."
+  },
+  "git_identities": {
+    "title": "Identités Git",
+    "custody": "Les clés privées restent chiffrées côté serveur. Seules les clés publiques sont affichées ici.",
+    "loading": "Chargement des identités Git…",
+    "failed": "Impossible de charger ou modifier les identités Git.",
+    "unavailable": "La gestion des clés Git est indisponible sur ce serveur.",
+    "provider": "Fournisseur Git",
+    "choose": "Choisir un fournisseur",
+    "projects": "Projets autorisés pour cette identité",
+    "generate": "Générer une clé",
+    "registration": "Ajoutez la clé publique d’authentification à votre propre compte, puis vérifiez-la ici.",
+    "generation": "Génération",
+    "active": "Active",
+    "public_key": "Clé publique",
+    "copy": "Copier la clé publique",
+    "copied": "Clé publique copiée.",
+    "verify": "Vérifier",
+    "activate": "Activer",
+    "rotate": "Renouveler la clé",
+    "revoke": "Révoquer",
+    "cleanup_pending": "Révoquée localement ; suppression de la clé chiffrée en attente.",
+    "cleanup": "Réessayer la suppression",
+    "revoke_warning": "L’utilisation locale cesse immédiatement. Supprimez aussi la clé publique de votre compte fournisseur.",
+    "confirm_revoke": "Confirmer la révocation",
+    "cancel": "Annuler",
+    "reauth": "Reconnectez-vous avant de gérer les identités Git.",
+    "diagnostic": "Le stockage ou la vérification nécessite une intervention. Réessayez ou révoquez cette identité."
   }
 }
