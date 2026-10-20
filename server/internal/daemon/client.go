@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1414,4 +1415,46 @@ func (c *Client) InvokeAgentPluginHook(ctx context.Context, daemonToken, taskID,
 		return nil, errors.New("the plugin hook did not succeed")
 	}
 	return response.Output, nil
+}
+
+// GitSigningLease is a task-scoped permission to sign with one key.
+//
+// It carries the public key and nothing secret: the private key stays on the
+// server, and every signature is produced there.
+type GitSigningLease struct {
+	LeaseID     string    `json:"lease_id"`
+	PublicKey   string    `json:"public_key"`
+	Fingerprint string    `json:"fingerprint"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// OpenGitSigningLease asks the server to bind the run's Git signing to the
+// key of the human who authorized it.
+//
+// The daemon names the provider; the server chooses the user, the identity
+// and the generation from the task's originator.
+func (c *Client) OpenGitSigningLease(ctx context.Context, taskID, providerID string) (*GitSigningLease, error) {
+	var lease GitSigningLease
+	path := fmt.Sprintf("/api/daemon/tasks/%s/git-signing-lease", url.PathEscape(taskID))
+	if err := c.postJSON(ctx, path, map[string]string{"provider_id": providerID}, &lease); err != nil {
+		return nil, err
+	}
+	if lease.LeaseID == "" || lease.PublicKey == "" {
+		return nil, errors.New("git signing lease is incomplete")
+	}
+	return &lease, nil
+}
+
+// SignGitData asks the server to sign bytes with a lease's key.
+func (c *Client) SignGitData(ctx context.Context, leaseID string, data []byte) ([]byte, error) {
+	var response struct {
+		Signature string `json:"signature"`
+	}
+	if err := c.postJSON(ctx, "/api/daemon/git-signatures", map[string]string{
+		"lease_id": leaseID,
+		"data":     base64.StdEncoding.EncodeToString(data),
+	}, &response); err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(response.Signature)
 }

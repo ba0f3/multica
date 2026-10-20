@@ -8469,6 +8469,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, err
 	}
 	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir)
+	// Git operations inside this run sign as the human who authorized it,
+	// through a per-attempt agent socket the daemon hosts. The private key
+	// stays on the server; the socket only lists the granted identity and
+	// forwards signatures.
+	//
+	// A run with no verified credential, no provable originator or no
+	// matching provider simply has no SSH_AUTH_SOCK, and the host's agent
+	// is never inherited.
+	if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, d.cfg.Profile); socketPath != "" {
+		agentEnv["SSH_AUTH_SOCK"] = socketPath
+		defer stopGitAgent()
+	}
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}

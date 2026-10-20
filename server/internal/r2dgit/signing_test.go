@@ -177,6 +177,60 @@ func TestOpenSigningLeaseRefusesAnotherUsersKey(t *testing.T) {
 	}
 }
 
+func TestReadyIdentitiesReturnsOnlyVerifiedKeys(t *testing.T) {
+	service, _, _, _ := signingTestService(t)
+
+	// A generated but unverified key must not be offered to a run.
+	if _, err := service.Generate(context.Background(), "user-a", "provider-1", "request-unverified", nil); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	ready := readyIdentity(t, service, "user-b")
+
+	identities, err := service.ReadyIdentities(context.Background(), "user-b")
+	if err != nil {
+		t.Fatalf("ReadyIdentities: %v", err)
+	}
+	if len(identities) != 1 {
+		t.Fatalf("ReadyIdentities returned %d identities, want 1", len(identities))
+	}
+	if identities[0].IdentityID != ready.ID {
+		t.Fatalf("identity id = %q, want %q", identities[0].IdentityID, ready.ID)
+	}
+	if identities[0].ProviderID != "provider-1" {
+		t.Fatalf("provider id = %q, want %q", identities[0].ProviderID, "provider-1")
+	}
+	if identities[0].Host != "github.com" {
+		t.Fatalf("provider host = %q, want %q", identities[0].Host, "github.com")
+	}
+	if identities[0].PublicKey == "" || identities[0].Fingerprint == "" {
+		t.Fatal("the identity carries no public key or fingerprint")
+	}
+
+	unverified, err := service.ReadyIdentities(context.Background(), "user-a")
+	if err != nil {
+		t.Fatalf("ReadyIdentities for the unverified user: %v", err)
+	}
+	if len(unverified) != 0 {
+		t.Fatalf("an unverified key was offered to a run: %+v", unverified)
+	}
+}
+
+func TestReadyIdentitiesSkipsARevokedIdentity(t *testing.T) {
+	service, _, _, _ := signingTestService(t)
+	identity := readyIdentity(t, service, "user-a")
+
+	if err := service.Revoke(context.Background(), "user-a", identity.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	identities, err := service.ReadyIdentities(context.Background(), "user-a")
+	if err != nil {
+		t.Fatalf("ReadyIdentities: %v", err)
+	}
+	if len(identities) != 0 {
+		t.Fatalf("a revoked key was offered to a run: %+v", identities)
+	}
+}
+
 func TestSigningUsesTheCustodyAdapterAndNotTheStore(t *testing.T) {
 	service, store, custody, _ := signingTestService(t)
 	store.originators["task-1"] = "user-a"

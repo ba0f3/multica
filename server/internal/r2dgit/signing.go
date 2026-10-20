@@ -3,6 +3,7 @@ package r2dgit
 import (
 	"context"
 	"crypto/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,83 @@ type signingLease struct {
 	// so a later signature request is refused with the reason rather than
 	// with "unknown lease".
 	Revoked bool
+}
+
+// RunIdentity is one usable Git credential of a task's execution user.
+//
+// The claim response carries these to the daemon so it can pick the provider
+// whose host matches the repository it is about to clone. It never carries a
+// secret.
+type RunIdentity struct {
+	ProviderID  string
+	Host        string
+	IdentityID  string
+	Generation  uint64
+	PublicKey   string
+	Fingerprint string
+}
+
+// ReadyIdentities lists the verified Git credentials of a user.
+//
+// Only a key in the ready state is offered: an unverified key would make the
+// runner fail after it has already started, and a revoked identity must never
+// reach a run at all.
+func (s *Service) ReadyIdentities(ctx context.Context, userID string) ([]RunIdentity, error) {
+	if !s.available() {
+		return nil, ErrUnavailable
+	}
+	if strings.TrimSpace(userID) == "" {
+		return nil, ErrPrincipal
+	}
+
+	providers, err := s.store.ListProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	hosts := make(map[string]string, len(providers))
+	for _, provider := range providers {
+		if provider.Enabled {
+			hosts[provider.ID] = provider.Host
+		}
+	}
+
+	identities, err := s.store.ListIdentitiesForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := s.store.ListKeysForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	bySlot := make(map[string]Key, len(keys))
+	for _, key := range keys {
+		bySlot[key.IdentityID+":"+strconv.FormatUint(key.Generation, 10)] = key
+	}
+
+	out := make([]RunIdentity, 0, len(identities))
+	for _, identity := range identities {
+		if identity.Revoked || identity.ActiveGeneration == 0 {
+			continue
+		}
+		host, ok := hosts[identity.ProviderID]
+		if !ok {
+			continue
+		}
+		key, ok := bySlot[identity.ID+":"+strconv.FormatUint(identity.ActiveGeneration, 10)]
+		if !ok || key.State != Ready || key.PublicKey == "" {
+			continue
+		}
+		out = append(out, RunIdentity{
+			ProviderID:  identity.ProviderID,
+			Host:        host,
+			IdentityID:  identity.ID,
+			Generation:  key.Generation,
+			PublicKey:   key.PublicKey,
+			Fingerprint: key.Fingerprint,
+		})
+	}
+	return out, nil
 }
 
 // OpenSigningLease issues a signing permission for a task attempt.
