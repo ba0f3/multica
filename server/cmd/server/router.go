@@ -1594,6 +1594,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
+		// Per-task Git signing. The daemon hosts an SSH agent socket for
+		// the attempt and forwards every signature request here, so the
+		// private key stays in the server's custody store and never
+		// reaches the runner.
+		r.Post("/tasks/{taskId}/git-signing-lease", h.OpenGitSigningLease)
+		r.Post("/git-signatures", h.SignGitData)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
 		r.Post("/tasks/{taskId}/supplements/claim", h.ClaimTaskSupplement)
 		r.Post("/tasks/{taskId}/supplements/{commentId}/ack", h.AckTaskSupplement)

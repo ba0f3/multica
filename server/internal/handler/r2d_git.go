@@ -61,7 +61,9 @@ func gitServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, r2dgit.ErrUnavailable):
 		writeErrorCode(w, http.StatusServiceUnavailable, "git_service_unavailable", "Git credentials are not available right now.")
 	case errors.Is(err, r2dgit.ErrPrincipal):
-		writeErrorCode(w, http.StatusForbidden, "git_human_session_required", "This action needs a signed-in user session.")
+		// Reached only by the daemon route: the browser route rejects a
+		// missing session before the service is called.
+		writeErrorCode(w, http.StatusForbidden, "git_principal_unproven", "This run has no provable human owner.")
 	case errors.Is(err, r2dgit.ErrScope):
 		writeErrorCode(w, http.StatusNotFound, "git_resource_unavailable", "That Git credential is not available.")
 	case errors.Is(err, r2dgit.ErrIdentity):

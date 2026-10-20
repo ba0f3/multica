@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,6 +58,22 @@ type Service struct {
 	random   io.Reader
 	now      func() time.Time
 	newID    func() string
+
+	// originators resolves the human who authorized a task. A signing lease
+	// is bound to that human, never to the runtime owner.
+	originators TaskOriginator
+	// leaseTTL bounds how long one signing permission lives.
+	leaseTTL time.Duration
+	// leaseMu guards the lease registry below.
+	leaseMu sync.Mutex
+	// leases holds the issued signing permissions.
+	//
+	// The registry lives in the server's memory. A deployment that serves
+	// the daemon from more than one server instance would need a shared
+	// store here: a lease issued by one instance is not visible to the
+	// other, so a signature request could fail with "unknown lease". The
+	// failure is safe — it stops the signature rather than granting one.
+	leases map[string]*signingLease
 }
 
 // NewService builds a credential service.
@@ -65,14 +82,22 @@ type Service struct {
 // an unconfigured server must not create keys or pretend a verification
 // succeeded.
 func NewService(store Store, custody EncryptedCustody, verifier Verifier) *Service {
-	return &Service{
+	service := &Service{
 		store:    store,
 		custody:  custody,
 		verifier: verifier,
 		random:   randomReader{},
 		now:      time.Now,
 		newID:    newRandomID,
+		leaseTTL: DefaultSigningLeaseTTL,
+		leases:   map[string]*signingLease{},
 	}
+	// A store that can resolve task originators also lets the service
+	// issue signing leases.
+	if originators, ok := store.(TaskOriginator); ok {
+		service.originators = originators
+	}
+	return service
 }
 
 func (s *Service) available() bool {
@@ -295,6 +320,11 @@ func (s *Service) Revoke(ctx context.Context, userID, identityID string) error {
 	if err != nil {
 		return err
 	}
+
+	// Drop the signing permissions of this identity first: a lease that
+	// outlives the revocation would let a task keep signing with a key the
+	// user just withdrew.
+	s.RevokeSigningLeases(identity.ID)
 
 	if _, err := s.store.RevokeIdentity(ctx, identity.ID, userID); err != nil {
 		return err

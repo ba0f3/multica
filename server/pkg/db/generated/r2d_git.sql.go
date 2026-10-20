@@ -306,6 +306,25 @@ func (q *Queries) GetR2DGitProvider(ctx context.Context, id pgtype.UUID) (R2dGit
 	return i, err
 }
 
+const getTaskOriginatorUserID = `-- name: GetTaskOriginatorUserID :one
+SELECT originator_user_id
+FROM agent_task_queue
+WHERE id = $1
+`
+
+// The human who authorized the task.
+//
+// Empty when the task has no provable human originator: a scheduled run, a
+// webhook trigger and an audit-only fallback all leave this empty. The
+// value is the only one that may select a Git signing key, so a task
+// without one never gets a credential.
+func (q *Queries) GetTaskOriginatorUserID(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getTaskOriginatorUserID, id)
+	var originator_user_id pgtype.UUID
+	err := row.Scan(&originator_user_id)
+	return originator_user_id, err
+}
+
 const listPendingR2DGitKeyJobs = `-- name: ListPendingR2DGitKeyJobs :many
 SELECT id, user_id, identity_id, generation, kind, idempotency_key, state,
        last_error, created_at, updated_at

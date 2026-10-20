@@ -26,6 +26,9 @@ type gitTestCustody struct {
 	mu       sync.Mutex
 	stored   map[string]r2dgit.KeyMaterial
 	destroys []string
+	// signing makes WithSigner hand out a real signer for the stored
+	// material so a signing test can verify the produced signature.
+	signing bool
 }
 
 func newGitTestCustody() *gitTestCustody {
@@ -50,8 +53,22 @@ func (c *gitTestCustody) DestroyAll(_ context.Context, ref string) error {
 	return nil
 }
 
-func (c *gitTestCustody) WithSigner(context.Context, string, func(ssh.Signer) error) error {
-	return r2dgit.ErrUnavailable
+func (c *gitTestCustody) WithSigner(_ context.Context, ref string, fn func(ssh.Signer) error) error {
+	c.mu.Lock()
+	signing := c.signing
+	material, ok := c.stored[ref]
+	c.mu.Unlock()
+	if !signing {
+		return r2dgit.ErrUnavailable
+	}
+	if !ok {
+		return r2dgit.ErrIdentity
+	}
+	signer, err := ssh.ParsePrivateKey(material.Private)
+	if err != nil {
+		return r2dgit.ErrIdentity
+	}
+	return fn(signer)
 }
 
 type gitTestVerifier struct {

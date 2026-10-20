@@ -25,21 +25,34 @@ func marshalIdentity(identity PublicIdentity) (string, error) {
 // --- test doubles -----------------------------------------------------------
 
 type fakeStore struct {
-	mu         sync.Mutex
-	providers  map[string]Provider
-	identities map[string]Identity
-	keys       map[string]Key
-	jobs       map[string]Job
-	nextID     int
+	mu          sync.Mutex
+	providers   map[string]Provider
+	identities  map[string]Identity
+	keys        map[string]Key
+	jobs        map[string]Job
+	originators map[string]string
+	nextID      int
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		providers:  map[string]Provider{},
-		identities: map[string]Identity{},
-		keys:       map[string]Key{},
-		jobs:       map[string]Job{},
+		providers:   map[string]Provider{},
+		identities:  map[string]Identity{},
+		keys:        map[string]Key{},
+		jobs:        map[string]Job{},
+		originators: map[string]string{},
 	}
+}
+
+// TaskOriginator resolves the human who authorized a task.
+func (s *fakeStore) TaskOriginator(_ context.Context, taskID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	originator, ok := s.originators[taskID]
+	if !ok || originator == "" {
+		return "", ErrPrincipal
+	}
+	return originator, nil
 }
 
 func keySlot(identityID string, generation uint64) string {
@@ -239,6 +252,9 @@ type fakeCustody struct {
 	stored    map[string]KeyMaterial
 	destroyed []string
 	storeErr  error
+	// signing makes WithSigner hand out a real signer for the stored
+	// material, so a test can verify a produced signature.
+	signing bool
 }
 
 func newFakeCustody() *fakeCustody {
@@ -266,8 +282,22 @@ func (c *fakeCustody) DestroyAll(_ context.Context, ref string) error {
 	return nil
 }
 
-func (c *fakeCustody) WithSigner(context.Context, string, func(ssh.Signer) error) error {
-	return ErrUnavailable
+func (c *fakeCustody) WithSigner(_ context.Context, ref string, fn func(ssh.Signer) error) error {
+	c.mu.Lock()
+	signing := c.signing
+	material, ok := c.stored[ref]
+	c.mu.Unlock()
+	if !signing {
+		return ErrUnavailable
+	}
+	if !ok {
+		return ErrIdentity
+	}
+	signer, err := ssh.ParsePrivateKey(material.Private)
+	if err != nil {
+		return ErrIdentity
+	}
+	return fn(signer)
 }
 
 type fakeVerifier struct {

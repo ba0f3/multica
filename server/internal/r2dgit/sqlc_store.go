@@ -352,6 +352,29 @@ func (s *SQLCStore) CreateJob(ctx context.Context, job Job) (Job, error) {
 	return jobFromRow(row), nil
 }
 
+// TaskOriginator resolves the human who authorized a task.
+//
+// An empty result means the task has no provable human originator — a
+// scheduled run, a webhook trigger or an audit-only fallback. Such a task
+// never receives a Git credential.
+func (s *SQLCStore) TaskOriginator(ctx context.Context, taskID string) (string, error) {
+	task, err := util.ParseUUID(taskID)
+	if err != nil {
+		return "", ErrPrincipal
+	}
+	originator, err := s.queries.GetTaskOriginatorUserID(ctx, task)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrPrincipal
+		}
+		return "", err
+	}
+	if !originator.Valid {
+		return "", ErrPrincipal
+	}
+	return util.UUIDToString(originator), nil
+}
+
 func (s *SQLCStore) GetJobByIdempotencyKey(ctx context.Context, idempotencyKey string) (Job, error) {
 	row, err := s.queries.GetR2DGitKeyJobByIdempotencyKey(ctx, idempotencyKey)
 	if err != nil {

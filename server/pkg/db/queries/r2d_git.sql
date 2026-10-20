@@ -140,3 +140,14 @@ SELECT id, user_id, identity_id, generation, kind, idempotency_key, state,
 FROM r2d_git_key_job
 WHERE state = 'pending'
 ORDER BY created_at ASC;
+
+-- name: GetTaskOriginatorUserID :one
+-- The human who authorized the task.
+--
+-- Empty when the task has no provable human originator: a scheduled run, a
+-- webhook trigger and an audit-only fallback all leave this empty. The
+-- value is the only one that may select a Git signing key, so a task
+-- without one never gets a credential.
+SELECT originator_user_id
+FROM agent_task_queue
+WHERE id = $1;
