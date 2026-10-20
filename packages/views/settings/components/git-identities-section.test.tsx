@@ -42,7 +42,6 @@ const profileRef = vi.hoisted(() => ({
       active: boolean;
       cleanup_pending: boolean;
       diagnostic?: string;
-      consent_project_ids: string[];
     }[],
   },
 }));
@@ -136,7 +135,6 @@ function identity(overrides: Partial<(typeof profileRef.current)["identities"][n
     state: "ready",
     active: true,
     cleanup_pending: false,
-    consent_project_ids: [],
     ...overrides,
   };
 }

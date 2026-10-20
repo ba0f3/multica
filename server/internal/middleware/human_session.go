@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/multica-ai/multica/server/internal/auth"
 )
 
 type humanSessionKey struct{}
@@ -51,6 +53,12 @@ func humanSessionFromClaims(claims jwt.MapClaims) (HumanSession, bool) {
 	sub, _ := claims["sub"].(string)
 	sid, _ := claims["sid"].(string)
 	if strings.TrimSpace(sub) == "" || strings.TrimSpace(sid) == "" {
+		return HumanSession{}, false
+	}
+	// A CLI token is a bearer credential stored on disk next to the code the
+	// agent runs. It authorizes ordinary API calls, but it is not proof that
+	// a human is present at a credential change.
+	if origin, _ := claims[auth.SessionOriginClaim].(string); origin == auth.SessionOriginCLI {
 		return HumanSession{}, false
 	}
 	authenticatedAt, ok := claims["auth_time"].(float64)

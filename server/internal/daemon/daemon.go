@@ -8477,7 +8477,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// A run with no verified credential, no provable originator or no
 	// matching provider simply has no SSH_AUTH_SOCK, and the host's agent
 	// is never inherited.
-	if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, d.cfg.Profile); socketPath != "" {
+	if profileDir, profileErr := cli.ProfileDir(d.cfg.Profile); profileErr != nil {
+		taskLog.Warn("git: could not resolve the profile directory; the run has no Git credential", "error", profileErr)
+	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir); socketPath != "" {
 		agentEnv["SSH_AUTH_SOCK"] = socketPath
 		defer stopGitAgent()
 	}
@@ -10393,7 +10395,12 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS",
+		// The per-task signing socket is a capability chosen by the daemon.
+		// A custom env that could replace it would point the agent at an
+		// agent of the user's choosing while the run believes it holds the
+		// task's credential.
+		"SSH_AUTH_SOCK":
 		return true
 	}
 	return false

@@ -132,9 +132,8 @@ func (h *Handler) GenerateGitIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ProviderID        string   `json:"provider_id"`
-		RequestID         string   `json:"request_id"`
-		ConsentProjectIDs []string `json:"consent_project_ids"`
+		ProviderID string `json:"provider_id"`
+		RequestID  string `json:"request_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
 		return
@@ -143,7 +142,7 @@ func (h *Handler) GenerateGitIdentity(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "git_invalid_request", "A provider and a request id are required.")
 		return
 	}
-	identity, err := service.Generate(r.Context(), userID, body.ProviderID, body.RequestID, body.ConsentProjectIDs)
+	identity, err := service.Generate(r.Context(), userID, body.ProviderID, body.RequestID, nil)
 	if err != nil {
 		gitServiceError(w, err)
 		return

@@ -109,3 +109,16 @@ func TestAuthAttachesNoHumanSessionToAPersonalAccessToken(t *testing.T) {
 		t.Fatal("a personal access token produced a human session")
 	}
 }
+
+func TestHumanSessionFromClaimsRefusesACLIToken(t *testing.T) {
+	// The CLI token is a bearer credential on disk; it must not authorize a
+	// credential change even though it is a valid session JWT.
+	if _, ok := humanSessionFromClaims(jwt.MapClaims{
+		"sub":         "user-1",
+		"sid":         "session-1",
+		"auth_time":   float64(time.Now().Unix()),
+		"auth_origin": "cli",
+	}); ok {
+		t.Fatal("a CLI token produced a human session")
+	}
+}

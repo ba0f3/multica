@@ -28,6 +28,11 @@ import (
 // server to sign large arbitrary payloads.
 const DefaultMaxRequestBytes = 64 << 10
 
+// DefaultMaxConnections bounds how many clients one socket serves at once.
+// The runner controls its own process, so an unbounded accept loop would let
+// it exhaust the daemon's file descriptors and goroutines.
+const DefaultMaxConnections = 64
+
 // Signer produces a signature with the key a task was granted.
 //
 // It returns the wire form the SSH agent protocol carries, so a caller can
@@ -47,6 +52,8 @@ type Options struct {
 	Signer Signer
 	// MaxRequestBytes bounds one sign request. Zero uses the default.
 	MaxRequestBytes int
+	// MaxConnections bounds concurrent clients. Zero uses the default.
+	MaxConnections int
 	// OnClose runs after the socket is closed and removed. Optional.
 	OnClose func()
 }
@@ -57,9 +64,10 @@ type Socket struct {
 	path     string
 	onClose  func()
 
-	mu     sync.Mutex
-	closed bool
-	conns  map[net.Conn]struct{}
+	mu             sync.Mutex
+	closed         bool
+	conns          map[net.Conn]struct{}
+	maxConnections int
 }
 
 // Serve starts an agent socket.
@@ -98,11 +106,16 @@ func Serve(ctx context.Context, opts Options) (*Socket, error) {
 		return nil, fmt.Errorf("gitagent: restrict the socket: %w", err)
 	}
 
+	maxConnections := opts.MaxConnections
+	if maxConnections <= 0 {
+		maxConnections = DefaultMaxConnections
+	}
 	socket := &Socket{
-		listener: listener,
-		path:     opts.SocketPath,
-		onClose:  opts.OnClose,
-		conns:    map[net.Conn]struct{}{},
+		listener:       listener,
+		path:           opts.SocketPath,
+		onClose:        opts.OnClose,
+		conns:          map[net.Conn]struct{}{},
+		maxConnections: maxConnections,
 	}
 	restricted := &restrictedAgent{
 		publicKey:       publicKey,
@@ -128,10 +141,10 @@ func (s *Socket) accept(restricted *restrictedAgent) {
 			return
 		}
 		s.mu.Lock()
-		if s.closed {
+		if s.closed || len(s.conns) >= s.maxConnections {
 			s.mu.Unlock()
 			conn.Close()
-			return
+			continue
 		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()

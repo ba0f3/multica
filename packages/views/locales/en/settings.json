@@ -652,7 +652,7 @@
   },
   "git_identities": {
     "section_title": "Git credentials",
-    "section_description": "Multica signs Git operations with these keys. A key only works after you add its public key to your provider and verify it.",
+    "section_description": "Multica signs Git operations with these keys. Revoking a key cannot be undone and does not remove its public key from your provider.",
     "no_providers": "No Git provider is configured on this server.",
     "no_keys": "No key yet.",
     "generate": "Generate key",

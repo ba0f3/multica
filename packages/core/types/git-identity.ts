@@ -45,7 +45,6 @@ export interface GitIdentity {
   /** Whether the stored secret still has to be destroyed. */
   cleanup_pending: boolean;
   diagnostic?: string;
-  consent_project_ids: string[];
 }
 
 /** The account-scoped view of a user's Git credentials. */

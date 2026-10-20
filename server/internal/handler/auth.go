@@ -158,6 +158,16 @@ func isSixDigitCode(code string) bool {
 }
 
 func (h *Handler) issueJWT(user db.User) (string, error) {
+	return h.issueJWTWithOrigin(user, "")
+}
+
+// issueJWTWithOrigin mints a session token and, when origin is set, records
+// where it was requested.
+//
+// The CLI stores its bearer token on disk beside the code the agent runs, so
+// it must be tellable apart from a browser session: it authorizes ordinary
+// API calls but must not authorize an account-level credential change.
+func (h *Handler) issueJWTWithOrigin(user db.User, origin string) (string, error) {
 	if auth.IsTemporarilyDisabledUser(uuidToString(user.ID), user.Email) {
 		return "", auth.ErrTemporarilyDisabledUser
 	}
@@ -171,7 +181,7 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 		return "", err
 	}
 	now := time.Now()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	claims := jwt.MapClaims{
 		"sub":   uuidToString(user.ID),
 		"email": user.Email,
 		"name":  user.Name,
@@ -181,7 +191,11 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 		// The sign-in moment, kept apart from `iat` so a renewed session
 		// still ages out of the recent-authentication window.
 		"auth_time": now.Unix(),
-	})
+	}
+	if origin != "" {
+		claims[auth.SessionOriginClaim] = origin
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(auth.JWTSecret())
 }
 
@@ -761,7 +775,7 @@ func (h *Handler) IssueCliToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, err := h.issueJWT(user)
+	tokenString, err := h.issueJWTWithOrigin(user, auth.SessionOriginCLI)
 	if err != nil {
 		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
 			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)

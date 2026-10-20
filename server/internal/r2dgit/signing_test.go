@@ -42,7 +42,7 @@ func TestOpenSigningLeaseBindsTheTasksOriginator(t *testing.T) {
 	store.originators["task-1"] = "user-a"
 	readyIdentity(t, service, "user-a")
 
-	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1")
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
 	if err != nil {
 		t.Fatalf("OpenSigningLease: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestOpenSigningLeaseBindsTheTasksOriginator(t *testing.T) {
 func TestOpenSigningLeaseRefusesATaskWithoutAnOriginator(t *testing.T) {
 	service, _, _, _ := signingTestService(t)
 
-	if _, err := service.OpenSigningLease(context.Background(), "task-without-originator", "provider-1"); !errors.Is(err, ErrPrincipal) {
+	if _, err := service.OpenSigningLease(context.Background(), "task-without-originator", "provider-1", "daemon-1"); !errors.Is(err, ErrPrincipal) {
 		t.Fatalf("err = %v, want %v", err, ErrPrincipal)
 	}
 }
@@ -69,7 +69,7 @@ func TestOpenSigningLeaseRefusesAProviderTheUserHasNoReadyKeyFor(t *testing.T) {
 	service, store, _, _ := signingTestService(t)
 	store.originators["task-1"] = "user-a"
 
-	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1"); !errors.Is(err, ErrIdentity) {
+	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1"); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("err = %v, want %v", err, ErrIdentity)
 	}
 }
@@ -80,7 +80,7 @@ func TestOpenSigningLeaseRefusesADisabledProvider(t *testing.T) {
 	store.providers["provider-2"] = Provider{ID: "provider-2", Kind: "gitea", Enabled: false}
 	readyIdentity(t, service, "user-a")
 
-	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-2"); !errors.Is(err, ErrScope) {
+	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-2", "daemon-1"); !errors.Is(err, ErrScope) {
 		t.Fatalf("err = %v, want %v", err, ErrScope)
 	}
 }
@@ -90,13 +90,13 @@ func TestSignProducesAVerifiableSignature(t *testing.T) {
 	store.originators["task-1"] = "user-a"
 	readyIdentity(t, service, "user-a")
 
-	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1")
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
 	if err != nil {
 		t.Fatalf("OpenSigningLease: %v", err)
 	}
 
 	payload := []byte("the bytes a git operation signs")
-	signature, err := service.Sign(context.Background(), lease.LeaseID, payload)
+	signature, err := service.Sign(context.Background(), lease.LeaseID, "daemon-1", payload)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSignProducesAVerifiableSignature(t *testing.T) {
 func TestSignRefusesAnUnknownLease(t *testing.T) {
 	service, _, _, _ := signingTestService(t)
 
-	if _, err := service.Sign(context.Background(), "not-a-lease", []byte("data")); err == nil {
+	if _, err := service.Sign(context.Background(), "not-a-lease", "daemon-1", []byte("data")); err == nil {
 		t.Fatal("an unknown lease was accepted")
 	}
 }
@@ -131,7 +131,7 @@ func TestSignStopsAfterTheKeyIsRevoked(t *testing.T) {
 	store.originators["task-1"] = "user-a"
 	identity := readyIdentity(t, service, "user-a")
 
-	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1")
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
 	if err != nil {
 		t.Fatalf("OpenSigningLease: %v", err)
 	}
@@ -140,10 +140,10 @@ func TestSignStopsAfterTheKeyIsRevoked(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 
-	if _, err := service.Sign(context.Background(), lease.LeaseID, []byte("data")); !errors.Is(err, ErrRevoked) {
+	if _, err := service.Sign(context.Background(), lease.LeaseID, "daemon-1", []byte("data")); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("Sign after revoke: err = %v, want %v", err, ErrRevoked)
 	}
-	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1"); !errors.Is(err, ErrRevoked) {
+	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1"); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("OpenSigningLease after revoke: err = %v, want %v", err, ErrRevoked)
 	}
 }
@@ -153,13 +153,13 @@ func TestSignRefusesAnExpiredLease(t *testing.T) {
 	store.originators["task-1"] = "user-a"
 	readyIdentity(t, service, "user-a")
 
-	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1")
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
 	if err != nil {
 		t.Fatalf("OpenSigningLease: %v", err)
 	}
 
 	*clock = clock.Add(2 * time.Minute)
-	if _, err := service.Sign(context.Background(), lease.LeaseID, []byte("data")); err == nil {
+	if _, err := service.Sign(context.Background(), lease.LeaseID, "daemon-1", []byte("data")); err == nil {
 		t.Fatal("an expired lease was accepted")
 	}
 }
@@ -172,7 +172,7 @@ func TestOpenSigningLeaseRefusesAnotherUsersKey(t *testing.T) {
 
 	// user-b has no identity of their own, so a task authorized by user-b
 	// must not be able to borrow user-a's key.
-	if _, err := service.OpenSigningLease(context.Background(), "task-2", "provider-1"); !errors.Is(err, ErrIdentity) {
+	if _, err := service.OpenSigningLease(context.Background(), "task-2", "provider-1", "daemon-1"); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("err = %v, want %v", err, ErrIdentity)
 	}
 }
@@ -236,13 +236,87 @@ func TestSigningUsesTheCustodyAdapterAndNotTheStore(t *testing.T) {
 	store.originators["task-1"] = "user-a"
 	readyIdentity(t, service, "user-a")
 
-	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1")
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
 	if err != nil {
 		t.Fatalf("OpenSigningLease: %v", err)
 	}
 
 	custody.signing = false
-	if _, err := service.Sign(context.Background(), lease.LeaseID, []byte("data")); !errors.Is(err, ErrUnavailable) {
+	if _, err := service.Sign(context.Background(), lease.LeaseID, "daemon-1", []byte("data")); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want %v", err, ErrUnavailable)
+	}
+}
+
+func TestSignRefusesAnotherDaemonsLease(t *testing.T) {
+	service, store, _, _ := signingTestService(t)
+	store.originators["task-1"] = "user-a"
+	readyIdentity(t, service, "user-a")
+
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
+	if err != nil {
+		t.Fatalf("OpenSigningLease: %v", err)
+	}
+
+	// The lease id is not a credential on its own: another daemon must not be
+	// able to spend it.
+	if _, err := service.Sign(context.Background(), lease.LeaseID, "daemon-2", []byte("data")); err == nil {
+		t.Fatal("a lease issued to one daemon was honoured for another")
+	}
+}
+
+func TestOpenSigningLeaseRequiresADaemon(t *testing.T) {
+	service, store, _, _ := signingTestService(t)
+	store.originators["task-1"] = "user-a"
+	readyIdentity(t, service, "user-a")
+
+	if _, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", ""); !errors.Is(err, ErrPrincipal) {
+		t.Fatalf("err = %v, want %v", err, ErrPrincipal)
+	}
+}
+
+func TestSignRenewsALiveLease(t *testing.T) {
+	service, store, _, clock := signingTestService(t)
+	store.originators["task-1"] = "user-a"
+	readyIdentity(t, service, "user-a")
+
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
+	if err != nil {
+		t.Fatalf("OpenSigningLease: %v", err)
+	}
+
+	// A long run keeps signing as long as it keeps using the lease: each
+	// successful signature slides the window forward.
+	for step := 0; step < 4; step++ {
+		if _, err := service.Sign(context.Background(), lease.LeaseID, "daemon-1", []byte("data")); err != nil {
+			t.Fatalf("Sign at step %d: %v", step, err)
+		}
+		*clock = clock.Add(30 * time.Second)
+	}
+}
+
+func TestRotationStopsThePreviousGeneration(t *testing.T) {
+	service, store, _, _ := signingTestService(t)
+	store.originators["task-1"] = "user-a"
+	first := readyIdentity(t, service, "user-a")
+
+	lease, err := service.OpenSigningLease(context.Background(), "task-1", "provider-1", "daemon-1")
+	if err != nil {
+		t.Fatalf("OpenSigningLease: %v", err)
+	}
+
+	// Rotate to a second generation.
+	second, err := service.Generate(context.Background(), "user-a", "provider-1", "request-rotation", nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if second.Generation == first.Generation {
+		t.Fatal("the rotation reused the first generation")
+	}
+	if _, err := service.Verify(context.Background(), "user-a", second.ID, second.Generation); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	if _, err := service.Sign(context.Background(), lease.LeaseID, "daemon-1", []byte("data")); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("a lease of the previous generation still signs: err = %v, want %v", err, ErrRevoked)
 	}
 }

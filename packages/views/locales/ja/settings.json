@@ -647,7 +647,7 @@
   },
   "git_identities": {
     "section_title": "Git 認証情報",
-    "section_description": "Multica はこのキーで Git 操作に署名します。キーは公開鍵をプロバイダーに追加して検証した後でのみ使用できます。",
+    "section_description": "Multica はこのキーで Git 操作に署名します。取り消しは元に戻せず、プロバイダー側の公開鍵も削除されません。",
     "no_providers": "このサーバーには Git プロバイダーが設定されていません。",
     "no_keys": "まだキーがありません。",
     "generate": "キーを生成",

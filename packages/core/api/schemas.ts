@@ -3860,7 +3860,6 @@ export const GitIdentitySchema = z.object({
   active: z.boolean().catch(false),
   cleanup_pending: z.boolean().catch(false),
   diagnostic: z.string().optional().default(""),
-  consent_project_ids: z.array(z.string()).catch([]),
 });
 
 export const GitProfileSchema = z.object({
@@ -3893,5 +3892,4 @@ export const EMPTY_GIT_IDENTITY: GitIdentity = {
   active: false,
   cleanup_pending: false,
   diagnostic: "",
-  consent_project_ids: [],
 };

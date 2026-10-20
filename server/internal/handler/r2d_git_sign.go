@@ -22,8 +22,16 @@ const maxGitSignaturePayload = 64 << 10
 // authenticated originator, so a daemon cannot name the user, the identity
 // or the generation whose key signs the run.
 func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
+	daemonID, ok := h.requireDaemonSigningAccess(w, r)
+	if !ok {
+		return
+	}
 	taskID := chi.URLParam(r, "taskId")
-	if _, _, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID); !ok {
+	task, _, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
+		return
+	}
+	if !h.requireTaskRuntimeOwnedByDaemon(w, r, task, daemonID) {
 		return
 	}
 	service, ok := h.gitService(w)
@@ -41,7 +49,7 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := service.OpenSigningLease(r.Context(), taskID, body.ProviderID)
+	lease, err := service.OpenSigningLease(r.Context(), taskID, body.ProviderID, daemonID)
 	if err != nil {
 		gitServiceError(w, err)
 		return
@@ -55,6 +63,10 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 // bytes and receives the signature, so the runner can use the key without
 // ever holding it.
 func (h *Handler) SignGitData(w http.ResponseWriter, r *http.Request) {
+	daemonID, ok := h.requireDaemonSigningAccess(w, r)
+	if !ok {
+		return
+	}
 	service, ok := h.gitService(w)
 	if !ok {
 		return
@@ -84,7 +96,7 @@ func (h *Handler) SignGitData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signature, err := service.Sign(r.Context(), body.LeaseID, payload)
+	signature, err := service.Sign(r.Context(), body.LeaseID, daemonID, payload)
 	if err != nil {
 		gitServiceError(w, err)
 		return

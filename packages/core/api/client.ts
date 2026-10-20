@@ -5425,7 +5425,6 @@ export class ApiClient {
   async generateGitIdentity(input: {
     provider_id: string;
     request_id: string;
-    consent_project_ids?: string[];
   }): Promise<GitIdentity> {
     const raw = await this.fetch<unknown>("/api/me/git-identities", {
       method: "POST",

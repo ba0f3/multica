@@ -41,6 +41,15 @@ const (
 	// not invalidate CSRF tokens other tabs are already holding.
 	sessionIDClaim = "sid"
 
+	// SessionOriginClaim records where a session token was requested. A
+	// token without it came from a browser sign-in.
+	SessionOriginClaim = "auth_origin"
+
+	// SessionOriginCLI marks a token handed to the CLI. The CLI stores it
+	// on disk next to the code the agent runs, so it authorizes ordinary API
+	// calls but not an account-level credential change.
+	SessionOriginCLI = "cli"
+
 	// sessionAuthTimeClaim carries the moment the user signed in. Unlike
 	// `iat`, which slides forward on every renewal, it stays where it was
 	// for the whole session, so a handler can tell that a request comes
@@ -253,6 +262,11 @@ func RenewSessionToken(claims jwt.MapClaims) (string, time.Time, error) {
 		next[sessionAuthTimeClaim] = int64(authTime)
 	} else {
 		next[sessionAuthTimeClaim] = now.Unix()
+	}
+	// The origin must survive renewal, or a renewed CLI token would become
+	// indistinguishable from a browser session.
+	if origin, ok := claims[SessionOriginClaim].(string); ok && origin != "" {
+		next[SessionOriginClaim] = origin
 	}
 	if email != "" {
 		next["email"] = email

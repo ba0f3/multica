@@ -652,7 +652,7 @@
   },
   "git_identities": {
     "section_title": "Identifiants Git",
-    "section_description": "Multica signe les opérations Git avec ces clés. Une clé ne fonctionne qu'après avoir ajouté sa clé publique à votre fournisseur et l'avoir vérifiée.",
+    "section_description": "Multica signe les opérations Git avec ces clés. La révocation est irréversible et ne supprime pas la clé publique de votre fournisseur.",
     "no_providers": "Aucun fournisseur Git n'est configuré sur ce serveur.",
     "no_keys": "Aucune clé pour le moment.",
     "generate": "Générer une clé",

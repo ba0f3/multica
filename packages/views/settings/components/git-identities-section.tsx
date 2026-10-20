@@ -85,7 +85,6 @@ export function GitIdentitiesSection() {
       {
         provider_id: provider.id,
         request_id: requestID,
-        consent_project_ids: [],
       },
       {
         onSuccess: () => {

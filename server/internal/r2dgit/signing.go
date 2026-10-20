@@ -47,7 +47,10 @@ type signingLease struct {
 	IdentityID string
 	Generation uint64
 	ProviderID string
-	ExpiresAt  time.Time
+	// DaemonID is the supervisor allowed to use the lease. A lease id alone
+	// is not a credential: the daemon that opened it is the only caller.
+	DaemonID  string
+	ExpiresAt time.Time
 	// Revoked marks a lease whose key was withdrawn. The record is kept
 	// so a later signature request is refused with the reason rather than
 	// with "unknown lease".
@@ -136,12 +139,15 @@ func (s *Service) ReadyIdentities(ctx context.Context, userID string) ([]RunIden
 // The key is chosen by the server: the task's originator decides which
 // identity may be used, and the provider narrows it to one credential. The
 // caller cannot name a user, an identity or a generation.
-func (s *Service) OpenSigningLease(ctx context.Context, taskID, providerID string) (SigningLease, error) {
+func (s *Service) OpenSigningLease(ctx context.Context, taskID, providerID, daemonID string) (SigningLease, error) {
 	if !s.available() || s.originators == nil {
 		return SigningLease{}, ErrUnavailable
 	}
 	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(providerID) == "" {
 		return SigningLease{}, ErrScope
+	}
+	if strings.TrimSpace(daemonID) == "" {
+		return SigningLease{}, ErrPrincipal
 	}
 
 	originator, err := s.originators.TaskOriginator(ctx, taskID)
@@ -190,6 +196,7 @@ func (s *Service) OpenSigningLease(ctx context.Context, taskID, providerID strin
 		IdentityID: identity.ID,
 		Generation: key.Generation,
 		ProviderID: providerID,
+		DaemonID:   daemonID,
 		ExpiresAt:  now.Add(s.leaseTTL),
 	}
 
@@ -210,25 +217,40 @@ func (s *Service) OpenSigningLease(ctx context.Context, taskID, providerID strin
 // The key is re-read before every signature: a lease that was issued before
 // a revocation must stop working the moment the key is revoked, and a lease
 // that outlives its key must not sign with a replacement generation.
-func (s *Service) Sign(ctx context.Context, leaseID string, data []byte) ([]byte, error) {
+func (s *Service) Sign(ctx context.Context, leaseID, daemonID string, data []byte) ([]byte, error) {
 	if !s.available() {
 		return nil, ErrUnavailable
 	}
-	if strings.TrimSpace(leaseID) == "" {
+	if strings.TrimSpace(leaseID) == "" || strings.TrimSpace(daemonID) == "" {
 		return nil, ErrScope
 	}
 
+	now := s.now().UTC()
 	s.leaseMu.Lock()
 	lease, ok := s.leases[leaseID]
+	if ok {
+		// Read and update the mutable fields under the lock: a concurrent
+		// revoke must not race this decision.
+		if lease.DaemonID != daemonID {
+			s.leaseMu.Unlock()
+			return nil, ErrScope
+		}
+		if !now.Before(lease.ExpiresAt) {
+			s.leaseMu.Unlock()
+			return nil, ErrScope
+		}
+		if lease.Revoked {
+			s.leaseMu.Unlock()
+			return nil, ErrRevoked
+		}
+		// Slide the expiry: a long run keeps signing while it keeps
+		// working, and the key state check below still stops it the
+		// moment the credential is withdrawn.
+		lease.ExpiresAt = now.Add(s.leaseTTL)
+	}
 	s.leaseMu.Unlock()
 	if !ok {
 		return nil, ErrScope
-	}
-	if !s.now().UTC().Before(lease.ExpiresAt) {
-		return nil, ErrScope
-	}
-	if lease.Revoked {
-		return nil, ErrRevoked
 	}
 
 	key, err := s.store.GetKey(ctx, lease.IdentityID, lease.Generation)
@@ -273,6 +295,24 @@ func (s *Service) RevokeSigningLeases(identityID string) {
 	defer s.leaseMu.Unlock()
 	for _, lease := range s.leases {
 		if lease.IdentityID == identityID {
+			lease.Revoked = true
+		}
+	}
+}
+
+// revokeStaleLeases stops every lease of an identity that names a generation
+// other than the active one.
+//
+// Rotating a key because it may be compromised is worthless if the previous
+// generation keeps signing for the rest of its lease window.
+func (s *Service) revokeStaleLeases(identityID string, activeGeneration uint64) {
+	if s == nil {
+		return
+	}
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	for _, lease := range s.leases {
+		if lease.IdentityID == identityID && lease.Generation != activeGeneration {
 			lease.Revoked = true
 		}
 	}

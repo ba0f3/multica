@@ -91,6 +91,12 @@ func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot
 	}
 
 	socketDir := filepath.Join(profileRoot, "git-agent", task.ID)
+	// A crash during an earlier attempt can leave the directory behind, and
+	// Serve refuses an existing path. Clearing it here keeps a re-delivered
+	// task from being unable to sign forever.
+	if removeErr := os.RemoveAll(socketDir); removeErr != nil {
+		d.logger.Warn("git: could not clear a stale signing directory", "task_id", task.ID, "error", removeErr)
+	}
 	socket, err := gitagent.Serve(ctx, gitagent.Options{
 		SocketPath: filepath.Join(socketDir, "ssh-agent.sock"),
 		PublicKey:  lease.PublicKey,

@@ -47,7 +47,6 @@ describe("Git identity schema", () => {
     state: "ready",
     active: true,
     cleanup_pending: false,
-    consent_project_ids: [],
   };
 
   it("parses a verified identity", () => {

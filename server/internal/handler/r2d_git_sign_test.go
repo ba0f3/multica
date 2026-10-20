@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -11,18 +12,19 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/r2dgit"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// daemonRequest builds a request as the daemon client sends it: the task
-// route is authorized by the caller's workspace membership, which the test
-// supplies through the same headers the auth middleware would set.
+// daemonRequest builds a request as the daemon client sends it: authenticated
+// with a daemon token, whose identity and workspace the auth middleware puts
+// on the context.
 func daemonRequest(method, path, body string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	return testutil.WithHeaders(req, "X-User-ID", testUserID, "X-Workspace-ID", testWorkspaceID)
+	return req.WithContext(middleware.WithDaemonContext(req.Context(), testWorkspaceID, testDaemonID))
 }
 
 // signingTaskRequest is daemonRequest for the signing-lease route: the
@@ -35,6 +37,9 @@ func signingTaskRequest(taskID, body string) *http.Request {
 
 // installGitSigningService puts a signing-capable credential service on the
 // shared test handler.
+// testDaemonID is the daemon that owns the runtime the signing fixtures use.
+const testDaemonID = "git-signing-daemon"
+
 func installGitSigningService(t *testing.T) *r2dgit.Service {
 	t.Helper()
 	custody := newGitTestCustody()
@@ -57,6 +62,16 @@ func installGitSigningService(t *testing.T) *r2dgit.Service {
 // the same human authorized it.
 func newGitSigningTask(t *testing.T, originatorID string) string {
 	t.Helper()
+	// A signing lease belongs to the daemon that hosts the task's runtime, so
+	// the shared test runtime has to name one.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE agent_runtime SET daemon_id = $2 WHERE id = $1`, testRuntimeID, testDaemonID); err != nil {
+		t.Fatalf("bind the test runtime to a daemon: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(),
+			`UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, testRuntimeID)
+	})
 	issueID := dbfx.Issue(t, "Git signing task")
 	agentID := dbfx.Agent(t, "Git Signing Agent", testRuntimeID)
 	cols := testutil.Cols{
@@ -233,4 +248,55 @@ func TestSignGitDataRejectsAnOversizedPayload(t *testing.T) {
 
 func itoa(value uint64) string {
 	return strconv.FormatUint(value, 10)
+}
+
+func TestSigningRoutesRefuseANonDaemonCredential(t *testing.T) {
+	installGitSigningService(t)
+	providerID := newGitTestProvider(t, "github", "github.com")
+	taskID := newGitSigningTask(t, uuid.NewString())
+
+	// A workspace member (or their PAT, or a session JWT) can reach
+	// /api/daemon, but must not be able to obtain or spend a signing lease.
+	for _, path := range []string{
+		"/api/daemon/tasks/" + taskID + "/git-signing-lease",
+		"/api/daemon/git-signatures",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"provider_id":"`+providerID+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req = testutil.WithHeaders(req, "X-User-ID", testUserID, "X-Workspace-ID", testWorkspaceID)
+		req = testutil.WithURLParams(req, "taskId", taskID)
+		recorder := httptest.NewRecorder()
+
+		if strings.HasSuffix(path, "/git-signing-lease") {
+			testHandler.OpenGitSigningLease(recorder, req)
+		} else {
+			testHandler.SignGitData(recorder, req)
+		}
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want %d: %s", path, recorder.Code, http.StatusForbidden, recorder.Body.String())
+		}
+		if code := gitErrorCode(t, recorder); code != "git_daemon_token_required" {
+			t.Fatalf("%s: code = %q, want %q", path, code, "git_daemon_token_required")
+		}
+	}
+}
+
+func TestSigningLeaseRefusesATaskOnAnotherDaemonsRuntime(t *testing.T) {
+	installGitSigningService(t)
+	providerID := newGitTestProvider(t, "github", "github.com")
+	taskID := newGitSigningTask(t, uuid.NewString())
+
+	// The same workspace, a different daemon: it must not sign for a task
+	// that runs on somebody else's machine.
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/git-signing-lease",
+		strings.NewReader(`{"provider_id":"`+providerID+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(middleware.WithDaemonContext(req.Context(), testWorkspaceID, "another-daemon"))
+	req = testutil.WithURLParams(req, "taskId", taskID)
+
+	recorder := httptest.NewRecorder()
+	testHandler.OpenGitSigningLease(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
 }

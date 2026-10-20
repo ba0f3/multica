@@ -24,11 +24,8 @@ function useInvalidateGitIdentities() {
 export function useGenerateGitIdentity() {
   const invalidate = useInvalidateGitIdentities();
   return useMutation({
-    mutationFn: (input: {
-      provider_id: string;
-      request_id: string;
-      consent_project_ids?: string[];
-    }) => api.generateGitIdentity(input),
+    mutationFn: (input: { provider_id: string; request_id: string }) =>
+      api.generateGitIdentity(input),
     onSettled: invalidate,
   });
 }

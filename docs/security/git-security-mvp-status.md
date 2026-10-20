@@ -44,6 +44,17 @@ agent owner and the audit-only fallbacks never select a key; a task with no
 provable originator receives no credential. Revocation marks live leases and
 every signature re-reads the key state, so a revoked key stops signing.
 
+Signing is reachable only with a daemon token, and only for a task whose
+runtime that daemon hosts. The lease is bound to the daemon that opened it, so
+a lease id alone is not a credential. Each successful signature slides the
+lease window, so a run longer than the TTL keeps signing; rotating a key marks
+the previous generation's leases revoked.
+
+The account endpoints refuse a CLI-issued token. The CLI stores its bearer
+token on disk beside the code the agent runs, so it is marked at mint time and
+cannot list, create or revoke a credential even though it is otherwise a valid
+session.
+
 ## Not delivered
 
 ### MVP2 — Bubblewrap task worker (#89)
@@ -58,6 +69,13 @@ and shipping it half-wired would be worse than shipping it separately.
 
 ### Also outstanding
 
+- **Cross-task socket access on one host.** Every attempt's socket lives under
+  the daemon user's profile and every runner currently executes as that user,
+  so one task can list a sibling attempt's directory and connect to its
+  socket. This is the same exposure the host already has — a runner can read
+  the daemon user's `~/.ssh` today — but it means the per-task boundary is not
+  a security boundary until MVP2 runs each attempt in its own namespace. Do
+  not describe the socket as task-isolated before then.
 - **Live provider verification.** The GitHub and Gitea banner parsers are unit
   tested against fixtures, and the host-key pinning is tested. Neither adapter
   has been run against a real provider, so compatibility is not yet claimed.
@@ -67,7 +85,7 @@ and shipping it half-wired would be worse than shipping it separately.
 - **Provider selection at claim time.** The claim response carries the
   originator's verified identities with their provider hosts; the daemon picks
   the first repository whose host matches. A user with keys on several
-  providers gets the credential for the first repository in the task, which is
+  providers gets the credential for the first matching repository, which is
   correct for single-provider repositories and untested for mixed ones.
 - **Custody configuration.** `MULTICA_GIT_CUSTODY_URL`,
   `MULTICA_GIT_CUSTODY_MOUNT` and `MULTICA_GIT_CUSTODY_TOKEN` must all be set.

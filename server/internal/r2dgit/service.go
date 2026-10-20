@@ -301,6 +301,9 @@ func (s *Service) Verify(ctx context.Context, userID, identityID string, generat
 	if err != nil {
 		return PublicIdentity{}, err
 	}
+	// A previous generation may still have a live lease. Activating this one
+	// withdraws those: rotation is the moment an old key stops being usable.
+	s.revokeStaleLeases(identity.ID, generation)
 	return publicIdentity(identity, verified), nil
 }
 

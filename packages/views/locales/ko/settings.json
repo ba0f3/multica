@@ -647,7 +647,7 @@
   },
   "git_identities": {
     "section_title": "Git 자격 증명",
-    "section_description": "Multica는 이 키로 Git 작업을 서명합니다. 공개 키를 제공업체에 추가하고 확인한 뒤에만 사용할 수 있습니다.",
+    "section_description": "Multica는 이 키로 Git 작업을 서명합니다. 취소는 되돌릴 수 없으며 제공업체의 공개 키는 삭제되지 않습니다.",
     "no_providers": "이 서버에는 Git 제공업체가 설정되어 있지 않습니다.",
     "no_keys": "아직 키가 없습니다.",
     "generate": "키 생성",

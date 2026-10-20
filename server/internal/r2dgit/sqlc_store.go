@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/util"
@@ -182,7 +183,7 @@ func (s *SQLCStore) CreateIdentity(ctx context.Context, identity Identity) (Iden
 		ProviderID: provider,
 	})
 	if err != nil {
-		return Identity{}, err
+		return Identity{}, mapWriteError(err)
 	}
 	return identityFromRow(row), nil
 }
@@ -261,7 +262,7 @@ func (s *SQLCStore) CreateKey(ctx context.Context, key Key) (Key, error) {
 		ConsentProjectIds: encoded,
 	})
 	if err != nil {
-		return Key{}, err
+		return Key{}, mapWriteError(err)
 	}
 	return keyFromRow(row), nil
 }
@@ -347,7 +348,7 @@ func (s *SQLCStore) CreateJob(ctx context.Context, job Job) (Job, error) {
 		LastError:      job.LastError,
 	})
 	if err != nil {
-		return Job{}, err
+		return Job{}, mapWriteError(err)
 	}
 	return jobFromRow(row), nil
 }
@@ -403,6 +404,21 @@ func (s *SQLCStore) UpdateJobState(ctx context.Context, id, state, lastError str
 		return Job{}, err
 	}
 	return jobFromRow(row), nil
+}
+
+// mapWriteError turns a unique-constraint violation into ErrConflict.
+//
+// A concurrent request that lost the race on an index must not surface as an
+// internal error: the caller's retry is answered by the row the winner wrote.
+func mapWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrConflict
+	}
+	return err
 }
 
 func identityFromRow(row db.R2dGitIdentity) Identity {
