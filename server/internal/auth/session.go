@@ -41,6 +41,12 @@ const (
 	// not invalidate CSRF tokens other tabs are already holding.
 	sessionIDClaim = "sid"
 
+	// sessionAuthTimeClaim carries the moment the user signed in. Unlike
+	// `iat`, which slides forward on every renewal, it stays where it was
+	// for the whole session, so a handler can tell that a request comes
+	// from a session that was authenticated recently.
+	sessionAuthTimeClaim = "auth_time"
+
 	// sessionRenewCheckDivisor derives the client-side re-check cadence
 	// from the configured TTL: a client that checks every TTL/10 gets
 	// roughly five attempts inside the renewal window, so several
@@ -239,6 +245,14 @@ func RenewSessionToken(claims jwt.MapClaims) (string, time.Time, error) {
 		"exp":          expiresAt.Unix(),
 		"iat":          now.Unix(),
 		sessionIDClaim: sid,
+	}
+	// The sign-in moment travels with the session. Copying it forward keeps
+	// a renewed token's age anchored to the original login, so a session
+	// cannot be kept "recently authenticated" forever by renewing it.
+	if authTime, ok := claims[sessionAuthTimeClaim].(float64); ok && authTime > 0 {
+		next[sessionAuthTimeClaim] = int64(authTime)
+	} else {
+		next[sessionAuthTimeClaim] = now.Unix()
 	}
 	if email != "" {
 		next["email"] = email

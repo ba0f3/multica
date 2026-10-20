@@ -170,13 +170,17 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   uuidToString(user.ID),
 		"email": user.Email,
 		"name":  user.Name,
 		"sid":   sid,
-		"exp":   time.Now().Add(auth.AuthTokenTTL()).Unix(),
-		"iat":   time.Now().Unix(),
+		"exp":   now.Add(auth.AuthTokenTTL()).Unix(),
+		"iat":   now.Unix(),
+		// The sign-in moment, kept apart from `iat` so a renewed session
+		// still ages out of the recent-authentication window.
+		"auth_time": now.Unix(),
 	})
 	return token.SignedString(auth.JWTSecret())
 }

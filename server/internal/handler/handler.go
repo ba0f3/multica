@@ -36,6 +36,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/r2dgit"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -229,6 +230,10 @@ type Handler struct {
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
 	FeatureFlags          *featureflag.Service
+	// GitSecurity owns the per-user Git credential lifecycle. It is nil when
+	// the deployment has no credential custody configured, and every
+	// credential endpoint then answers that the capability is unavailable.
+	GitSecurity *r2dgit.Service
 	// IssueStatusCatalog reads the workspace status catalog. Defaults to
 	// Queries; a test can substitute a counting wrapper to assert HOW MANY
 	// catalog reads a request performs, which is the only property that

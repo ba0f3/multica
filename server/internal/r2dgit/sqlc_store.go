@@ -232,7 +232,13 @@ func (s *SQLCStore) CreateKey(ctx context.Context, key Key) (Key, error) {
 	if err != nil {
 		return Key{}, err
 	}
-	consent, err := json.Marshal(key.ConsentProjectIDs)
+	consent := key.ConsentProjectIDs
+	if consent == nil {
+		// The column only accepts a JSON array, and a nil slice would
+		// encode as null.
+		consent = []string{}
+	}
+	encoded, err := json.Marshal(consent)
 	if err != nil {
 		return Key{}, err
 	}
@@ -252,7 +258,7 @@ func (s *SQLCStore) CreateKey(ctx context.Context, key Key) (Key, error) {
 		VerifiedAt:        verifiedAt,
 		CleanupPending:    key.CleanupPending,
 		Diagnostic:        key.Diagnostic,
-		ConsentProjectIds: consent,
+		ConsentProjectIds: encoded,
 	})
 	if err != nil {
 		return Key{}, err

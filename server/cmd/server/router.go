@@ -448,6 +448,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		ServerVersion:            normalizeServerVersion(version),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	// Per-user Git credentials are optional: without a custody
+	// configuration there is no service and the credential endpoints
+	// answer that the capability is unavailable.
+	h.GitSecurity = gitCredentialService(queries)
 	invitationRateLimits := handler.DefaultInvitationRateLimits()
 	invitationRateLimits.Actor.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_ACTOR_10M", invitationRateLimits.Actor.Limit)
 	invitationRateLimits.Workspace.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_WORKSPACE_24H", invitationRateLimits.Workspace.Limit)
@@ -1659,6 +1663,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/api/me/onboarding/complete", h.CompleteOnboarding)
 		r.Post("/api/me/onboarding/cloud-waitlist", h.JoinCloudWaitlist)
 		r.Post("/api/cli-token", h.IssueCliToken)
+		// Per-user Git credentials. Account-scoped: a key belongs to the
+		// signed-in human, not to a workspace, so these routes sit in the
+		// user-scoped group and the handler reads the owner from the
+		// session. The handler itself refuses anything that is not a human
+		// session, so a personal access token or a task token cannot reach
+		// a credential even though the group admits it.
+		r.Get("/api/me/git-identities", h.ListGitIdentities)
+		r.Post("/api/me/git-identities", h.GenerateGitIdentity)
+		r.Post("/api/me/git-identities/{identityId}/{generation}/verify", h.VerifyGitIdentity)
+		r.Post("/api/git-identities/{identityId}/revoke", h.RevokeGitIdentity)
 		// Sliding session renewal for clients that hold the session as a
 		// string (Desktop, mobile). Browsers get theirs re-issued inline by
 		// middleware.Auth and never call this (MUL-7436).

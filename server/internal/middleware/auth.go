@@ -284,6 +284,15 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				r.Header.Set("X-User-Email", email)
 			}
 
+			// A verified session token is the only credential that proves a
+			// human is present. Handlers that manage account-level
+			// credentials read the session from the context; no other
+			// branch produces one, so a PAT or a task token cannot reach
+			// them.
+			if session, ok := humanSessionFromClaims(claims); ok {
+				r = r.WithContext(ContextWithHumanSession(r.Context(), session))
+			}
+
 			// Sliding session: a browser that keeps using the app keeps its
 			// cookie, instead of being logged out on the anniversary of its
 			// login. No-op until the session drops below half its TTL
