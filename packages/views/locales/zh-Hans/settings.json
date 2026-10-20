@@ -645,6 +645,26 @@
     "toast_avatar_failed": "上传头像失败",
     "toast_profile_failed": "更新资料失败"
   },
+  "git_identities": {
+    "section_title": "Git 凭据",
+    "section_description": "Multica 使用这些密钥为 Git 操作签名。只有把公钥添加到你的提供方并完成验证后，密钥才会生效。",
+    "no_providers": "此服务器尚未配置 Git 提供方。",
+    "no_keys": "还没有密钥。",
+    "generate": "生成密钥",
+    "verify": "验证",
+    "revoke": "吊销",
+    "public_key": "公钥",
+    "copy_public_key": "复制公钥",
+    "state_ready": "可用",
+    "state_pending": "待验证",
+    "state_revoked": "已吊销",
+    "pending_hint": "将此公钥添加到你的提供方，然后完成验证。",
+    "toast_generate_failed": "无法创建 Git 密钥",
+    "toast_verify_failed": "无法验证 Git 密钥",
+    "toast_revoke_failed": "无法吊销 Git 密钥",
+    "toast_copied": "已复制公钥",
+    "toast_copy_failed": "无法复制公钥"
+  },
   "notifications": {
     "title": "收件箱通知",
     "description": "关闭通知后，仍可在任务中查看相关动态。",

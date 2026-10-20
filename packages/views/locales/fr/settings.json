@@ -650,6 +650,26 @@
     "toast_avatar_failed": "Échec de l'envoi de l'avatar",
     "toast_profile_failed": "Échec de la mise à jour du profil"
   },
+  "git_identities": {
+    "section_title": "Identifiants Git",
+    "section_description": "Multica signe les opérations Git avec ces clés. Une clé ne fonctionne qu'après avoir ajouté sa clé publique à votre fournisseur et l'avoir vérifiée.",
+    "no_providers": "Aucun fournisseur Git n'est configuré sur ce serveur.",
+    "no_keys": "Aucune clé pour le moment.",
+    "generate": "Générer une clé",
+    "verify": "Vérifier",
+    "revoke": "Révoquer",
+    "public_key": "Clé publique",
+    "copy_public_key": "Copier la clé publique",
+    "state_ready": "Prête",
+    "state_pending": "Vérification en attente",
+    "state_revoked": "Révoquée",
+    "pending_hint": "Ajoutez cette clé publique à votre fournisseur, puis vérifiez-la.",
+    "toast_generate_failed": "Impossible de créer la clé Git",
+    "toast_verify_failed": "Impossible de vérifier la clé Git",
+    "toast_revoke_failed": "Impossible de révoquer la clé Git",
+    "toast_copied": "Clé publique copiée",
+    "toast_copy_failed": "Impossible de copier la clé publique"
+  },
   "notifications": {
     "title": "Notifications de la boîte de réception",
     "description": "Les événements désactivés restent visibles dans la tâche.",

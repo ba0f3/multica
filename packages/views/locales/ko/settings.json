@@ -645,6 +645,26 @@
     "toast_avatar_failed": "아바타를 업로드하지 못했습니다",
     "toast_profile_failed": "프로필을 업데이트하지 못했습니다"
   },
+  "git_identities": {
+    "section_title": "Git 자격 증명",
+    "section_description": "Multica는 이 키로 Git 작업을 서명합니다. 공개 키를 제공업체에 추가하고 확인한 뒤에만 사용할 수 있습니다.",
+    "no_providers": "이 서버에는 Git 제공업체가 설정되어 있지 않습니다.",
+    "no_keys": "아직 키가 없습니다.",
+    "generate": "키 생성",
+    "verify": "확인",
+    "revoke": "취소",
+    "public_key": "공개 키",
+    "copy_public_key": "공개 키 복사",
+    "state_ready": "사용 가능",
+    "state_pending": "확인 대기 중",
+    "state_revoked": "취소됨",
+    "pending_hint": "이 공개 키를 제공업체에 추가한 뒤 확인하세요.",
+    "toast_generate_failed": "Git 키를 만들지 못했습니다",
+    "toast_verify_failed": "Git 키를 확인하지 못했습니다",
+    "toast_revoke_failed": "Git 키를 취소하지 못했습니다",
+    "toast_copied": "공개 키를 복사했습니다",
+    "toast_copy_failed": "공개 키를 복사하지 못했습니다"
+  },
   "notifications": {
     "title": "인박스 알림",
     "description": "알림을 꺼도 태스크에서 관련 활동을 볼 수 있습니다.",
