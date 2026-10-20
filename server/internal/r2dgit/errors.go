@@ -26,4 +26,7 @@ var (
 	ErrConflict = errors.New("git_identity_conflict")
 	// ErrRevoked means the credential was revoked and may no longer be used.
 	ErrRevoked = errors.New("git_grant_revoked")
+	// ErrProvider means the Git provider could not be reached or did not
+	// answer in a way the adapter understands.
+	ErrProvider = errors.New("git_provider_unavailable")
 )
