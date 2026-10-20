@@ -121,6 +121,8 @@ import type {
   CreateQuickActionRequest,
   UpdateQuickActionRequest,
   ListQuickActionsResponse,
+  GitIdentity,
+  GitProfile,
   UpdatePropertyRequest,
   ListPropertiesResponse,
   IssuePropertiesResponse,
@@ -431,6 +433,10 @@ import {
   QuickActionRenderSchema,
   EMPTY_QUICK_ACTION,
   EMPTY_LIST_QUICK_ACTIONS_RESPONSE,
+  GitProfileSchema,
+  GitIdentitySchema,
+  EMPTY_GIT_PROFILE,
+  EMPTY_GIT_IDENTITY,
   CommentSchema,
   EMPTY_COMMENT,
   EMPTY_ISSUE_PROPERTY,
@@ -5394,5 +5400,57 @@ export class ApiClient {
       EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
       { endpoint: "POST /api/telegram/binding/redeem" },
     );
+  }
+
+  /**
+   * The caller's Git credentials and the providers they may use.
+   *
+   * A server without credential custody answers 503; the caller shows the
+   * capability as unavailable rather than an empty credential list that
+   * looks like "you have no keys".
+   */
+  async listGitIdentities(): Promise<GitProfile> {
+    const raw = await this.fetch<unknown>("/api/me/git-identities");
+    return parseWithFallback(raw, GitProfileSchema, EMPTY_GIT_PROFILE, {
+      endpoint: "GET /api/me/git-identities",
+    });
+  }
+
+  /**
+   * Create the next key generation for a provider.
+   *
+   * `requestId` makes the call idempotent: a retried request returns the key
+   * the first attempt produced instead of creating a second one.
+   */
+  async generateGitIdentity(input: {
+    provider_id: string;
+    request_id: string;
+    consent_project_ids?: string[];
+  }): Promise<GitIdentity> {
+    const raw = await this.fetch<unknown>("/api/me/git-identities", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, GitIdentitySchema, EMPTY_GIT_IDENTITY, {
+      endpoint: "POST /api/me/git-identities",
+    });
+  }
+
+  /** Prove that a key authenticates the user's provider account. */
+  async verifyGitIdentity(identityId: string, generation: number): Promise<GitIdentity> {
+    const raw = await this.fetch<unknown>(
+      `/api/me/git-identities/${identityId}/${generation}/verify`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, GitIdentitySchema, EMPTY_GIT_IDENTITY, {
+      endpoint: "POST /api/me/git-identities/{identityId}/{generation}/verify",
+    });
+  }
+
+  /** Stop the use of a key and destroy its stored secret. */
+  async revokeGitIdentity(identityId: string): Promise<void> {
+    await this.fetch<void>(`/api/git-identities/${identityId}/revoke`, {
+      method: "POST",
+    });
   }
 }

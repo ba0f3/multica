@@ -149,6 +149,12 @@ export type {
   UpdateQuickActionRequest,
   ListQuickActionsResponse,
 } from "./quick-action";
+export type {
+  GitIdentity,
+  GitIdentityState,
+  GitProfile,
+  GitProvider,
+} from "./git-identity";
 export {
   QUICK_ACTION_SIDEBAR_LIMIT,
   QUICK_ACTION_TEMPLATE_TOKEN_RE,
