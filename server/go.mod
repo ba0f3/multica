@@ -31,6 +31,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/tdewolff/parse/v2 v2.8.16
 	github.com/yuin/goldmark v1.8.6
+	golang.org/x/crypto v0.57.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/protobuf v1.36.12
