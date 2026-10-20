@@ -59,7 +59,7 @@ RETURNING id, user_id, provider_id, active_generation, epoch, revoked, created_a
 UPDATE r2d_git_identity
 SET active_generation = $2,
     epoch = epoch + 1
-WHERE id = $1
+WHERE id = $1 AND revoked = false
 RETURNING id, user_id, provider_id, active_generation, epoch, revoked, created_at;
 
 -- name: RevokeR2DGitIdentity :one
@@ -88,7 +88,7 @@ SET state = 'ready',
     login = $4,
     verified_at = $5,
     diagnostic = ''
-WHERE identity_id = $1 AND generation = $2
+WHERE identity_id = $1 AND generation = $2 AND state = 'pending_verification' 
 RETURNING identity_id, generation, public_key, fingerprint, internal_secret_ref,
           state, account_id, login, verified_at, cleanup_pending, diagnostic,
           consent_project_ids, created_at;

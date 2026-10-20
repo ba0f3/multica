@@ -293,6 +293,23 @@ func (s *Service) Verify(ctx context.Context, userID, identityID string, generat
 	}
 
 	verifiedAt := s.now().UTC()
+	// The provider round trip is the longest part of this call, so a revoke
+	// or a rotation can land while it is in flight. Re-read before writing:
+	// the user's withdrawal must win over the verification that started
+	// before it.
+	current, err := s.identityFor(ctx, userID, identity.ID)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	if current.Revoked {
+		return PublicIdentity{}, ErrRevoked
+	}
+	if current.ActiveGeneration > generation {
+		// A newer generation was activated while this verification was in
+		// flight. Keep the newer one rather than rolling the identity back.
+		return PublicIdentity{}, ErrConflict
+	}
+
 	verified, err := s.store.MarkKeyReady(ctx, identity.ID, generation, "", login, verifiedAt)
 	if err != nil {
 		return PublicIdentity{}, err
@@ -324,14 +341,15 @@ func (s *Service) Revoke(ctx context.Context, userID, identityID string) error {
 		return err
 	}
 
-	// Drop the signing permissions of this identity first: a lease that
-	// outlives the revocation would let a task keep signing with a key the
-	// user just withdrew.
-	s.RevokeSigningLeases(identity.ID)
-
+	// Flip the identity first: from this point OpenSigningLease refuses, so
+	// no new lease can slip into the window before the sweep below.
 	if _, err := s.store.RevokeIdentity(ctx, identity.ID, userID); err != nil {
 		return err
 	}
+	// Then withdraw the permissions that already exist. A lease that
+	// outlives the revocation would let a task keep signing with a key the
+	// user just withdrew.
+	s.RevokeSigningLeases(identity.ID)
 
 	keys, err := s.store.ListKeysForUser(ctx, userID)
 	if err != nil {

@@ -571,3 +571,41 @@ func TestRevokeRefusesAnotherUsersIdentity(t *testing.T) {
 		t.Fatalf("Revoke error = %v, want %v", err, ErrScope)
 	}
 }
+
+// revokingVerifier simulates a revocation that lands while the provider
+// round trip is still in flight.
+type revokingVerifier struct {
+	service    *Service
+	userID     string
+	identityID string
+}
+
+func (v *revokingVerifier) Verify(context.Context, Provider, string, uint64) (string, error) {
+	if err := v.service.Revoke(context.Background(), v.userID, v.identityID); err != nil {
+		return "", err
+	}
+	return "octocat", nil
+}
+
+func TestVerifyDoesNotReviveAKeyRevokedDuringTheRoundTrip(t *testing.T) {
+	service, store, _, _ := newTestService(t)
+	service.random = strings.NewReader(strings.Repeat("r", 4096))
+
+	generated, err := service.Generate(context.Background(), "user-a", "provider-1", "request-1", nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	service.verifier = &revokingVerifier{service: service, userID: "user-a", identityID: generated.ID}
+
+	if _, err := service.Verify(context.Background(), "user-a", generated.ID, generated.Generation); err == nil {
+		t.Fatal("Verify succeeded although the identity was revoked mid-flight")
+	}
+
+	key, err := store.GetKey(context.Background(), generated.ID, generated.Generation)
+	if err != nil {
+		t.Fatalf("GetKey: %v", err)
+	}
+	if key.State != Revoked {
+		t.Fatalf("key state = %q, want %q: a revoked key must not be marked ready", key.State, Revoked)
+	}
+}
