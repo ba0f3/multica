@@ -1,93 +1,68 @@
-# Git security — coding-agent handoff
+# Handoff: bwrap task isolation và per-user Git keys
 
-Status: planning delivery, 2026-10-16. No feature implementation or production enablement is claimed.
+Đọc [spec chính](per-user-git-credentials-plan.md) trước khi implement. Bản ngày 2026-10-20 thay kiến trúc candidate PR #93; không merge/cherry-pick nguyên PR đó.
 
-## Start here
+Thay đổi lần này chỉ là spec/handoff; chưa trích code credentials hoặc triển khai/test bwrap mới.
 
-1. Read root `AGENTS.md`, [the accepted implementation plan](per-user-git-credentials-plan.md), feature tracker [#84](https://github.com/r2d-ai/multica/issues/84) and patch-stack tracker [#12](https://github.com/r2d-ai/multica/issues/12).
-2. Start with [S0 / #85](https://github.com/r2d-ai/multica/issues/85). Do not assume the historical R2D ACL code is present on current main. The planning baseline was `231dedb55287ab6e40fd103634a024e4d9d1baeb`; refresh live state before coding.
-3. Work in a dedicated branch on `r2d-ai/multica`, commit and push there, then open a PR to the fork's reviewed integration branch. Never create a PR or write an issue/comment on upstream for this workflow.
-4. Keep one slice or coherent sub-slice per PR. Do not mix upstream sync, historical ACL restoration and new credential code.
+## Quyết định đã chốt
 
-## User-visible contract
+- Linux + **mỗi task attempt một bwrap worker**. Worker chứa agent adapter, coding-agent binary, ACP terminal callback, local MCP, prepare/finalize và subprocess.
+- Shared daemon ở ngoài giữ orchestration và typed IPC. Worker không có arbitrary host-exec/mount/checkout RPC.
+- UI tạo key riêng mỗi user/provider, chỉ show public key/fingerprint. Private key ở custody mã hóa; coding agent không nhận raw key hoặc generic ssh-agent socket.
+- Git remote helper đi qua transport broker bind đúng execution user + attempt + repo + read/write. Broker chạy SSH command cố định với key user, giữ Git native pack protocol.
+- V1 chọn OpenSSH; key file tạm chỉ thuộc trusted broker, cần internal materialization/lease adapter. Không xây đồng thời Go SSH signer transport.
+- V1 scope một repo/run; GitHub/Gitea branch protection thực thi ref policy. Không quảng cáo task-only branch enforcement nếu broker chỉ forward receive-pack.
+- Không ambient host HOME/env/auth/MCP, không shared workspace repo fallback, không shared Git metadata, không fallback khi sandbox không khả dụng.
 
-The user generates a dedicated per-user/per-provider SSH key pair from their profile. A trusted backend generates and stores the private key in encrypted custody; the profile shows only the public key/fingerprint. The user manually adds the public key to their own GitHub/Gitea account and verifies it. The run uses that user's identity through a policy-enforcing broker. There is no key export, private-key reveal or shared admin fallback.
+## Baseline và source reuse
 
-This is not permission to create real keys, use production Git credentials, modify provider accounts, deploy services, reset branches or weaken branch protection. Production changes need their corresponding approved execution step.
+- Fork: `r2d-ai/multica`; target `main`.
+- Observed main: `ef0972f21e5825fb281957ede41a1072aa008a02`.
+- PR #93 extraction source: `a0c48fb5483f2f4404a050a60c3aff2e88eadcfb`.
+- Refresh main trước coding và ghi drift. Không giả định code ACL lịch sử của #12 còn tồn tại.
+- Credential components/schema/custody/lifecycle/tests có thể port thủ công theo mục 10 của spec. Không port Docker engine, second control/OTP server, text-only Git transport hoặc restore/quarantine platform.
+- Chưa cấp số migration mới. Kiểm tra schema deployment/candidate trước khi reserve số trong #12; `r2d_*` side tables, no FK, concurrent index theo AGENTS.md.
 
-## First implementation PR: S0
+## Bốn lỗi kiến trúc phải giải quyết
 
-Deliver a baseline report and testable policy contracts, not a key-upload UI:
+1. `acpTerminalCreate` thực thi command từ adapter process: chỉ wrap provider binary sẽ để callback ngoài sandbox.
+2. Claim/finalize task token đang dùng runtime owner: protected API/Git phải bind cùng authorization originator, không chỉ đặt env user ID.
+3. Project repo fallback, health checkout và background repocache đang theo workspace: protected path cần exact repo grant và không dùng host Git.
+4. Native HOME/auth/session và Git local clones có shared state: clean HOME, principal-bound resume, self-contained `.git`, không cross-user mutable hardlinks/alternates.
 
-- Inspect current fork refs, reserved migrations and current project authorization seams.
-- Compare relevant historical R2D ACL PRs with current code; record missing prerequisites without silently rebuilding the entire ACL product.
-- Separate authoritative human identity from audit attribution and runtime ownership.
-- Define immutable run context plus narrow repo/operation/ref grant, current-rights checks and version/capability negotiation.
-- Add fixture-based failing regression tests for identity substitution, absent/fallback originator, task/project mismatch and old daemon refusal.
-- Inventory runtime/provider isolation and integration assumptions; document any separately reviewed prerequisite.
+## Thứ tự làm
 
-S0 is complete only when later agents can implement S1/S2/S4 without guessing who owns a run or which policy is authoritative.
+| Issue | Việc |
+| --- | --- |
+| #85 / S0 | Baseline/policy/token/worker contract, support matrix, migration inventory, red tests |
+| #86 / S1 | Extract key UI/API/custody/lifecycle và nối vào app hiện tại |
+| #87 / S2 | Immutable principal/grant/attempt/delegation, protected task tokens và runtime capability |
+| #89 / S4 scaffold | Hidden worker + bwrap + IPC/cgroup/cleanup với fake coding CLI |
+| #88 / S3 | Native Git remote helper + fixed SSH transport + per-user key lease |
+| #89 / S4 integration | Prepare/run/finalize, egress, private repo/session, Codex/Cursor clean auth |
+| #90 / S5 | Output/API/current-access gates, revoke/resume/audit |
+| #91 / S6 | Adversarial fixture, pilot rollout/rollback và independent review |
 
-## Work queue
+S0 trước; S1/S2/S4 scaffold song song được sau contract. Giữ mỗi PR nhỏ và reviewable; docs/UI merge chưa đóng tracker.
 
-| Slice | Issue | Start condition |
-| --- | --- | --- |
-| S0 — baseline / contract | [#85](https://github.com/r2d-ai/multica/issues/85) | First |
-| S1 — profile keys / custody | [#86](https://github.com/r2d-ai/multica/issues/86) | S0 accepted |
-| S2 — identity / delegation | [#87](https://github.com/r2d-ai/multica/issues/87) | S0 accepted |
-| S3 — Git broker | [#88](https://github.com/r2d-ai/multica/issues/88) | S1 + S2 contracts and implementation |
-| S4 — runtime / cache / sessions | [#89](https://github.com/r2d-ai/multica/issues/89) | S0; integrate S2/S3 |
-| S5 — output / bypass / revoke | [#90](https://github.com/r2d-ai/multica/issues/90) | S2 + S3 + S4 |
-| S6 — adversarial gate / rollout | [#91](https://github.com/r2d-ai/multica/issues/91) | S1-S5 |
+## Gate không được bỏ
 
-S1/S2 and the S4 scaffold may run in parallel after S0. No production protected-source path may be enabled before the integrated S6 gate. Upstream #7441 is reference code, not a mandatory dependency or blanket cherry-pick.
+- A/B đồng thời cùng shared agent: không thấy checkout/HOME/session/proc/socket/key của nhau.
+- A có repo X/Y nhưng task X: không truy cập Y qua broker, URL rewrite, raw SSH/HTTPS, health/API/MCP.
+- ACP terminal, script build, local MCP và native subagent ở trong bwrap; malicious `.git` không được chạy host commands.
+- B rerun issue A không reuse token/native history A; revoked/offboarded user không dùng warm cache.
+- Session scope giữ conversation/agent hiện có và thêm execution user; reader output được authorize bằng identity người đọc.
+- Missing bwrap/userns/cgroup/egress hoặc unsupported provider → blocked, không direct exec.
+- Public-only UI/API; Git private key không xuất hiện trong worker mounts/env/FD/logs. Broker-only key materialization có cleanup.
+- Read-only task không mở receive-pack; branch/ref restrictions nghiệm thu ở Git provider.
+- Cancel/revoke dừng active SSH, streams và descendant cgroup; IPC backpressure/crash không để rogue child.
+- Cgroup placement có trước untrusted execution; task dài renew lease qua trusted server, đúng operation, không worker self-renew.
+- Không dùng host `.codex`/`.cursor` mount để làm auth test pass; provider clean-HOME profile phải có evidence.
 
-## Non-negotiable review checks
+Default CI dùng synthetic keys và fake CLI, không resolve/run CLI đăng nhập sẵn của user. Real-agent smoke chỉ khi được ủy quyền và đủ gate AGENTS.md. Report chính xác đã chạy gì; không biến test candidate #93 thành test bwrap mới.
 
-- Private keys exist only in trusted custody/transport, never in profile JSON, browser storage, task payloads, shared HOME, raw agent SSH sockets or ordinary logs.
-- User identity comes from authenticated requests/validated task lineage. Neither display names nor mutable env/headers are proof.
-- Child grants cannot grow; changed human means changed context/session. Null or audit-only originators receive no Git credential.
-- All protected Git paths, including daemon preparation and finalization, use the broker. Replacing only agent `GIT_SSH_COMMAND` is insufficient.
-- A cache hit is still a data access. Cross-user bare repositories, Git object stores and native sessions are not shared into sandboxes.
-- Source output is server-classified and audience-restricted. Generic comments, MCP, PR APIs, emails, file previews and exports cannot bypass it.
-- Signing a token is not revocation. Local epoch checks, provider-rights proof and cancellation must be tested.
-- Git SSH authentication is not commit signing, author attribution or PR/API authentication. Unsupported API routes fail instead of using owner credentials.
-- Trusted host-root/control-plane/secret-store compromise remains a documented boundary; do not claim non-exportable hardware custody from KV encryption.
+## Delivery
 
-## Repository constraints
+Commit/push/PR chỉ trên **r2d-ai/multica**, không upstream. Cập nhật [#84](https://github.com/r2d-ai/multica/issues/84) với slice/PR/SHA/evidence/next action; cập nhật [#12](https://github.com/r2d-ai/multica/issues/12) với patch và migration cursor. PR #93 giữ branch/commit để tra cứu, bỏ implementation architecture cũ.
 
-New schema uses `r2d_*` side tables. Allocate migration numbers in `900000-999999` through #12 after inspecting existing allocations. No upstream-table custom columns or foreign keys; every concurrent index gets its own migration. Shared UI belongs in `packages/views/`, data/schema/query logic in `packages/core/`. Keep framework code in app layers and protected-mode gates server-authoritative.
-
-Do not introduce ambient-auth compatibility fallbacks. Existing unprotected legacy execution may remain outside the protected environment, but it must not reach protected broker secrets, caches or outputs. Unsupported daemon/runtime means deny, not downgrade.
-
-## Verification and evidence
-
-Use repo-managed environments and current Makefile commands from AGENTS.md. Start with narrow package checks, then backend/frontend/integration checks relevant to changed seams. Use synthetic keys, disposable Git/SSH fixtures and fake agent CLIs by default. Real-account and real-model smoke tests require explicit authorization and the repository's `agentintegration` gate.
-
-Each implementation PR must include:
-
-- Linked slice issue, exact base/head SHAs and migration allocation if any.
-- Changed trust boundary and actual behavior, not only a list of files.
-- Tests actually run, outputs/check links, negative-control evidence and skipped checks.
-- Remaining integration/release gates, outage behavior and rollback semantics.
-- Independent security-review findings and fixes before merge.
-
-Do not mark the tracker complete for a profile-only demo or successful happy-path clone.
-
-## Cursor update format
-
-Update #84 after each slice and #12 after patch/backport/migration changes:
-
-```text
-Date:
-Slice / issue:
-Base SHA:
-PR / head SHA / merged SHA:
-Migrations allocated / merged:
-Tests actually run / CI evidence:
-Security gates still open:
-Upstream refs checked (not automatically merged):
-Next action:
-```
-
-The planning document has no application behavior change. Documentation verification does not establish that key custody, sandboxing, Git transport or revocation currently work.
+Rollback protected mode là pause và sửa; không bật shared admin key hoặc unsandboxed execution. Không deploy, generate real keys hoặc rotate production credentials chỉ vì spec đã merge.
