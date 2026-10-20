@@ -72,6 +72,7 @@ export function StepPlatformFork({
 
   const [dialog, setDialog] = useState<DialogState>(null);
   const [connecting, setConnecting] = useState(false);
+  const [skipping, setSkipping] = useState(false);
   const [model, setModel] = useState("");
 
   const picker = useRuntimePicker(wsId, wsSlug);
@@ -97,6 +98,16 @@ export function StepPlatformFork({
       setDialog(null);
     } finally {
       setConnecting(false);
+    }
+  };
+
+  const handleSkip = async () => {
+    if (skipping) return;
+    setSkipping(true);
+    try {
+      await onNext(null);
+    } finally {
+      setSkipping(false);
     }
   };
 
@@ -140,8 +151,10 @@ export function StepPlatformFork({
         <Button
           variant="ghost"
           className="w-full"
-          onClick={() => onNext(null)}
+          disabled={skipping}
+          onClick={handleSkip}
         >
+          {skipping && <Loader2 className="h-4 w-4 animate-spin" />}
           {t(($) => $.step_runtime.skip)}
         </Button>
       </StepFooter>
