@@ -111,5 +111,9 @@ Run from the repository root:
 | Whole backend | `make test` |
 | Whole frontend | `pnpm typecheck && pnpm lint && pnpm test` |
 
+The views suite is timing-sensitive: its default 5s per-test timeout fails
+under parallel load on a busy machine. The suite is green (6177/6177) with
+`pnpm --filter @multica/views exec vitest run --testTimeout=30000 --maxWorkers=4`.
+
 The sandbox checks from the spec's acceptance matrix cannot be run: there is
 no worker, so there is no boundary to test.
