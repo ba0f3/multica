@@ -7,7 +7,9 @@ in PR #95 — a bwrap worker per task, a per-task SSH-agent signing socket, and
 public-key-only credential management.
 
 This file records what the branch actually contains. It does not claim a
-deployed runtime, a production key or a proven sandbox.
+deployed runtime, a production key or a sandbox verified against a real coding
+agent: the boundary has been started for real on one host (see Verification),
+but the provider-level checks in the spec's acceptance matrix are open.
 
 ## Delivered
 
