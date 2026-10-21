@@ -41,7 +41,12 @@ func newSandboxTestDaemon(t *testing.T, bwrapPath string) *Daemon {
 	daemon := &Daemon{logger: newDiscardLogger()}
 	daemon.cfg.SandboxEnabled = true
 	daemon.cfg.BwrapPath = bwrapPath
-	daemon.cfg.SandboxSelfPath = "/usr/local/bin/multica"
+	// The worker executable has to exist: it is mounted into the boundary.
+	self := filepath.Join(t.TempDir(), "multica")
+	if err := os.WriteFile(self, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write the worker executable: %v", err)
+	}
+	daemon.cfg.SandboxSelfPath = self
 	daemon.cfg.WorkspacesRoot = t.TempDir()
 	daemon.cfg.Profile = ""
 	return daemon
@@ -119,7 +124,6 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 		"--unshare-uts",
 		"--die-with-parent",
 		"--clearenv",
-		"--no-new-privileges",
 		"--chdir " + "/workspace/repo",
 		sandbox.WorkerArg,
 	} {
@@ -193,7 +197,8 @@ func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 	if !strings.Contains(joined, "--bind "+socket+" /run/multica/ssh-agent.sock") {
 		t.Errorf("the signing socket is not mounted:\n%s", joined)
 	}
-	if !strings.Contains(joined, "SSH_AUTH_SOCK=/run/multica/ssh-agent.sock") {
+	// bwrap names one variable per flag: --setenv SSH_AUTH_SOCK <path>.
+	if !strings.Contains(joined, "--setenv SSH_AUTH_SOCK /run/multica/ssh-agent.sock") {
 		t.Errorf("SSH_AUTH_SOCK does not point at the mounted socket:\n%s", joined)
 	}
 }
