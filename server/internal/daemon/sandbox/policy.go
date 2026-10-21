@@ -57,8 +57,21 @@ type Policy struct {
 	// must live under it (except an explicitly granted extra mount such as
 	// the agent's own per-task config directory).
 	TaskRoot string
-	// HomeDir is the attempt's private HOME.
+	// HomeDir is the attempt's private HOME. It is used when ReadOnlyHome is
+	// empty.
 	HomeDir string
+	// ReadOnlyHome is the host home, mounted read-only at its own path.
+	//
+	// The boundary is about the code and the credentials, not about the whole
+	// home: a provider CLI has to find its own configuration, and hiding
+	// every dotfile breaks it for no security gain. What must not be readable
+	// is named in HiddenHomePaths.
+	ReadOnlyHome string
+	// HiddenHomePaths are paths inside ReadOnlyHome that are replaced by an
+	// empty directory (for a directory) or by /dev/null (for a file), so the
+	// agent sees nothing there. They are the credential stores: the Git keys,
+	// the Git credential files, and this application's own token.
+	HiddenHomePaths []string
 	// TempDir is the attempt's private temp directory.
 	TempDir string
 	// CheckoutDir is the task's working tree.
@@ -147,6 +160,15 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	// rule, so it is allowed even when it lives under a forbidden root.
 	allowedExact[filepath.Clean(self)] = struct{}{}
 
+	if policy.ReadOnlyHome != "" {
+		if !filepath.IsAbs(policy.ReadOnlyHome) {
+			return nil, fmt.Errorf("sandbox: the read-only home must be absolute")
+		}
+		if info, err := os.Stat(policy.ReadOnlyHome); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("sandbox: the read-only home %q is not a directory", policy.ReadOnlyHome)
+		}
+	}
+
 	for _, runtimeRoot := range policy.RuntimeRoots {
 		if err := checkMountSource(runtimeRoot, policy, allowedExact); err != nil {
 			return nil, err
@@ -162,12 +184,65 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	args = append(args, "--ro-bind", self, sandboxWorker)
 
 	writable := []Mount{
+		{Source: policy.TempDir, Target: sandboxTemp},
 		{Source: policy.CheckoutDir, Target: sandboxRepo},
 		{Source: policy.HomeDir, Target: sandboxHome},
-		{Source: policy.TempDir, Target: sandboxTemp},
 	}
-	writable = append(writable, policy.ExtraMounts...)
 	for _, mount := range writable {
+		if err := checkMountSource(mount.Source, policy, allowedExact); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(mount.Target) == "" {
+			return nil, fmt.Errorf("sandbox: mount %s has no target", mount.Source)
+		}
+		flag := "--bind"
+		if mount.ReadOnly {
+			flag = "--ro-bind"
+		}
+		args = append(args, flag, mount.Source, mount.Target)
+	}
+
+	// The home is mounted read-only so a provider CLI finds its own config,
+	// and then the credential paths inside it are covered by empty mounts.
+	// bwrap applies mounts in order, so a later mount at a nested path wins.
+	if policy.ReadOnlyHome != "" {
+		args = append(args, "--ro-bind", policy.ReadOnlyHome, policy.ReadOnlyHome)
+		emptyDir := filepath.Join(policy.TaskRoot, "empty-mount")
+		createdEmpty := false
+		for _, hidden := range policy.HiddenHomePaths {
+			if strings.TrimSpace(hidden) == "" || !filepath.IsAbs(hidden) {
+				return nil, fmt.Errorf("sandbox: the hidden path %q must be absolute", hidden)
+			}
+			if !isUnder(filepath.Clean(hidden), filepath.Clean(policy.ReadOnlyHome)) {
+				return nil, fmt.Errorf("sandbox: the hidden path %q is outside the read-only home", hidden)
+			}
+			info, err := os.Stat(hidden)
+			if err != nil {
+				// Nothing to hide: the path does not exist on this host.
+				continue
+			}
+			if info.IsDir() {
+				if !createdEmpty {
+					if err := os.MkdirAll(emptyDir, 0o700); err != nil {
+						return nil, fmt.Errorf("sandbox: create the shadow directory: %w", err)
+					}
+					createdEmpty = true
+				}
+				args = append(args, "--ro-bind", emptyDir, hidden)
+				continue
+			}
+			args = append(args, "--ro-bind", "/dev/null", hidden)
+		}
+	}
+
+	// The private temp is mounted first. Any later mount whose source or
+	// destination lives under /tmp then lands on top of it instead of being
+	// hidden by it: bwrap applies mounts in order, so a bind of /tmp placed
+	// after another mount removes that mount's path from the tree.
+	// Extra mounts come after the home shadows. A per-task config the daemon
+	// built may live inside the profile directory, which is hidden as a tree;
+	// naming the exact per-task path re-exposes that path and nothing else.
+	for _, mount := range policy.ExtraMounts {
 		if err := checkMountSource(mount.Source, policy, allowedExact); err != nil {
 			return nil, err
 		}
@@ -190,15 +265,28 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		args = append(args, "--bind", policy.AgentSocket, sandboxAgentSocket)
 	}
 
-	env := map[string]string{
-		"HOME":   sandboxHome,
-		"TMPDIR": sandboxTemp,
+	home := sandboxHome
+	if policy.ReadOnlyHome != "" {
+		// The provider CLI reads its configuration from the real home path,
+		// which is mounted read-only; HOME must name that path for it to
+		// resolve.
+		home = policy.ReadOnlyHome
 	}
-	if policy.AgentSocket != "" {
-		env["SSH_AUTH_SOCK"] = sandboxAgentSocket
-	}
+	// The caller's environment is applied first and the paths the boundary
+	// owns are set last: a caller must not be able to point HOME at a
+	// directory the boundary did not mount, or redirect the signing socket.
+	env := make(map[string]string, len(policy.Env)+3)
 	for key, value := range policy.Env {
 		env[key] = value
+	}
+	env["HOME"] = home
+	env["TMPDIR"] = sandboxTemp
+	// Never inherit an agent socket. When the attempt has no credential the
+	// run must have no SSH_AUTH_SOCK at all, rather than one that points
+	// somewhere the boundary did not grant.
+	delete(env, "SSH_AUTH_SOCK")
+	if policy.AgentSocket != "" {
+		env["SSH_AUTH_SOCK"] = sandboxAgentSocket
 	}
 	// Sorted so the argv is stable for tests and for log comparison.
 	// bwrap takes one variable per flag: --setenv KEY VALUE.
@@ -228,6 +316,11 @@ func checkMountSource(source string, policy Policy, allowedExact map[string]stru
 	}
 
 	if _, ok := allowedExact[cleaned]; ok {
+		return nil
+	}
+	// The read-only home is mounted by name, not as a tree that includes its
+	// credential paths, so only the exact home path is allowed here.
+	if policy.ReadOnlyHome != "" && cleaned == filepath.Clean(policy.ReadOnlyHome) {
 		return nil
 	}
 

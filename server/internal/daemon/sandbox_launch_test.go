@@ -139,22 +139,37 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	}
 }
 
-func TestSandboxBackendRefusesToMountTheProfileDirectory(t *testing.T) {
-	daemon := newSandboxTestDaemon(t, "bwrap")
-	env := newSandboxTestEnv(t)
-	// A per-task config path that resolves into the daemon's profile would
-	// hand the sandbox every other attempt's signing socket.
+func TestSandboxForbidsTheProfileTreeButAllowsANamedPerTaskPath(t *testing.T) {
 	profileRoot := t.TempDir()
-	env.OpenclawConfigPath = filepath.Join(profileRoot, "openclaw", "task-1.json")
-	if err := os.MkdirAll(filepath.Dir(env.OpenclawConfigPath), 0o755); err != nil {
-		t.Fatalf("create profile path: %v", err)
-	}
-	if err := os.WriteFile(env.OpenclawConfigPath, nil, 0o600); err != nil {
-		t.Fatalf("write the config: %v", err)
+	taskPath := filepath.Join(profileRoot, "hermes-state", "agent-1")
+	if err := os.MkdirAll(taskPath, 0o755); err != nil {
+		t.Fatalf("create the per-task path: %v", err)
 	}
 
-	if _, err := daemon.sandboxedBackend("claude", agent.Config{}, env, profileRoot, ""); err == nil {
-		t.Fatal("a mount under the daemon profile was accepted")
+	// The profile as a whole holds every attempt's sockets and credentials,
+	// so it is forbidden as a mount source...
+	roots := sandboxForbiddenRoots(t.TempDir(), profileRoot)
+	found := false
+	for _, root := range roots {
+		if root == profileRoot {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the profile directory is missing from the forbidden roots: %v", roots)
+	}
+
+	// ...but the exact per-task path the daemon built for THIS attempt is
+	// named, so it can be mounted.
+	env := newSandboxTestEnv(t)
+	env.HermesHome = taskPath
+	bwrap := filepath.Join(t.TempDir(), "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/bin/sh\ncat >/dev/null\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write the fake bwrap: %v", err)
+	}
+	daemon := newSandboxTestDaemon(t, bwrap)
+	if _, err := daemon.sandboxedBackend("claude", agent.Config{}, env, profileRoot, ""); err != nil {
+		t.Fatalf("a named per-task path under the profile was refused: %v", err)
 	}
 }
 
@@ -228,10 +243,12 @@ func TestSandboxAgentEnvNamesTheInSandboxPaths(t *testing.T) {
 		"PATH":                "/home/someone/.nvm/versions/node/v20/bin:/usr/bin",
 		"CLAUDE_CODE_TMPDIR":  hostTmp,
 		"MULTICA_CONFIG_ROOT": "/host/config",
-	})
+	}, "/home/someone")
 
-	if env["HOME"] != sandbox.HomePath {
-		t.Errorf("HOME = %q, want %q", env["HOME"], sandbox.HomePath)
+	// The provider CLI keeps reading its configuration from the real home,
+	// which is mounted read-only; only the credential stores are hidden.
+	if env["HOME"] != "/home/someone" {
+		t.Errorf("HOME = %q, want the mounted read-only home", env["HOME"])
 	}
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"} {
 		if env[key] != sandbox.TempPath {

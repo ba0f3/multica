@@ -35,6 +35,30 @@ func TestBwrapSmokeRunsAWorkerInTheBoundary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "visible.txt"), []byte("inside"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	// A fake host home: the boundary must let the CLI read its config but not
+	// the credential stores.
+	hostHome := filepath.Join(root, "host-home")
+	for _, dir := range []string{
+		filepath.Join(hostHome, ".ssh"),
+		filepath.Join(hostHome, ".multica"),
+		filepath.Join(hostHome, ".claude"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(hostHome, ".ssh", "id_ed25519"):       "PRIVATE KEY",
+		filepath.Join(hostHome, ".multica", "config.json"):  `{"token":"session"}`,
+		filepath.Join(hostHome, ".claude", "settings.json"): "provider-config",
+		filepath.Join(hostHome, ".bashrc"):                  "shell-config",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
 	// A sibling task and a host secret the boundary must not expose.
 	sibling := filepath.Join(workspaces, "task-2", "workdir")
 	if err := os.MkdirAll(sibling, 0o755); err != nil {
@@ -54,6 +78,11 @@ func TestBwrapSmokeRunsAWorkerInTheBoundary(t *testing.T) {
   echo "can_write=$(echo written > probe.txt && echo yes || echo no)"
   echo "secret=$(cat ` + hostSecret + ` 2>/dev/null || echo BLOCKED)"
   echo "siblings=$(ls ` + workspaces + ` 2>/dev/null || echo BLOCKED)"
+  echo "ssh=$(ls -A ` + filepath.Join(hostHome, ".ssh") + ` 2>/dev/null | wc -l)"
+  echo "multica=$(cat ` + filepath.Join(hostHome, ".multica", "config.json") + ` 2>/dev/null || echo BLOCKED)"
+  echo "claude=$(cat ` + filepath.Join(hostHome, ".claude", "settings.json") + ` 2>/dev/null || echo MISSING)"
+  echo "bashrc=$(cat ` + filepath.Join(hostHome, ".bashrc") + ` 2>/dev/null || echo MISSING)"
+  (echo x > ` + filepath.Join(hostHome, "written-by-sandbox") + `) 2>/dev/null || echo "home_write=DENIED"
 } > probe-report.txt
 printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 `
@@ -63,8 +92,13 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 	}
 
 	policy := Policy{
-		TaskRoot:       taskRoot,
-		HomeDir:        home,
+		TaskRoot:     taskRoot,
+		HomeDir:      home,
+		ReadOnlyHome: hostHome,
+		HiddenHomePaths: []string{
+			filepath.Join(hostHome, ".ssh"),
+			filepath.Join(hostHome, ".multica"),
+		},
 		TempDir:        temp,
 		CheckoutDir:    checkout,
 		RuntimeRoots:   []string{"/usr", "/bin", "/lib", "/lib64", "/etc"},
@@ -101,11 +135,19 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 
 	for _, want := range []string{
 		"pwd=" + CheckoutPath,
-		"home=" + HomePath,
+		"home=" + hostHome,
 		"file=inside",
 		"can_write=yes",
 		"secret=BLOCKED",
 		"siblings=BLOCKED",
+		// The SSH key and the application token are gone, the provider
+		// config and the rest of the home are readable, and the home itself
+		// cannot be written.
+		"ssh=0",
+		"multica=BLOCKED",
+		"claude=provider-config",
+		"bashrc=shell-config",
+		"home_write=DENIED",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("probe report is missing %q:\n%s", want, report)

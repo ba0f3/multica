@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
@@ -66,22 +67,29 @@ func (d *Daemon) sandboxedBackend(
 	}
 
 	binaryRoots := sandboxBinaryRoots(config.ExecutablePath)
+	hostHome, _ := os.UserHomeDir()
+	extras := sandboxExtraMounts(env)
 	policy := sandbox.Policy{
-		TaskRoot:     env.RootDir,
-		HomeDir:      homeDir,
-		TempDir:      tempDir,
-		CheckoutDir:  env.WorkDir,
-		RuntimeRoots: append(sandboxRuntimeRoots(), binaryRoots...),
-		ExtraMounts:  sandboxExtraMounts(env),
-		AgentSocket:  agentSocket,
+		TaskRoot:        env.RootDir,
+		HomeDir:         homeDir,
+		ReadOnlyHome:    hostHome,
+		HiddenHomePaths: sandboxHiddenHomePaths(hostHome, profileDir),
+		TempDir:         tempDir,
+		CheckoutDir:     env.WorkDir,
+		RuntimeRoots:    append(sandboxRuntimeRoots(), binaryRoots...),
+		ExtraMounts:     sandboxExtraMounts(env),
+		AgentSocket:     agentSocket,
 		// The CLI's install directory is code the sandbox must execute. It
 		// may live under the user's home, so it is named explicitly rather
-		// than reached through a broader rule.
+		// than reached through a broader rule. The home itself is mounted by
+		// ReadOnlyHome, not through this list: allowing the home here would
+		// also allow every path under it.
 		AllowedRoots:   append([]string{env.RootDir}, binaryRoots...),
 		ForbiddenRoots: sandboxForbiddenRoots(d.cfg.WorkspacesRoot, profileDir),
-		// The signing socket lives in the profile directory, which is
-		// forbidden as a tree. Naming the socket file grants exactly it.
-		AllowedExactPaths: []string{agentSocket},
+		// Per-task config paths and the signing socket live under roots the
+		// boundary forbids as trees. Naming each exact path grants that path
+		// and nothing around it.
+		AllowedExactPaths: append([]string{agentSocket}, extraMountSources(extras)...),
 		Env: map[string]string{
 			"PATH": sandboxPath(),
 		},
@@ -92,7 +100,7 @@ func (d *Daemon) sandboxedBackend(
 	}
 
 	sandboxConfig := sandbox.ConfigFromAgent(config)
-	sandboxConfig.Env = sandboxAgentEnv(config.Env)
+	sandboxConfig.Env = sandboxAgentEnv(config.Env, hostHome)
 	backend := &sandbox.IPCBackend{
 		Provider: provider,
 		Config:   sandboxConfig,
@@ -142,6 +150,17 @@ func sandboxExtraMounts(env *execenv.Environment) []sandbox.Mount {
 	return mounts
 }
 
+// extraMountSources lists the sources of the per-task extra mounts.
+func extraMountSources(mounts []sandbox.Mount) []string {
+	sources := make([]string, 0, len(mounts))
+	for _, mount := range mounts {
+		if mount.Source != "" {
+			sources = append(sources, mount.Source)
+		}
+	}
+	return sources
+}
+
 // sandboxForbiddenRoots names the trees no mount may reach into.
 //
 // The shared workspaces root holds every task's checkout; the host home holds
@@ -175,12 +194,15 @@ func sandboxForbiddenRoots(workspacesRoot, profileDir string) []string {
 // that name them would point at directories that do not exist in there. The
 // keys that point at per-task config the sandbox mounts unchanged are left
 // alone.
-func sandboxAgentEnv(env map[string]string) map[string]string {
+func sandboxAgentEnv(env map[string]string, home string) map[string]string {
 	rewritten := make(map[string]string, len(env))
 	for key, value := range env {
 		rewritten[key] = value
 	}
-	rewritten["HOME"] = sandbox.HomePath
+	if home == "" {
+		home = sandbox.HomePath
+	}
+	rewritten["HOME"] = home
 	rewritten["TMPDIR"] = sandbox.TempPath
 	rewritten["TMP"] = sandbox.TempPath
 	rewritten["TEMP"] = sandbox.TempPath
@@ -191,6 +213,50 @@ func sandboxAgentEnv(env map[string]string) map[string]string {
 		rewritten["CLAUDE_CODE_TMPDIR"] = sandbox.TempPath
 	}
 	return rewritten
+}
+
+// sandboxHiddenHomePaths names the credential stores inside the host home that
+// the sandbox must not be able to read.
+//
+// The boundary protects the code and the credentials, not the whole home: a
+// provider CLI still reads its own configuration from there. These are the
+// paths that would otherwise hand the agent a credential directly — the Git
+// keys, the Git credential files, and this application's own session token,
+// which would be a full account takeover.
+//
+// MULTICA_SANDBOX_HIDE adds more, one absolute path per comma, for an operator
+// who keeps other tokens in the home.
+func sandboxHiddenHomePaths(home, profileDir string) []string {
+	if home == "" {
+		return nil
+	}
+	paths := []string{
+		filepath.Join(home, ".ssh"),
+		filepath.Join(home, ".git-credentials"),
+		filepath.Join(home, ".netrc"),
+		filepath.Join(home, ".config", "git", "credentials"),
+		// A gh token is a Git credential with the same reach as a key.
+		filepath.Join(home, ".config", "gh"),
+		// The CLI config holds the user's session token.
+		filepath.Join(home, ".multica"),
+	}
+	if profileDir != "" && isUnderPath(profileDir, home) {
+		paths = append(paths, profileDir)
+	}
+	for _, extra := range strings.Split(os.Getenv("MULTICA_SANDBOX_HIDE"), ",") {
+		if extra = strings.TrimSpace(extra); extra != "" {
+			paths = append(paths, extra)
+		}
+	}
+	return paths
+}
+
+// isUnderPath reports whether path is root or below it.
+func isUnderPath(path, root string) bool {
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 // sandboxBinaryRoots lists the directories that hold the agent CLI.

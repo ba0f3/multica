@@ -74,13 +74,34 @@ Opt-in: `MULTICA_TASK_SANDBOX=1`. When enabled, every attempt runs inside
 | Policy construction, launch and config | `server/internal/daemon/sandbox_launch.go`, `config.go` |
 
 The boundary unshares user, PID, IPC, UTS and cgroup namespaces, drops all
-capabilities, sets `--no-new-privileges`, `--new-session` and
-`--die-with-parent`, and clears the environment. It mounts the task's checkout,
-a private HOME, a private `/tmp`, the read-only system runtime, the per-task
-provider config the daemon built, and — when a credential exists — only the
-attempt's signing socket. The host home, the shared workspaces root and the
-daemon profile are refused as mount sources; a single named file (the signing
-socket) is the only exception.
+capabilities, sets `--new-session` and `--die-with-parent`, and clears the
+environment. bwrap forces `no_new_privs` itself; older releases have no flag
+for it.
+
+What is isolated is **the code and the credentials**, not the whole home:
+
+| Mount | Access |
+| --- | --- |
+| The task's checkout | read-write at `/workspace/repo` |
+| A private `/tmp` | read-write |
+| The agent CLI's install directory | read-only |
+| The system runtime (`/usr`, `/bin`, `/lib*`, `/etc`) | read-only |
+| The host home | **read-only**, so provider CLIs find their config |
+| `~/.ssh` | **hidden** (empty mount) |
+| `~/.multica` (the CLI session token) | **hidden** (empty mount) |
+| `~/.git-credentials`, `~/.netrc`, `~/.config/git/credentials` | **hidden** (`/dev/null`) |
+| `~/.config/gh` (a GitHub token is a Git credential) | **hidden** |
+| The per-task provider config the daemon built | read-write, after the shadows |
+| The attempt's signing socket | only that socket, at `/run/multica/ssh-agent.sock` |
+| The shared workspaces root | refused as a mount source |
+| The daemon profile directory | refused as a mount source; only named per-task paths inside it are allowed |
+
+This deliberately differs from the PR #95 wording, which said the host home is
+never mounted. Hiding the whole home breaks every provider CLI that reads its
+own configuration for no security gain, and leaves two things unaddressed: the
+home is read-only, so a CLI that insists on writing under `$HOME` fails, and
+`MULTICA_SANDBOX_HIDE` lets an operator hide more (for example `~/.aws`,
+`~/.kube` or `~/.docker`, which are readable by default).
 
 The network is deliberately **not** unshared: tasks clone repositories and call
 their model provider.
@@ -95,14 +116,16 @@ user.
   run on the host and one task can reach a sibling attempt's signing socket
   through the daemon profile. The per-task boundary holds only when the sandbox
   is enabled; do not describe the socket as task-isolated otherwise.
-- **Sandbox provider auth is unresolved.** A private HOME means the CLI cannot
-  read host config files. Providers that accept an API key or token in the
-  environment work; providers that need a file under the host home (the shared
-  `~/.codex/auth.json` symlink in particular) will not authenticate inside the
-  boundary. The per-task config directories the daemon already builds are
-  mounted, but the host-home symlinks they may contain point outside the
-  sandbox. This needs a provider-by-provider pass before enabling the sandbox
-  in production.
+- **The home is read-only.** A provider CLI reads its configuration from the
+  real home, but cannot write there. Codex is redirected to its per-task
+  `CODEX_HOME`; a CLI that writes state under `$HOME` (for example Claude's
+  `~/.claude/projects`) will fail until that provider gets a writable overlay
+  over its state directory. This needs a provider-by-provider pass before
+  enabling the sandbox in production.
+- **Cloud credentials stay readable by default.** `~/.aws`, `~/.kube` and
+  `~/.docker` are not in the default hidden list, because a provider may need
+  them (Bedrock reads `~/.aws`). An operator who does not should add them to
+  `MULTICA_SANDBOX_HIDE`.
 - **Run-scoped supplements are unavailable in the sandbox.** The IPC transport
   is one-way after the manifest, so `Session.Supplement` is nil and a task
   running inside the sandbox cannot receive an additional human instruction
@@ -143,7 +166,7 @@ Run from the repository root:
 | HTTP surface, claim binding | `go -C server test ./internal/handler/` |
 | Agent socket | `go -C server test ./internal/daemon/gitagent/` |
 | Socket wiring | `go -C server test ./internal/daemon/ -run TestStartGitAgentSocket` |
-| Sandbox boundary (real bwrap) | `(cd server && MULTICA_BWRAP_SMOKE=1 go test ./internal/daemon/sandbox/ -run TestBwrapSmoke -v)` |
+| Sandbox boundary (real bwrap) | `(cd server && MULTICA_BWRAP_SMOKE=1 go test ./internal/daemon/sandbox/ -run TestBwrapSmoke -v)` — asserts the checkout is writable, `~/.ssh` and the Multica token are invisible, the provider config is readable, and the home and sibling tasks cannot be written |
 | Sandbox launch and policy | `go -C server test ./internal/daemon/sandbox/ ./internal/daemon/ -run 'TestSandbox\|TestBuildArgs'` |
 | Migrations | `make migrate-up` then `make status` |
 | Frontend data layer | `pnpm --filter @multica/core test` |

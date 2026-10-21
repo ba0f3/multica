@@ -195,3 +195,107 @@ func TestBuildArgsEndsWithTheWorkerCommand(t *testing.T) {
 		t.Error("the worker executable is not mounted into the sandbox")
 	}
 }
+
+func TestBuildArgsMountsTheHomeReadOnlyAndHidesCredentials(t *testing.T) {
+	policy := newTestPolicy(t)
+	home := filepath.Join(t.TempDir(), "host-home")
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o755); err != nil {
+		t.Fatalf("create .ssh: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("create .claude: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".git-credentials"), []byte("token"), 0o600); err != nil {
+		t.Fatalf("create .git-credentials: %v", err)
+	}
+	policy.ReadOnlyHome = home
+	policy.HiddenHomePaths = []string{
+		filepath.Join(home, ".ssh"),
+		filepath.Join(home, ".git-credentials"),
+		// A path that does not exist is skipped, not an error.
+		filepath.Join(home, ".netrc"),
+	}
+
+	args, err := BuildArgs(policy, testSelf(t))
+	if err != nil {
+		t.Fatalf("BuildArgs: %v", err)
+	}
+
+	if !argsContain(args, "--ro-bind", home, home) {
+		t.Error("the home is not mounted read-only")
+	}
+	if !argsContain(args, "--setenv", "HOME", home) {
+		t.Error("HOME does not name the mounted home, so a provider cannot find its config")
+	}
+	// A directory is hidden by an empty directory, a file by /dev/null.
+	if !argsContain(args, "--ro-bind", filepath.Join(policy.TaskRoot, "empty-mount"), filepath.Join(home, ".ssh")) {
+		t.Error("the SSH directory is not hidden")
+	}
+	if !argsContain(args, "--ro-bind", "/dev/null", filepath.Join(home, ".git-credentials")) {
+		t.Error("the Git credential file is not hidden")
+	}
+	if argsContain(args, filepath.Join(home, ".netrc")) {
+		t.Error("a hidden path that does not exist should be skipped")
+	}
+	// The provider's own config is NOT hidden: that is the whole point of
+	// mounting the home instead of replacing it.
+	if !argsContain(args, "--ro-bind", home, home) {
+		t.Error("the home mount is missing")
+	}
+}
+
+func TestBuildArgsRefusesAHiddenPathOutsideTheHome(t *testing.T) {
+	policy := newTestPolicy(t)
+	policy.ReadOnlyHome = filepath.Join(t.TempDir(), "host-home")
+	if err := os.MkdirAll(policy.ReadOnlyHome, 0o755); err != nil {
+		t.Fatalf("create home: %v", err)
+	}
+	policy.HiddenHomePaths = []string{filepath.Join(policy.TaskRoot, "elsewhere")}
+
+	if _, err := BuildArgs(policy, testSelf(t)); err == nil {
+		t.Fatal("a hidden path outside the home was accepted")
+	}
+}
+
+func TestBuildArgsAllowsANamedPathInsideAForbiddenRoot(t *testing.T) {
+	policy := newTestPolicy(t)
+	forbidden := policy.ForbiddenRoots[0]
+	named := filepath.Join(forbidden, "other-user", "task-9")
+	if err := os.MkdirAll(named, 0o755); err != nil {
+		t.Fatalf("create the named path: %v", err)
+	}
+	policy.AllowedExactPaths = []string{named}
+	policy.ExtraMounts = []Mount{{Source: named, Target: named}}
+
+	if _, err := BuildArgs(policy, testSelf(t)); err != nil {
+		t.Fatalf("a named path inside a forbidden root was refused: %v", err)
+	}
+
+	// The parent is still refused: naming one path must not open the tree.
+	policy.AllowedExactPaths = nil
+	if _, err := BuildArgs(policy, testSelf(t)); err == nil {
+		t.Fatal("the forbidden root was opened by a named sibling")
+	}
+}
+
+func TestBuildArgsRefusesToLetCallerEnvOverrideTheBoundaryPaths(t *testing.T) {
+	policy := newTestPolicy(t)
+	policy.Env = map[string]string{
+		"HOME":          "/home/elsewhere",
+		"TMPDIR":        "/tmp/elsewhere",
+		"SSH_AUTH_SOCK": "/run/other/agent.sock",
+	}
+	args, err := BuildArgs(policy, testSelf(t))
+	if err != nil {
+		t.Fatalf("BuildArgs: %v", err)
+	}
+	if argsContain(args, "--setenv", "HOME", "/home/elsewhere") {
+		t.Error("a caller overrode HOME")
+	}
+	if argsContain(args, "--setenv", "TMPDIR", "/tmp/elsewhere") {
+		t.Error("a caller overrode TMPDIR")
+	}
+	if argsContain(args, "--setenv", "SSH_AUTH_SOCK", "/run/other/agent.sock") {
+		t.Error("a caller redirected the signing socket")
+	}
+}
