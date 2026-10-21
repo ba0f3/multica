@@ -31,6 +31,16 @@ func newTestPolicy(t *testing.T) Policy {
 	}
 }
 
+// testSelf creates the worker executable the policy mounts.
+func testSelf(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "multica")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write the worker executable: %v", err)
+	}
+	return path
+}
+
 func argsContain(args []string, want ...string) bool {
 	joined := strings.Join(args, "\x00")
 	return strings.Contains(joined, strings.Join(want, "\x00"))
@@ -38,7 +48,7 @@ func argsContain(args []string, want ...string) bool {
 
 func TestBuildArgsIsolatesTheTask(t *testing.T) {
 	policy := newTestPolicy(t)
-	args, err := BuildArgs(policy, "/usr/local/bin/multica")
+	args, err := BuildArgs(policy, testSelf(t))
 	if err != nil {
 		t.Fatalf("BuildArgs: %v", err)
 	}
@@ -52,7 +62,6 @@ func TestBuildArgsIsolatesTheTask(t *testing.T) {
 		"--new-session",
 		"--die-with-parent",
 		"--cap-drop", "ALL",
-		"--no-new-privileges",
 	} {
 		if !argsContain(args, flag) {
 			t.Errorf("argv is missing %q", flag)
@@ -62,11 +71,17 @@ func TestBuildArgsIsolatesTheTask(t *testing.T) {
 	if argsContain(args, "--unshare-net") {
 		t.Error("argv unshares the network, which would break Git and model calls")
 	}
+	// bwrap itself forces no_new_privs during setup; older releases have no
+	// flag for it, so asserting one here would pin an option that does not
+	// exist.
+	if argsContain(args, "--no-new-privileges") {
+		t.Error("argv carries a bwrap option that is not supported")
+	}
 }
 
 func TestBuildArgsMountsOnlyTheTaskAndTheRuntime(t *testing.T) {
 	policy := newTestPolicy(t)
-	args, err := BuildArgs(policy, "/usr/local/bin/multica")
+	args, err := BuildArgs(policy, testSelf(t))
 	if err != nil {
 		t.Fatalf("BuildArgs: %v", err)
 	}
@@ -98,7 +113,7 @@ func TestBuildArgsRefusesToMountTheHostOrAnotherTask(t *testing.T) {
 		Source: filepath.Join(policy.ForbiddenRoots[0], "other-user", "task-9"),
 		Target: "/opt/borrowed",
 	}}
-	if _, err := BuildArgs(policy, "/usr/local/bin/multica"); err == nil {
+	if _, err := BuildArgs(policy, testSelf(t)); err == nil {
 		t.Fatal("a mount under the shared workspaces root was accepted")
 	}
 }
@@ -106,7 +121,7 @@ func TestBuildArgsRefusesToMountTheHostOrAnotherTask(t *testing.T) {
 func TestBuildArgsRefusesAMissingSource(t *testing.T) {
 	policy := newTestPolicy(t)
 	policy.ExtraMounts = []Mount{{Source: filepath.Join(policy.TaskRoot, "missing"), Target: "/opt/missing"}}
-	if _, err := BuildArgs(policy, "/usr/local/bin/multica"); err == nil {
+	if _, err := BuildArgs(policy, testSelf(t)); err == nil {
 		t.Fatal("a mount with a missing source was accepted")
 	}
 }
@@ -128,7 +143,7 @@ func TestBuildArgsRequiresTheEssentialPaths(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			policy := newTestPolicy(t)
 			mutate(&policy)
-			if _, err := BuildArgs(policy, "/usr/local/bin/multica"); err == nil {
+			if _, err := BuildArgs(policy, testSelf(t)); err == nil {
 				t.Fatal("BuildArgs accepted an incomplete policy")
 			}
 		})
@@ -149,20 +164,21 @@ func TestBuildArgsMountsTheAgentSocketWhenOneIsGranted(t *testing.T) {
 	}
 	policy.AgentSocket = socket
 
-	args, err := BuildArgs(policy, "/usr/local/bin/multica")
+	args, err := BuildArgs(policy, testSelf(t))
 	if err != nil {
 		t.Fatalf("BuildArgs: %v", err)
 	}
 	if !argsContain(args, "--bind", socket, sandboxAgentSocket) {
 		t.Error("the signing socket is not mounted")
 	}
-	if !argsContain(args, "--setenv", "SSH_AUTH_SOCK="+sandboxAgentSocket) {
+	if !argsContain(args, "--setenv", "SSH_AUTH_SOCK", sandboxAgentSocket) {
 		t.Error("SSH_AUTH_SOCK does not point at the mounted socket")
 	}
 }
 
 func TestBuildArgsEndsWithTheWorkerCommand(t *testing.T) {
-	args, err := BuildArgs(newTestPolicy(t), "/usr/local/bin/multica")
+	self := testSelf(t)
+	args, err := BuildArgs(newTestPolicy(t), self)
 	if err != nil {
 		t.Fatalf("BuildArgs: %v", err)
 	}
@@ -170,7 +186,12 @@ func TestBuildArgsEndsWithTheWorkerCommand(t *testing.T) {
 		t.Fatalf("argv is too short: %v", args)
 	}
 	tail := args[len(args)-3:]
-	if tail[0] != "--" || tail[1] != "/usr/local/bin/multica" || tail[2] != WorkerArg {
-		t.Fatalf("argv does not end with -- <self> %s: %v", WorkerArg, tail)
+	if tail[0] != "--" || tail[1] != sandboxWorker || tail[2] != WorkerArg {
+		t.Fatalf("argv does not end with -- <worker> %s: %v", WorkerArg, tail)
+	}
+	// The worker runs from inside the boundary, so its executable is mounted
+	// there rather than executed from a host path.
+	if !argsContain(args, "--ro-bind", self, sandboxWorker) {
+		t.Error("the worker executable is not mounted into the sandbox")
 	}
 }

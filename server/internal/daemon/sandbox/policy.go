@@ -26,6 +26,10 @@ const (
 	sandboxHome        = "/home/agent"
 	sandboxTemp        = "/tmp"
 	sandboxAgentSocket = "/run/multica/ssh-agent.sock"
+	// sandboxWorker is where the worker executable is mounted. The host path
+	// is deliberately not reused: the daemon binary may live under the
+	// user's home, which the boundary does not mount.
+	sandboxWorker = "/run/multica/worker"
 )
 
 // CheckoutPath and HomePath are the in-sandbox paths the daemon must use when
@@ -129,17 +133,33 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		"--new-session",
 		"--die-with-parent",
 		"--cap-drop", "ALL",
-		"--no-new-privileges",
 		"--proc", "/proc",
 		"--dev", "/dev",
 	}
 
+	allowedExact := make(map[string]struct{}, len(policy.AllowedExactPaths)+1)
+	for _, allowed := range policy.AllowedExactPaths {
+		if strings.TrimSpace(allowed) != "" {
+			allowedExact[filepath.Clean(allowed)] = struct{}{}
+		}
+	}
+	// The worker binary is named by the caller, not reached through a broader
+	// rule, so it is allowed even when it lives under a forbidden root.
+	allowedExact[filepath.Clean(self)] = struct{}{}
+
 	for _, runtimeRoot := range policy.RuntimeRoots {
-		if err := checkMountSource(runtimeRoot, policy); err != nil {
+		if err := checkMountSource(runtimeRoot, policy, allowedExact); err != nil {
 			return nil, err
 		}
 		args = append(args, "--ro-bind", runtimeRoot, runtimeRoot)
 	}
+
+	// The worker itself runs from inside the boundary, so its executable has
+	// to be there.
+	if err := checkMountSource(self, policy, allowedExact); err != nil {
+		return nil, err
+	}
+	args = append(args, "--ro-bind", self, sandboxWorker)
 
 	writable := []Mount{
 		{Source: policy.CheckoutDir, Target: sandboxRepo},
@@ -148,7 +168,7 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	}
 	writable = append(writable, policy.ExtraMounts...)
 	for _, mount := range writable {
-		if err := checkMountSource(mount.Source, policy); err != nil {
+		if err := checkMountSource(mount.Source, policy, allowedExact); err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(mount.Target) == "" {
@@ -164,7 +184,7 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	// The agent socket is a capability, not a secret: mounting it is what
 	// lets Git sign without a private key in the sandbox.
 	if policy.AgentSocket != "" {
-		if err := checkMountSource(policy.AgentSocket, policy); err != nil {
+		if err := checkMountSource(policy.AgentSocket, policy, allowedExact); err != nil {
 			return nil, err
 		}
 		args = append(args, "--bind", policy.AgentSocket, sandboxAgentSocket)
@@ -181,11 +201,12 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		env[key] = value
 	}
 	// Sorted so the argv is stable for tests and for log comparison.
+	// bwrap takes one variable per flag: --setenv KEY VALUE.
 	for _, key := range sortedKeys(env) {
-		args = append(args, "--setenv", key+"="+env[key])
+		args = append(args, "--setenv", key, env[key])
 	}
 
-	args = append(args, "--chdir", sandboxRepo, "--", self, WorkerArg)
+	args = append(args, "--chdir", sandboxRepo, "--", sandboxWorker, WorkerArg)
 	return args, nil
 }
 
@@ -194,7 +215,7 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 //
 // A missing source is an error rather than a skipped mount: silently dropping
 // a bind would start the agent with a path it expects to be there.
-func checkMountSource(source string, policy Policy) error {
+func checkMountSource(source string, policy Policy, allowedExact map[string]struct{}) error {
 	if strings.TrimSpace(source) == "" {
 		return fmt.Errorf("sandbox: empty mount source")
 	}
@@ -206,12 +227,6 @@ func checkMountSource(source string, policy Policy) error {
 		return fmt.Errorf("sandbox: mount source %q is not accessible: %w", cleaned, err)
 	}
 
-	allowedExact := make(map[string]struct{}, len(policy.AllowedExactPaths))
-	for _, allowed := range policy.AllowedExactPaths {
-		if strings.TrimSpace(allowed) != "" {
-			allowedExact[filepath.Clean(allowed)] = struct{}{}
-		}
-	}
 	if _, ok := allowedExact[cleaned]; ok {
 		return nil
 	}

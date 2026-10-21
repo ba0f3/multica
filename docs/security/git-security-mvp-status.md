@@ -106,10 +106,12 @@ user.
   running inside the sandbox cannot receive an additional human instruction
   mid-turn. The daemon treats that as "no run-scoped input" and does not claim
   durable input.
-- **No live kernel test.** The policy and argv are unit tested, and the
-  launcher is tested against a fake `bwrap`. The boundary has not been started
-  on a host with unprivileged user namespaces available, so the spec's sandbox
-  acceptance checks are still outstanding.
+- **Only one live kernel test.** The policy and argv are unit tested, the
+  launcher is tested against a fake `bwrap`, and `bwrap_smoke_test.go` starts a
+  real boundary when `MULTICA_BWRAP_SMOKE=1`: it verifies the checkout is
+  writable, the private HOME is in place, and both a host file and a sibling
+  task's directory are unreadable. It has not been run with a real agent CLI,
+  so the spec's provider-level sandbox checks are still outstanding.
 - **Live provider verification.** The GitHub and Gitea banner parsers are unit
   tested against fixtures, and the host-key pinning is tested. Neither adapter
   has been run against a real provider, so compatibility is not yet claimed.
@@ -139,6 +141,8 @@ Run from the repository root:
 | HTTP surface, claim binding | `go -C server test ./internal/handler/` |
 | Agent socket | `go -C server test ./internal/daemon/gitagent/` |
 | Socket wiring | `go -C server test ./internal/daemon/ -run TestStartGitAgentSocket` |
+| Sandbox boundary (real bwrap) | `(cd server && MULTICA_BWRAP_SMOKE=1 go test ./internal/daemon/sandbox/ -run TestBwrapSmoke -v)` |
+| Sandbox launch and policy | `go -C server test ./internal/daemon/sandbox/ ./internal/daemon/ -run 'TestSandbox\|TestBuildArgs'` |
 | Migrations | `make migrate-up` then `make status` |
 | Frontend data layer | `pnpm --filter @multica/core test` |
 | Frontend UI | `pnpm --filter @multica/views test` |
