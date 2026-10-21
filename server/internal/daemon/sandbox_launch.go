@@ -24,12 +24,18 @@ var errSandboxUnavailable = errors.New("sandbox unavailable")
 func parseTaskSandboxEnv(raw string) (enabled bool, backend string) {
 	value := strings.TrimSpace(strings.ToLower(raw))
 	switch value {
-	case "", "0", "false":
+	case "0", "false", "off", "disabled", "no":
 		return false, ""
-	case "1", "true":
+	case "bwrap":
 		return true, "bwrap"
-	case "bwrap", "docker":
-		return true, value
+	case "docker":
+		return true, "docker"
+	case "1", "true", "on", "yes":
+		return true, "docker"
+	case "":
+		// Git security MVP: every task attempt is isolated unless the operator
+		// opts out with MULTICA_TASK_SANDBOX=false.
+		return true, "docker"
 	default:
 		return true, value
 	}

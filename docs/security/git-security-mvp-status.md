@@ -9,7 +9,8 @@ Status date: **2026-10-21**. Branch: `feature/git-security-mvp`. Spec revision: 
 | Item | State | Evidence |
 | --- | --- | --- |
 | Docker `run` launcher, private mounts, resource flags | **Implemented** | `server/internal/daemon/sandbox/docker.go`, `sandbox_launch_docker.go`; `go test ./internal/daemon/ -run TestDocker -count=1` **pass** |
-| `MULTICA_TASK_SANDBOX=docker`, protected mode | **Implemented** | `server/internal/daemon/config.go` (`MULTICA_TASK_PROTECTED`, `MULTICA_DOCKER_*`) |
+| `MULTICA_TASK_SANDBOX` default **docker** (opt-out `false`) | **Implemented** | `parseTaskSandboxEnv` in `sandbox_launch.go`; `TestTaskIsolationE2E_DefaultConfigEnablesDockerSandbox` |
+| Protected mode | **Implemented** | `MULTICA_TASK_PROTECTED` in `config.go` |
 | Task worker image scaffold | **Added** | `docker/task-worker/Dockerfile` (not built in CI here) |
 | Real Docker daemon integration | **Blocked** | VM has no `docker` CLI/engine (`which docker` missing) |
 | Native agent matrix (Codex/Cursor/OpenCode) | **Not run** | Requires image build + authorized real-agent smoke per AGENTS.md |
@@ -37,6 +38,8 @@ Existing UI/API/custody from branch baseline **retained**. No new gaps addressed
 | --- | --- |
 | `go -C server test ./internal/daemon/sandbox/ -count=1` | **pass** |
 | `go -C server test ./internal/daemon/ -run 'TestSandbox|TestDocker|TestProtected|TestIPCBackend|TestBuildDocker|TestContainer' -count=1` | **pass** |
+| `go -C server test ./internal/daemon/ -run TestTaskIsolationE2E_ -count=1` | **pass** |
+| `pnpm exec playwright test e2e/task-isolation.spec.ts` | **pass** (wraps Go e2e) |
 | `go -C server test ./internal/r2dgit/ -count=1` | **pass** |
 | `go -C server test ./internal/handler/ -run 'TestOpenGitSigning|TestAgentEnv_TaskToken' -count=1` | **pass** (DB tests skip when no DB) |
 | Docker image build / live container smoke | **blocked** (no Docker); manual steps: [docker-task-worker-manual-test.md](docker-task-worker-manual-test.md) |

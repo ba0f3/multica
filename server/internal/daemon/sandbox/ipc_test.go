@@ -162,6 +162,7 @@ func TestExecSpecKeepsEveryOptionTheBackendsRead(t *testing.T) {
 		ClaudeSettingsPath:   "/tmp/settings.json",
 		CursorHookCommand:    []string{"multica", "__cursor_hook"},
 		McpConfig:            json.RawMessage(`{"mcpServers":{}}`),
+		IsolatedToolBoundary: true,
 	}
 	roundTripped := ConvertExecOptions(options).ExecOptions()
 	if roundTripped.EnableTaskSupplement != options.EnableTaskSupplement ||
@@ -178,7 +179,8 @@ func TestExecSpecKeepsEveryOptionTheBackendsRead(t *testing.T) {
 		len(roundTripped.ExtraArgs) != 1 ||
 		len(roundTripped.CustomArgs) != 1 ||
 		len(roundTripped.CursorHookCommand) != 2 ||
-		string(roundTripped.McpConfig) != string(options.McpConfig) {
+		string(roundTripped.McpConfig) != string(options.McpConfig) ||
+		roundTripped.IsolatedToolBoundary != options.IsolatedToolBoundary {
 		t.Fatalf("an execution option was lost:\n got %+v\nwant %+v", roundTripped, options)
 	}
 }

@@ -1,6 +1,14 @@
 # Tool isolation (Git security MVP)
 
-This document describes how Multica constrains **Codex**, **Cursor**, and **OpenCode** when `MULTICA_TASK_SANDBOX` enables the Docker or bubblewrap worker boundary. **Network deny** (egress policy) is a separate follow-up; it is not required for the rules below.
+This document describes how Multica constrains **Codex**, **Cursor**, and **OpenCode** inside the Docker or bubblewrap worker boundary. **By default** every daemon enables the sandbox (`MULTICA_TASK_SANDBOX` unset → Docker). Opt out with `MULTICA_TASK_SANDBOX=false`. **Network deny** (egress policy) is a separate follow-up.
+
+## Defaults
+
+| Setting | Default |
+| --- | --- |
+| `MULTICA_TASK_SANDBOX` | enabled (`docker`) |
+| `MULTICA_TASK_SANDBOX=false` | host execution (development only) |
+| `MULTICA_TASK_PROTECTED=1` | fail closed when the boundary cannot be built |
 
 ## Scope
 
@@ -41,10 +49,16 @@ This document describes how Multica constrains **Codex**, **Cursor**, and **Open
 Automated:
 
 ```bash
+go test ./server/internal/daemon/ -run TestTaskIsolationE2E_ -count=1
+pnpm exec playwright test e2e/task-isolation.spec.ts
 go test ./server/internal/daemon/sandbox/...
-go test ./server/internal/daemon/ -run 'Sandbox|Docker|Provider'
-go test ./server/pkg/agent/ -run 'OpenCodeIsolated|EnforceOpenCode'
-go test ./server/internal/daemon/execenv/ -run Cursor
+go test ./server/pkg/agent/ -run EnforceOpenCode -count=1
+```
+
+Optional real OpenCode (free tier) argv smoke:
+
+```bash
+MULTICA_RUN_REAL_AGENT_SMOKE=1 go test ./server/internal/daemon/ -run TestTaskIsolationE2E_OpenCodeRealFreeTier -count=1 -v
 ```
 
 Manual Docker checklist: [docker-task-worker-manual-test.md](./docker-task-worker-manual-test.md).

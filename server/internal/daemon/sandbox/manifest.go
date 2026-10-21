@@ -75,6 +75,7 @@ type ExecSpec struct {
 	OpenclawMode               string          `json:"openclaw_mode,omitempty"`
 	ClaudeSettingsPath         string          `json:"claude_settings_path,omitempty"`
 	CursorHookCommand          []string        `json:"cursor_hook_command,omitempty"`
+	IsolatedToolBoundary       bool            `json:"isolated_tool_boundary,omitempty"`
 }
 
 // WriteManifest writes the manifest as one JSON line.
@@ -140,6 +141,7 @@ func ConvertExecOptions(opts agent.ExecOptions) ExecSpec {
 		OpenclawMode:               opts.OpenclawMode,
 		ClaudeSettingsPath:         opts.ClaudeSettingsPath,
 		CursorHookCommand:          append([]string(nil), opts.CursorHookCommand...),
+		IsolatedToolBoundary:       opts.IsolatedToolBoundary,
 	}
 }
 
@@ -171,6 +173,7 @@ func (s ExecSpec) ExecOptions() agent.ExecOptions {
 		OpenclawMode:               s.OpenclawMode,
 		ClaudeSettingsPath:         s.ClaudeSettingsPath,
 		CursorHookCommand:          append([]string(nil), s.CursorHookCommand...),
+		IsolatedToolBoundary:       s.IsolatedToolBoundary,
 	}
 }
 
