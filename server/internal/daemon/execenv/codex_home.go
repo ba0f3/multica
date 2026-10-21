@@ -90,6 +90,9 @@ type CodexHomeOptions struct {
 	// override that never lands in config.toml. See resolveWindowsSandboxState
 	// and MUL-4957.
 	CodexCustomArgs []string
+	// IsolatedToolBoundary prepares CODEX_HOME for a worker boundary: auth and
+	// config must not symlink back into the host daemon user's ~/.codex.
+	IsolatedToolBoundary bool
 }
 
 // prepareCodexHome is a thin wrapper around prepareCodexHomeWithOpts kept for
@@ -213,12 +216,23 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 		logger.Warn("execenv: codex-home sessions dir prepare failed", "error", err)
 	}
 
-	// Symlink shared files (auth).
-	for _, name := range codexSymlinkedFiles {
-		src := filepath.Join(sharedHome, name)
-		dst := filepath.Join(codexHome, name)
-		if err := ensureSymlink(src, dst); err != nil {
-			logger.Warn("execenv: codex-home symlink failed", "file", name, "error", err)
+	// Auth: symlink on host runs shares refresh; isolated workers get a copy so
+	// container paths never chase a host-only symlink target.
+	if opts.IsolatedToolBoundary {
+		for _, name := range codexSymlinkedFiles {
+			src := filepath.Join(sharedHome, name)
+			dst := filepath.Join(codexHome, name)
+			if err := syncCopiedFile(src, dst); err != nil {
+				logger.Warn("execenv: codex-home auth copy failed", "file", name, "error", err)
+			}
+		}
+	} else {
+		for _, name := range codexSymlinkedFiles {
+			src := filepath.Join(sharedHome, name)
+			dst := filepath.Join(codexHome, name)
+			if err := ensureSymlink(src, dst); err != nil {
+				logger.Warn("execenv: codex-home symlink failed", "file", name, "error", err)
+			}
 		}
 	}
 

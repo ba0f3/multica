@@ -139,6 +139,13 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		args = append(args, "--session", opts.ResumeSessionID)
 	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, opencodeBlockedArgs, b.cfg.Logger)...)
+	if opts.IsolatedToolBoundary {
+		args, err = enforceOpenCodeIsolatedLaunch(args, usesV2)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	// The task prompt is delivered on stdin, never argv — see the StdinPipe
 	// wiring below. `opencode run` merges its variadic [message..] positional
 	// with whatever is piped in, so an invocation that passes no positional

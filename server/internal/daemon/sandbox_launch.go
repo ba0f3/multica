@@ -54,6 +54,9 @@ func (d *Daemon) sandboxedBackend(
 		}
 		return nil, nil
 	}
+	if !sandbox.ProviderSupportsIsolatedTools(provider) {
+		return nil, fmt.Errorf("%w: provider %q is not supported in the isolated tool boundary (codex, cursor, opencode only)", errSandboxUnavailable, provider)
+	}
 	if d.cfg.TaskProtectedMode && d.cfg.TaskSandboxBackend == "" {
 		return nil, fmt.Errorf("%w: protected mode requires a sandbox backend", errSandboxUnavailable)
 	}

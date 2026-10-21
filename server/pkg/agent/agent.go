@@ -138,6 +138,9 @@ type ExecOptions struct {
 	// EnableTaskSupplement, to accept additional messages; other providers
 	// ignore it.
 	CursorHookCommand []string
+	// IsolatedToolBoundary marks a run inside the Docker/bwrap worker. Backends
+	// tighten argv and connection rules so tools cannot reach host-side services.
+	IsolatedToolBoundary bool
 	// piMcpExtensionPath is set by piBackend.Execute after it writes the
 	// temporary MCP extension. The daemon does not fill it.
 	piMcpExtensionPath string

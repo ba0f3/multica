@@ -13,7 +13,8 @@ Status date: **2026-10-21**. Branch: `feature/git-security-mvp`. Spec revision: 
 | Task worker image scaffold | **Added** | `docker/task-worker/Dockerfile` (not built in CI here) |
 | Real Docker daemon integration | **Blocked** | VM has no `docker` CLI/engine (`which docker` missing) |
 | Native agent matrix (Codex/Cursor/OpenCode) | **Not run** | Requires image build + authorized real-agent smoke per AGENTS.md |
-| Network deny policy on live bridge | **Not run** | Code accepts `MULTICA_DOCKER_TASK_NETWORK`; no live firewall tests |
+| Network deny policy on live bridge | **Deferred** | Code accepts `MULTICA_DOCKER_TASK_NETWORK`; not in scope for tool-isolation slice |
+| Tool isolation (Codex/Cursor/OpenCode only) | **Implemented** | [tool-isolation.md](tool-isolation.md); provider gate, execenv copies, OpenCode `--server` ban |
 | Git prepare/finalize entirely in container | **Hybrid** | Host prepare + repocache; **host `/repo/checkout` blocked** when isolated — see [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md) |
 
 ## Signing / principal (#88) — partial

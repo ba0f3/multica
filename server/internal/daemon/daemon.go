@@ -8107,6 +8107,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			HermesSessionStore:    hermesSessionStore,
 			ReasonixEnv:           reasonixEnv,
 			CodexCustomArgs:       codexSandboxArgs,
+			IsolatedToolBoundary:  d.cfg.SandboxEnabled,
 			Task:                  taskCtx,
 		})
 		if err != nil {
@@ -8157,6 +8158,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			HermesSessionStore:    hermesSessionStore,
 			ReasonixEnv:           reasonixEnv,
 			CodexCustomArgs:       codexSandboxArgs,
+			IsolatedToolBoundary:  d.cfg.SandboxEnabled,
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
@@ -8740,6 +8742,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		OpenclawMode:           openclawMode,
 		ClaudeSettingsPath:     env.ClaudeSettingsPath,
 		QwenpawWorkspace:       env.QwenpawWorkspace,
+		IsolatedToolBoundary:   sandboxed != nil,
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -8797,6 +8800,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	})
 	if sandboxed != nil {
 		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
+		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
 	}
 	defer d.clearActiveRepoCheckoutTask(agentToken)
 
