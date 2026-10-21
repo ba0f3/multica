@@ -292,3 +292,46 @@ func TestSandboxBinaryRootsIncludesTheSymlinkAndItsTarget(t *testing.T) {
 		t.Fatalf("roots = %v, want both %q and %q", roots, linkDir, filepath.Dir(target))
 	}
 }
+
+func TestSandboxHiddenHomePathsCoverTheCredentials(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, ".multica")
+	paths := sandboxHiddenHomePaths(home, profile)
+	joined := strings.Join(paths, "\n")
+	for _, want := range []string{
+		filepath.Join(home, ".ssh"),
+		profile,
+		filepath.Join(home, ".git-credentials"),
+		filepath.Join(home, ".netrc"),
+		filepath.Join(home, ".config", "git", "credentials"),
+		filepath.Join(home, ".config", "gh"),
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the credential path %q is not hidden", want)
+		}
+	}
+	// A provider's own configuration must stay readable: hiding it is what
+	// breaks the CLI for no security gain.
+	for _, keep := range []string{
+		filepath.Join(home, ".claude"),
+		filepath.Join(home, ".codex"),
+		filepath.Join(home, ".config", "nvim"),
+	} {
+		if strings.Contains(joined, keep) {
+			t.Errorf("%q is hidden, but a provider may need it", keep)
+		}
+	}
+}
+
+func TestSandboxHiddenHomePathsHonourOperatorAdditions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MULTICA_SANDBOX_HIDE", filepath.Join(home, ".aws")+", "+filepath.Join(home, ".kube"))
+	paths := sandboxHiddenHomePaths(home, "")
+	joined := strings.Join(paths, "\n")
+	if !strings.Contains(joined, filepath.Join(home, ".aws")) {
+		t.Error("an operator addition was ignored")
+	}
+	if !strings.Contains(joined, filepath.Join(home, ".kube")) {
+		t.Error("an operator addition with surrounding spaces was ignored")
+	}
+}
