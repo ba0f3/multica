@@ -129,6 +129,10 @@ type activeRepoCheckoutTask struct {
 	AgentID     string
 	AgentName   string
 	WorkDir     string
+	// HostRepoCheckoutDisabled is set for tasks running inside an execution
+	// boundary. Git for those attempts must use native commands in the mounted
+	// workdir (container path), not the daemon's host-side repocache checkout.
+	HostRepoCheckoutDisabled bool
 }
 
 // registerActiveRepoCheckoutTask binds checkout identity to the active task.
@@ -436,6 +440,14 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 		activeTask, authResult := d.activeRepoCheckoutTask(r)
 		if authResult != repoCheckoutAuthOK {
 			d.writeRepoCheckoutAuthError(w, authResult)
+			return
+		}
+		if activeTask.HostRepoCheckoutDisabled {
+			d.logger.Warn("repo checkout rejected",
+				"reason", "host_checkout_disabled",
+				"task_id", activeTask.TaskID,
+			)
+			http.Error(w, "host repo checkout is disabled for isolated tasks; use native git in the task workdir", http.StatusForbidden)
 			return
 		}
 

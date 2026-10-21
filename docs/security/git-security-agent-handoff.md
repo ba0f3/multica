@@ -53,6 +53,10 @@ Pin commit/image/native CLI versions và Docker mode. Codex/Cursor/OpenCode ph�
 
 Default tests dùng synthetic keys/fake CLIs, không tự discover tài khoản/CLI đã đăng nhập của user. Real-agent smoke cần ủy quyền và gate `agentintegration` + `MULTICA_RUN_REAL_AGENT_SMOKE=1` theo AGENTS.md. Không dùng bwrap smoke hoặc fixture banner tests để chứng nhận Docker/native/provider compatibility.
 
+## Manual Docker verification
+
+Cloud CI has no Docker engine. Operators follow [docker-task-worker-manual-test.md](docker-task-worker-manual-test.md). Git performance tradeoffs: [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md).
+
 ## Delivery
 
 Migrations **900100–900113 đã có trên feature branch**; cập nhật inventory #12, không cấp/renumber trong docs. DB deployment chưa xác minh. Giữ no-FK/concurrent-index rules.

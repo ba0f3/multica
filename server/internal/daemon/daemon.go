@@ -8793,7 +8793,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentID:     task.AgentID,
 		AgentName:   task.Agent.Name,
 		WorkDir:     env.WorkDir,
+		HostRepoCheckoutDisabled: sandboxed != nil,
 	})
+	if sandboxed != nil {
+		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
+	}
 	defer d.clearActiveRepoCheckoutTask(agentToken)
 
 	taskLog.Debug("invoking backend",

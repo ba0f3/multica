@@ -14,7 +14,7 @@ Status date: **2026-10-21**. Branch: `feature/git-security-mvp`. Spec revision: 
 | Real Docker daemon integration | **Blocked** | VM has no `docker` CLI/engine (`which docker` missing) |
 | Native agent matrix (Codex/Cursor/OpenCode) | **Not run** | Requires image build + authorized real-agent smoke per AGENTS.md |
 | Network deny policy on live bridge | **Not run** | Code accepts `MULTICA_DOCKER_TASK_NETWORK`; no live firewall tests |
-| Git prepare/finalize entirely in container | **Not done** | Host repocache/prepare paths unchanged |
+| Git prepare/finalize entirely in container | **Hybrid** | Host prepare + repocache; **host `/repo/checkout` blocked** when isolated — see [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md) |
 
 ## Signing / principal (#88) — partial
 
@@ -38,7 +38,7 @@ Existing UI/API/custody from branch baseline **retained**. No new gaps addressed
 | `go -C server test ./internal/daemon/ -run 'TestSandbox|TestDocker|TestProtected|TestIPCBackend|TestBuildDocker|TestContainer' -count=1` | **pass** |
 | `go -C server test ./internal/r2dgit/ -count=1` | **pass** |
 | `go -C server test ./internal/handler/ -run 'TestOpenGitSigning|TestAgentEnv_TaskToken' -count=1` | **pass** (DB tests skip when no DB) |
-| Docker image build / live container smoke | **blocked** (no Docker) |
+| Docker image build / live container smoke | **blocked** (no Docker); manual steps: [docker-task-worker-manual-test.md](docker-task-worker-manual-test.md) |
 | Real-agent / provider Git smoke | **not run** (no authorization) |
 | `pnpm typecheck` / full `make check` | **not run** (scope: server isolation slice) |
 

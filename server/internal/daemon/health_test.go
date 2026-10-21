@@ -468,6 +468,37 @@ func TestRepoCheckoutUsesTaskScopedProjectRefByDefault(t *testing.T) {
 // A request with no Authorization header can only come from a CLI older than
 // repoCheckoutMinCLIVersion, which is a permanent failure. The rejection has to
 // say so: the agent sees this string and nothing else (#7520).
+func TestRepoCheckoutRejectsHostCheckoutWhenIsolated(t *testing.T) {
+	t.Parallel()
+
+	const workspaceID = "ws-isolated"
+	const repoURL = "https://github.com/org/repo.git"
+	cache := &recordingRepoCache{lookupPath: "/cache/org/repo.git"}
+	workDir := t.TempDir()
+	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
+	d.registerActiveRepoCheckoutTask("mat_isolated_checkout", activeRepoCheckoutTask{
+		WorkspaceID:              workspaceID,
+		TaskID:                   "task-1",
+		AgentID:                  "agent-1",
+		AgentName:                "Test Agent",
+		WorkDir:                  workDir,
+		HostRepoCheckoutDisabled: true,
+	})
+
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/repo/checkout", body)
+	req.Header.Set("Authorization", "Bearer mat_isolated_checkout")
+	d.repoCheckoutHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := cache.lastCreateParams(); got != (repocache.WorktreeParams{}) {
+		t.Fatalf("isolated checkout reached repo cache: %+v", got)
+	}
+}
+
 func TestRepoCheckoutRejectsMissingTaskCredential(t *testing.T) {
 	t.Parallel()
 
