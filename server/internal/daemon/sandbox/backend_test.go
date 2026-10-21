@@ -195,3 +195,37 @@ func TestIPCBackendRunsInTheMountedCheckout(t *testing.T) {
 		t.Fatalf("cwd = %q, want %q", manifest.Exec.Cwd, CheckoutPath)
 	}
 }
+
+func TestIPCBackendRepointsTheHookRelayAtTheSandboxWorker(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	script := "cat > " + manifestPath + "\n" +
+		`printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"done"}}'`
+	backend := newTestBackend(t, script)
+
+	session, err := backend.Execute(context.Background(), "prompt", agent.ExecOptions{
+		CursorHookCommand: []string{"/home/someone/.local/bin/multica", "__cursor_hook"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	collect(t, session)
+
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read the manifest: %v", err)
+	}
+	manifest, err := ReadManifest(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+	if len(manifest.Exec.CursorHookCommand) != 2 {
+		t.Fatalf("hook command = %v", manifest.Exec.CursorHookCommand)
+	}
+	if manifest.Exec.CursorHookCommand[0] != sandboxWorker {
+		t.Fatalf("hook binary = %q, want %q", manifest.Exec.CursorHookCommand[0], sandboxWorker)
+	}
+	if manifest.Exec.CursorHookCommand[1] != "__cursor_hook" {
+		t.Fatalf("hook argument = %q, want it preserved", manifest.Exec.CursorHookCommand[1])
+	}
+}

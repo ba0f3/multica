@@ -42,6 +42,12 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	// The checkout is mounted at a fixed path inside the boundary, so the
 	// host path the daemon knows does not exist in there.
 	spec.Cwd = CheckoutPath
+	// A hook relay names the daemon binary by its host path. Inside the
+	// boundary that binary lives at the worker mount instead.
+	if len(spec.CursorHookCommand) > 0 {
+		spec.CursorHookCommand = append([]string(nil), spec.CursorHookCommand...)
+		spec.CursorHookCommand[0] = sandboxWorker
+	}
 	manifest := Manifest{
 		TaskID:    b.Config.TaskID,
 		AttemptID: b.Config.TaskID,
