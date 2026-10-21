@@ -1,182 +1,84 @@
 # Git security MVP — implementation status
 
-Status date: **2026-10-21**. Baseline: `5080ef180` (`origin/main`, PR #94 merged).
-Spec implemented: the 2026-10-20 MVP revision in
-[per-user-git-credentials-plan.md](per-user-git-credentials-plan.md) as proposed
-in PR #95 — a bwrap worker per task, a per-task SSH-agent signing socket, and
-public-key-only credential management.
+Status date: **2026-10-21**. Source baseline: [`feature/git-security-mvp@d67d4d548962a22f11001490e784955fedc9127f`](https://github.com/r2d-ai/multica/commit/d67d4d548962a22f11001490e784955fedc9127f).
 
-This file records what the branch actually contains. It does not claim a
-deployed runtime, a production key or a sandbox verified against a real coding
-agent: the boundary has been started for real on one host (see Verification),
-but the provider-level checks in the spec's acceptance matrix are open.
+[Spec hiện tại](per-user-git-credentials-plan.md) đổi execution backend sang Docker cho **Codex, Cursor Agent, OpenCode**, tiếp tục credentials và worker trên branch. [Handoff](git-security-agent-handoff.md) là checklist sửa tiếp. Lần cập nhật này chỉ sửa docs; Docker chưa được implement hoặc nghiệm thu bởi thay đổi này.
 
-## Delivered
+## 1. Source đã có: giữ làm nền
 
-### MVP1 — Keys and UI (#86)
+| Thành phần | Source tại baseline | Trạng thái |
+| --- | --- | --- |
+| Key generation, public representation, lifecycle | `server/internal/r2dgit/{identity,service}.go` | Có code; giữ cho #86 |
+| OpenBao KV v2 encrypted custody, signer callback | `server/internal/r2dgit/custody.go` | Có code/config; không local-file fallback |
+| Pinned-host SSH identity verification | `server/internal/r2dgit/verify.go` | Có code/fixture tests; live GitHub/Gitea chưa xác minh |
+| Human-owned account endpoints | `server/internal/handler/r2d_git.go`, `server/internal/middleware/human_session.go` | Có code; public DTO và CLI-issued-token gate cần giữ |
+| Shared UI/API/query | `packages/views/settings/components/git-identities-section.tsx`, `packages/core/api/{schemas,client}.ts`, `packages/core/git-identities/` | Có account UI và translations; không cần port lại #93 |
+| Side tables/queries | `server/migrations/900100–900113_*.sql`, `server/pkg/db/queries/r2d_git.sql` | 14 migration numbers có trên branch; applied DB state chưa xác minh |
+| Signing lease/API | `server/internal/r2dgit/signing.go`, `server/internal/handler/r2d_git_sign.go` | Có per-key-generation checks và daemon-bound lease; cần active-attempt/lifetime sửa tiếp |
+| Originator metadata, signing socket/client | `server/internal/handler/{daemon,agent}.go`, `server/internal/daemon/{git_agent,client}.go`, `server/internal/daemon/gitagent/socket.go` | Có List/Sign và key selection; chưa đủ để chứng nhận task/API isolation |
+| Worker/manifest/IPC/backend | `server/internal/daemon/sandbox/{manifest,ipc,worker,backend}.go` | Có adapter execution trong worker; transport mới chỉ message/result |
+| bwrap launch/config/hidden command | `server/internal/daemon/{sandbox_launch,config}.go`, `server/internal/daemon/sandbox/policy.go`, `server/cmd/multica/main.go` | Có implementation opt-in; cần thay backend theo spec |
 
-| Piece | Where |
+Custody yêu cầu `MULTICA_GIT_CUSTODY_URL`, `MULTICA_GIT_CUSTODY_MOUNT`, `MULTICA_GIT_CUSTODY_TOKEN`. Thiếu cấu hình trả service unavailable. Đó là source behavior đã review, không phải xác nhận production có custody/config/key.
+
+Signer hiện dùng registry trong một backend process. Multi-instance không được xem là đã hỗ trợ. Claim trả verified identities và daemon chọn first matching repo host; cần đổi sang repo/provider được chọn cho task. Git-key originator logic và task JWT authority là hai đường khác nhau: đường đầu tồn tại không chứng minh đường sau đã an toàn.
+
+## 2. Boundary hiện tại và gap cụ thể
+
+| Quan sát tại `d67d4d5` | Ý nghĩa / việc còn thiếu |
 | --- | --- |
-| Key generation, state machine, redaction | `server/internal/r2dgit/identity.go` |
-| OpenBao KV v2 custody (CAS 0 store, hard destroy, signer callback) | `server/internal/r2dgit/custody.go` |
-| Credential service (profile, generate, verify, revoke) | `server/internal/r2dgit/service.go` |
-| Pinned-host SSH verification with provider banner parsing | `server/internal/r2dgit/verify.go` |
-| Side tables and queries | `server/migrations/9001*.sql`, `server/pkg/db/queries/r2d_git.sql` |
-| Account-scoped HTTP API | `server/internal/handler/r2d_git.go` |
-| Human-session gate (`auth_time` claim, PAT excluded) | `server/internal/middleware/human_session.go`, `server/internal/middleware/auth.go`, `server/internal/auth/session.go` |
-| zod schemas, API client, query hooks | `packages/core/api/schemas.ts`, `packages/core/api/client.ts`, `packages/core/git-identities/` |
-| Account settings section in all five locales | `packages/views/settings/components/git-identities-section.tsx` |
+| `MULTICA_TASK_SANDBOX=1` mới bật bwrap; unset chạy host | Chưa có protected deployment mặc định; socket không task-isolated khi chạy cùng host identity |
+| Host HOME read-only với một số path shadows; HOME vẫn là host path | Không phải private HOME. `.aws`, `.kube`, `.docker` và source/state khác có thể đọc được theo default mount |
+| System/CLI host directories được mount; cwd/PATH/env thay qua nhiều lớp | Compatibility và secret/source exposure chưa giải quyết bằng một clean runtime |
+| Codex auth có host symlink; Cursor trust metadata dùng host cwd | Cần private auth/state và tạo config sau khi có container paths |
+| Manifest đi qua stdin | Tránh secret trong launch argv; **không** có nghĩa secret không vào environment của native child |
+| Backend đặt `AttemptID = TaskID`, stdin đóng sau manifest | Cần attempt identity thật và IPC hai chiều |
+| Wrapper không forward full `agent.Session` | Supplements/readiness, activity, background interruption, terminal observation cần parity theo native support |
+| Prepare/finalize/repocache/host checkout ở ngoài worker | Malicious repo hoặc task API có thể chạm execution path ngoài boundary; phải chuyển/chặn |
+| Network hiện shared; host health/checkout/control services tồn tại | Docker migration cần deny policy có hiệu lực và server-side task API gates |
+| Task JWT dùng runtime-owner context; generic CLI-token exchange route tồn tại | Phải giữ restricted task actor; không coi việc sửa env hoặc Git originator là đủ |
+| Successful sign slides lease TTL; revoke rechecks key state | Cần active-attempt + finite lifetime/trusted renewal; cleanup phải đóng connections và authenticated processes |
+| OpenCode 2.x service lifecycle khác client; managed MCP có `ErrOpenCodeV2MCPUnsupported` | Cô lập service, preserve version detection và verify private config delivery |
 
-The browser receives the public key, its fingerprint and a state. No response,
-schema or component carries a private key or a custody reference.
+Các điểm trên là source review, không phải tuyên bố đã thực hiện exploit trên deployment. Không giữ các kết luận cũ “chưa có worker”, “HOME private đã đạt” hoặc “mount host HOME không ảnh hưởng security”.
 
-### MVP3 — Per-task SSH agent (#88)
+## 3. Work còn mở
 
-| Piece | Where |
+| Issue | Bước tiếp theo | Chưa được claim |
+| --- | --- | --- |
+| [#86](https://github.com/r2d-ai/multica/issues/86) | Giữ/verify UI, lifecycle, custody, human owner, account cache và public-only responses | Live provider/production onboarding đã pass |
+| [#89](https://github.com/r2d-ai/multica/issues/89) | Docker worker/image, private runtime state, native three-provider support, bidirectional IPC, effective network/resource policy, full-container cleanup | Docker implementation hay native compatibility đã đạt |
+| [#88](https://github.com/r2d-ai/multica/issues/88) | Task-token/API scope, chosen repo/provider/unique attempt lease, socket env, all Git inside worker, revoke/cancel | Task principal và all-path containment đã hoàn thành |
+
+Không mở lại #85/#87/#90/#91. Tool-only exec-server/SDK/driver experiments là optional PoC sau; không cản common Docker implementation.
+
+## 4. Verification: phân biệt evidence
+
+| Evidence | Đã biết | Giới hạn |
+| --- | --- | --- |
+| Historical branch report | [Status trước revision](https://github.com/r2d-ai/multica/blob/d67d4d548962a22f11001490e784955fedc9127f/docs/security/git-security-mvp-status.md) ghi unit/fixture/frontend results và một real bwrap smoke trên một host | Kết quả do implementation trước báo; không được rerun trong docs revision; không chứng minh private HOME/native CLI/Docker |
+| Source review | Credential, worker, native config, Session IPC, Git và control-plane paths ở pinned baseline đã đọc | Static evidence; không phải deployed behavior |
+| Review canary trước revision | Synthetic bwrap canary bị UID-map setup chặn trước payload | Không có kết quả payload; không được tính pass/fail containment |
+| Docs revision này | Link/source-path, Markdown/whitespace, scope review | Không chạy code tests, Docker/native-agent/live GitHub/Gitea, migration hoặc deployment |
+| Docker/native/provider matrix | **Not run** | Phải làm khi implementation sẵn sàng và được authorize cho real accounts |
+
+Implementation tiếp theo ghi mỗi kết quả bằng **commit + image digest + Docker mode/host controls + native version + command/test type + result**. Không nâng “code exists” hoặc “fixture passes” thành “production verified”.
+
+Các command hiện có để implementer dùng đúng scope (không phải test results mới):
+
+| Scope | Command |
 | --- | --- |
-| Task-scoped signing lease and signature service | `server/internal/r2dgit/signing.go` |
-| Daemon endpoints `git-signing-lease` / `git-signatures` | `server/internal/handler/r2d_git_sign.go` |
-| Originator binding in the claim response | `server/internal/handler/daemon.go`, `server/internal/handler/agent.go` |
-| Restricted agent socket (List/Sign only; Add/Remove/Lock refused) | `server/internal/daemon/gitagent/socket.go` |
-| Per-attempt socket, `SSH_AUTH_SOCK` wiring and cleanup | `server/internal/daemon/git_agent.go`, `server/internal/daemon/daemon.go` |
-| Daemon client calls | `server/internal/daemon/client.go` |
+| Credential/signing core | `go -C server test ./internal/r2dgit/` |
+| API/principal regression | `go -C server test ./internal/handler/ ./internal/middleware/` |
+| Socket | `go -C server test ./internal/daemon/gitagent/` |
+| Worker/launch | `go -C server test ./internal/daemon/sandbox/ ./internal/daemon/ -run 'TestSandbox\|TestBuildArgs\|TestStartGitAgentSocket'` |
+| Credential frontend | `pnpm --filter @multica/core test`, `pnpm --filter @multica/views test` |
 
-The key follows the task's authenticated originator. The runtime owner, the
-agent owner and the audit-only fallbacks never select a key; a task with no
-provable originator receives no credential. Revocation marks live leases and
-every signature re-reads the key state, so a revoked key stops signing.
+Thêm Docker integration checks theo tám acceptance cases trong spec; actual limits/network/teardown cần target backend thật. Default tests dùng fake executable paths/synthetic keys. Real-agent tests chỉ chạy sau explicit authorization, gate `agentintegration` + `MULTICA_RUN_REAL_AGENT_SMOKE=1` trước CLI/account lookup theo AGENTS.md. Không chạy `make migrate-up` hoặc truy cập production keys chỉ để cập nhật status.
 
-Signing is reachable only with a daemon token, and only for a task whose
-runtime that daemon hosts. The lease is bound to the daemon that opened it, so
-a lease id alone is not a credential. Each successful signature slides the
-lease window, so a run longer than the TTL keeps signing; rotating a key marks
-the previous generation's leases revoked.
+## 5. Migration và delivery cursor
 
-The account endpoints refuse a CLI-issued token. The CLI stores its bearer
-token on disk beside the code the agent runs, so it is marked at mint time and
-cannot list, create or revoke a credential even though it is otherwise a valid
-session.
-
-## Not delivered
-
-### MVP2 — Bubblewrap task worker (#89)
-
-Opt-in: `MULTICA_TASK_SANDBOX=1`. When enabled, every attempt runs inside
-`bwrap`; when enabled and the boundary cannot be built, the task fails with
-`sandbox_unavailable` and never falls back to the host.
-
-| Piece | Where |
-| --- | --- |
-| bwrap policy and argv, mount validation | `server/internal/daemon/sandbox/policy.go` |
-| Worker manifest over stdin and the frame protocol | `server/internal/daemon/sandbox/manifest.go`, `ipc.go` |
-| Worker entrypoint and the IPC-backed backend | `server/internal/daemon/sandbox/worker.go`, `backend.go` |
-| Hidden `multica internal-task-worker` command | `server/cmd/multica/main.go` |
-| Policy construction, launch and config | `server/internal/daemon/sandbox_launch.go`, `config.go` |
-
-The boundary unshares user, PID, IPC, UTS and cgroup namespaces, drops all
-capabilities, sets `--new-session` and `--die-with-parent`, and clears the
-environment. bwrap forces `no_new_privs` itself; older releases have no flag
-for it.
-
-What is isolated is **the code and the credentials**, not the whole home:
-
-| Mount | Access |
-| --- | --- |
-| The task's checkout | read-write at `/workspace/repo` |
-| A private `/tmp` | read-write |
-| The agent CLI's install directory | read-only |
-| The system runtime (`/usr`, `/bin`, `/lib*`, `/etc`) | read-only |
-| The host home | **read-only**, so provider CLIs find their config |
-| `~/.ssh` | **hidden** (empty mount) |
-| `~/.multica` (the CLI session token) | **hidden** (empty mount) |
-| `~/.git-credentials`, `~/.netrc`, `~/.config/git/credentials` | **hidden** (`/dev/null`) |
-| `~/.config/gh` (a GitHub token is a Git credential) | **hidden** |
-| The per-task provider config the daemon built | read-write, after the shadows |
-| The attempt's signing socket | only that socket, at `/run/multica/ssh-agent.sock` |
-| The shared workspaces root | refused as a mount source |
-| The daemon profile directory | refused as a mount source; only named per-task paths inside it are allowed |
-
-This deliberately differs from the PR #95 wording, which said the host home is
-never mounted. Hiding the whole home breaks every provider CLI that reads its
-own configuration for no security gain, and leaves two things unaddressed: the
-home is read-only, so a CLI that insists on writing under `$HOME` fails, and
-`MULTICA_SANDBOX_HIDE` lets an operator hide more (for example `~/.aws`,
-`~/.kube` or `~/.docker`, which are readable by default).
-
-The network is deliberately **not** unshared: tasks clone repositories and call
-their model provider.
-
-The agent environment travels in the manifest over stdin, never in argv or the
-process environment, because both are readable by every process of the same
-user.
-
-### Also outstanding
-
-- **Sandbox is off by default.** With `MULTICA_TASK_SANDBOX` unset, tasks still
-  run on the host and one task can reach a sibling attempt's signing socket
-  through the daemon profile. The per-task boundary holds only when the sandbox
-  is enabled; do not describe the socket as task-isolated otherwise.
-- **The home is read-only.** A provider CLI reads its configuration from the
-  real home, but cannot write there. Codex is redirected to its per-task
-  `CODEX_HOME`; a CLI that writes state under `$HOME` (for example Claude's
-  `~/.claude/projects`) will fail until that provider gets a writable overlay
-  over its state directory. This needs a provider-by-provider pass before
-  enabling the sandbox in production.
-- **Cloud credentials stay readable by default.** `~/.aws`, `~/.kube` and
-  `~/.docker` are not in the default hidden list, because a provider may need
-  them (Bedrock reads `~/.aws`). An operator who does not should add them to
-  `MULTICA_SANDBOX_HIDE`.
-- **Run-scoped supplements are unavailable in the sandbox.** The IPC transport
-  is one-way after the manifest, so `Session.Supplement` is nil and a task
-  running inside the sandbox cannot receive an additional human instruction
-  mid-turn. The daemon treats that as "no run-scoped input" and does not claim
-  durable input.
-- **Only one live kernel test.** The policy and argv are unit tested, the
-  launcher is tested against a fake `bwrap`, and `bwrap_smoke_test.go` starts a
-  real boundary when `MULTICA_BWRAP_SMOKE=1`: it verifies the checkout is
-  writable, the private HOME is in place, and both a host file and a sibling
-  task's directory are unreadable. It has not been run with a real agent CLI,
-  so the spec's provider-level sandbox checks are still outstanding.
-- **Live provider verification.** The GitHub and Gitea banner parsers are unit
-  tested against fixtures, and the host-key pinning is tested. Neither adapter
-  has been run against a real provider, so compatibility is not yet claimed.
-- **Lease registry scope.** Issued leases live in one server process's memory.
-  A deployment that serves the daemon from several instances would need a
-  shared store; the failure mode is a refused signature, not a wrong one.
-- **Provider selection at claim time.** The claim response carries the
-  originator's verified identities with their provider hosts; the daemon picks
-  the first repository whose host matches. A user with keys on several
-  providers gets the credential for the first matching repository, which is
-  correct for single-provider repositories and untested for mixed ones.
-- **Custody configuration.** `MULTICA_GIT_CUSTODY_URL`,
-  `MULTICA_GIT_CUSTODY_MOUNT` and `MULTICA_GIT_CUSTODY_TOKEN` must all be set.
-  Without them the service is absent and every credential endpoint answers
-  `git_service_unavailable`; there is no local-file fallback.
-- **Migration numbers.** `900100`–`900113` are allocated by this change and
-  must be recorded in the patch/migration tracker (#12) so a later patch does
-  not reuse them.
-
-## Verification
-
-Run from the repository root:
-
-| Check | Command |
-| --- | --- |
-| Credential core and signing | `go -C server test ./internal/r2dgit/` |
-| HTTP surface, claim binding | `go -C server test ./internal/handler/` |
-| Agent socket | `go -C server test ./internal/daemon/gitagent/` |
-| Socket wiring | `go -C server test ./internal/daemon/ -run TestStartGitAgentSocket` |
-| Sandbox boundary (real bwrap) | `(cd server && MULTICA_BWRAP_SMOKE=1 go test ./internal/daemon/sandbox/ -run TestBwrapSmoke -v)` — asserts the checkout is writable, `~/.ssh` and the Multica token are invisible, the provider config is readable, and the home and sibling tasks cannot be written |
-| Sandbox launch and policy | `go -C server test ./internal/daemon/sandbox/ ./internal/daemon/ -run 'TestSandbox\|TestBuildArgs'` |
-| Migrations | `make migrate-up` then `make status` |
-| Frontend data layer | `pnpm --filter @multica/core test` |
-| Frontend UI | `pnpm --filter @multica/views test` |
-| Whole backend | `make test` |
-| Whole frontend | `pnpm typecheck && pnpm lint && pnpm test` |
-
-The views suite is timing-sensitive: its default 5s per-test timeout fails
-under parallel load on a busy machine. The suite is green (6177/6177) with
-`pnpm --filter @multica/views exec vitest run --testTimeout=30000 --maxWorkers=4`.
-
-The sandbox checks from the spec's acceptance matrix cannot be run: there is
-no worker, so there is no boundary to test.
+- Existing feature migrations: **900100–900113**, từ `r2d_git_provider` tới `r2d_git_key_job_idempotency_index`; gồm table/index/primary-key/idempotency migrations. Ghi occupied branch range ở [#12](https://github.com/r2d-ai/multica/issues/12), không cấp số mới trong docs.
+- Applied/deployed schema và deployed daemon SHA: **chưa xác minh**. Giữ R2D range/no-FK/concurrent-index rules; không renumber trước inventory.
+- PR #94/#95 là merged spec history; #93 closed unmerged, không port whole engine. Implementation source của revision này là `feature/git-security-mvp`.
+- Docs-only revision không đóng #84/#86/#88/#89, không thay runtime, tạo key, deploy hoặc đổi upstream sync/backport cursor.
