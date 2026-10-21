@@ -28,6 +28,14 @@ const (
 	sandboxAgentSocket = "/run/multica/ssh-agent.sock"
 )
 
+// CheckoutPath and HomePath are the in-sandbox paths the daemon must use when
+// it rewrites a host path for the worker.
+const (
+	CheckoutPath = sandboxRepo
+	HomePath     = sandboxHome
+	TempPath     = sandboxTemp
+)
+
 // WorkerArg selects the hidden worker entrypoint when the sandboxed process
 // starts.
 const WorkerArg = "__multica_internal_task_worker"
@@ -70,6 +78,13 @@ type Policy struct {
 	// the agent environment: that travels in the manifest, because bwrap
 	// arguments are visible in the process table.
 	Env map[string]string
+	// AllowedRoots are directories that may be mounted even though they live
+	// under a forbidden root.
+	//
+	// This exists for the agent CLI's own installation: an npm- or nvm-managed
+	// CLI lives under the user's home, and the sandbox cannot execute it
+	// unless that install directory is readable. It is code, not task data.
+	AllowedRoots []string
 	// AllowedExactPaths are single files that may be mounted even though they
 	// live under a forbidden root.
 	//
@@ -202,6 +217,14 @@ func checkMountSource(source string, policy Policy) error {
 	}
 
 	taskRoot := filepath.Clean(policy.TaskRoot)
+	for _, allowed := range policy.AllowedRoots {
+		if strings.TrimSpace(allowed) == "" {
+			continue
+		}
+		if isUnder(cleaned, filepath.Clean(allowed)) {
+			return nil
+		}
+	}
 	for _, forbidden := range policy.ForbiddenRoots {
 		forbidden = filepath.Clean(forbidden)
 		if forbidden == "/" || forbidden == "." {

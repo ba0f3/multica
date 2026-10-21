@@ -214,3 +214,59 @@ func TestSandboxForbiddenRootsIncludesTheWorkspacesRootAndTheHome(t *testing.T) 
 		t.Fatalf("the workspaces root is missing from %v", roots)
 	}
 }
+
+func TestSandboxAgentEnvNamesTheInSandboxPaths(t *testing.T) {
+	hostTmp := filepath.Join(t.TempDir(), "tmp")
+	env := sandboxAgentEnv(map[string]string{
+		"HOME":                "/home/someone",
+		"TMPDIR":              hostTmp,
+		"PATH":                "/home/someone/.nvm/versions/node/v20/bin:/usr/bin",
+		"CLAUDE_CODE_TMPDIR":  hostTmp,
+		"MULTICA_CONFIG_ROOT": "/host/config",
+	})
+
+	if env["HOME"] != sandbox.HomePath {
+		t.Errorf("HOME = %q, want %q", env["HOME"], sandbox.HomePath)
+	}
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"} {
+		if env[key] != sandbox.TempPath {
+			t.Errorf("%s = %q, want %q", key, env[key], sandbox.TempPath)
+		}
+	}
+	if strings.Contains(env["PATH"], "/home/") {
+		t.Errorf("PATH still points into the host home: %q", env["PATH"])
+	}
+	// A per-task config path is mounted at its original path, so it is not
+	// rewritten.
+	if env["MULTICA_CONFIG_ROOT"] != "/host/config" {
+		t.Errorf("MULTICA_CONFIG_ROOT = %q, want it unchanged", env["MULTICA_CONFIG_ROOT"])
+	}
+}
+
+func TestSandboxBinaryRootsIncludesTheSymlinkAndItsTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "package", "cli.js")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	linkDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatalf("create link dir: %v", err)
+	}
+	link := filepath.Join(linkDir, "claude")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	roots := sandboxBinaryRoots(link)
+	if len(roots) != 2 {
+		t.Fatalf("roots = %v, want the link directory and the target directory", roots)
+	}
+	joined := strings.Join(roots, "\n")
+	if !strings.Contains(joined, linkDir) || !strings.Contains(joined, filepath.Dir(target)) {
+		t.Fatalf("roots = %v, want both %q and %q", roots, linkDir, filepath.Dir(target))
+	}
+}

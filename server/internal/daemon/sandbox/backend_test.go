@@ -1,8 +1,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -159,5 +162,36 @@ func TestBoundedBufferStopsGrowing(t *testing.T) {
 	}
 	if got := buffer.String(); !strings.HasPrefix(got, "aaaabbbb") || !strings.Contains(got, "truncated") {
 		t.Fatalf("buffer = %q, want the first 8 bytes plus a truncation marker", got)
+	}
+}
+
+func TestIPCBackendRunsInTheMountedCheckout(t *testing.T) {
+	// The worker stores the manifest it received and then completes, so the
+	// test can prove the host cwd was translated to the mounted path.
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	script := "cat > " + manifestPath + "\n" +
+		`printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"done"}}'`
+	backend := newTestBackend(t, script)
+
+	session, err := backend.Execute(context.Background(), "prompt", agent.ExecOptions{Cwd: "/host/workspaces/task-1/workdir"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	_, result := collect(t, session)
+	if result.Status != "completed" {
+		t.Fatalf("result = %+v", result)
+	}
+
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read the manifest the worker received: %v", err)
+	}
+	manifest, err := ReadManifest(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+	if manifest.Exec.Cwd != CheckoutPath {
+		t.Fatalf("cwd = %q, want %q", manifest.Exec.Cwd, CheckoutPath)
 	}
 }

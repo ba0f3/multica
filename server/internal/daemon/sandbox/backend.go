@@ -38,13 +38,17 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	if b == nil || b.Launch == nil {
 		return nil, errors.New("sandbox: no worker launcher is configured")
 	}
+	spec := ConvertExecOptions(opts)
+	// The checkout is mounted at a fixed path inside the boundary, so the
+	// host path the daemon knows does not exist in there.
+	spec.Cwd = CheckoutPath
 	manifest := Manifest{
 		TaskID:    b.Config.TaskID,
 		AttemptID: b.Config.TaskID,
 		Provider:  b.Provider,
 		Prompt:    prompt,
 		Config:    b.Config,
-		Exec:      ConvertExecOptions(opts),
+		Exec:      spec,
 	}
 
 	cmd, err := b.Launch()

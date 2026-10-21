@@ -65,14 +65,19 @@ func (d *Daemon) sandboxedBackend(
 		}
 	}
 
+	binaryRoots := sandboxBinaryRoots(config.ExecutablePath)
 	policy := sandbox.Policy{
-		TaskRoot:       env.RootDir,
-		HomeDir:        homeDir,
-		TempDir:        tempDir,
-		CheckoutDir:    env.WorkDir,
-		RuntimeRoots:   sandboxRuntimeRoots(),
-		ExtraMounts:    sandboxExtraMounts(env),
-		AgentSocket:    agentSocket,
+		TaskRoot:     env.RootDir,
+		HomeDir:      homeDir,
+		TempDir:      tempDir,
+		CheckoutDir:  env.WorkDir,
+		RuntimeRoots: append(sandboxRuntimeRoots(), binaryRoots...),
+		ExtraMounts:  sandboxExtraMounts(env),
+		AgentSocket:  agentSocket,
+		// The CLI's install directory is code the sandbox must execute. It
+		// may live under the user's home, so it is named explicitly rather
+		// than reached through a broader rule.
+		AllowedRoots:   append([]string{env.RootDir}, binaryRoots...),
 		ForbiddenRoots: sandboxForbiddenRoots(d.cfg.WorkspacesRoot, profileDir),
 		// The signing socket lives in the profile directory, which is
 		// forbidden as a tree. Naming the socket file grants exactly it.
@@ -86,9 +91,11 @@ func (d *Daemon) sandboxedBackend(
 		return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
 	}
 
+	sandboxConfig := sandbox.ConfigFromAgent(config)
+	sandboxConfig.Env = sandboxAgentEnv(config.Env)
 	backend := &sandbox.IPCBackend{
 		Provider: provider,
-		Config:   sandbox.ConfigFromAgent(config),
+		Config:   sandboxConfig,
 		Launch: func() (*exec.Cmd, error) {
 			return exec.Command(resolvedBwrap, args...), nil
 		},
@@ -157,6 +164,60 @@ func sandboxForbiddenRoots(workspacesRoot, profileDir string) []string {
 	// it as a tree.
 	if profileDir != "" {
 		roots = append(roots, profileDir)
+	}
+	return roots
+}
+
+// sandboxAgentEnv rewrites the agent environment for the boundary.
+//
+// The daemon builds the environment around host paths under the task root. The
+// private temp and HOME are mounted at fixed in-sandbox paths, so the variables
+// that name them would point at directories that do not exist in there. The
+// keys that point at per-task config the sandbox mounts unchanged are left
+// alone.
+func sandboxAgentEnv(env map[string]string) map[string]string {
+	rewritten := make(map[string]string, len(env))
+	for key, value := range env {
+		rewritten[key] = value
+	}
+	rewritten["HOME"] = sandbox.HomePath
+	rewritten["TMPDIR"] = sandbox.TempPath
+	rewritten["TMP"] = sandbox.TempPath
+	rewritten["TEMP"] = sandbox.TempPath
+	// The sandbox does not mount the user's home, so a PATH that points into
+	// it would resolve to nothing.
+	rewritten["PATH"] = sandboxPath()
+	if _, ok := rewritten["CLAUDE_CODE_TMPDIR"]; ok {
+		rewritten["CLAUDE_CODE_TMPDIR"] = sandbox.TempPath
+	}
+	return rewritten
+}
+
+// sandboxBinaryRoots lists the directories that hold the agent CLI.
+//
+// A symlinked launcher is common (an npm shim in ~/.local/bin pointing at a
+// package directory), so both the link's directory and the resolved target's
+// directory are mounted. Mounting one directory too many is still code, not
+// user data; failing to mount the real one would make the run unable to start.
+func sandboxBinaryRoots(executablePath string) []string {
+	if executablePath == "" {
+		return nil
+	}
+	roots := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	add := func(dir string) {
+		if dir == "" || dir == "." || dir == "/" {
+			return
+		}
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		roots = append(roots, dir)
+	}
+	add(filepath.Dir(executablePath))
+	if resolved, err := filepath.EvalSymlinks(executablePath); err == nil {
+		add(filepath.Dir(resolved))
 	}
 	return roots
 }
