@@ -135,6 +135,25 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	}
 }
 
+func TestSandboxBackendRefusesToMountTheProfileDirectory(t *testing.T) {
+	daemon := newSandboxTestDaemon(t, "bwrap")
+	env := newSandboxTestEnv(t)
+	// A per-task config path that resolves into the daemon's profile would
+	// hand the sandbox every other attempt's signing socket.
+	profileRoot := t.TempDir()
+	env.OpenclawConfigPath = filepath.Join(profileRoot, "openclaw", "task-1.json")
+	if err := os.MkdirAll(filepath.Dir(env.OpenclawConfigPath), 0o755); err != nil {
+		t.Fatalf("create profile path: %v", err)
+	}
+	if err := os.WriteFile(env.OpenclawConfigPath, nil, 0o600); err != nil {
+		t.Fatalf("write the config: %v", err)
+	}
+
+	if _, err := daemon.sandboxedBackend("claude", agent.Config{}, env, profileRoot, ""); err == nil {
+		t.Fatal("a mount under the daemon profile was accepted")
+	}
+}
+
 func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "argv")
 	bwrap := filepath.Join(t.TempDir(), "bwrap")
@@ -181,7 +200,7 @@ func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 
 func TestSandboxForbiddenRootsIncludesTheWorkspacesRootAndTheHome(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, "bwrap")
-	roots := sandboxForbiddenRoots(daemon.cfg.WorkspacesRoot)
+	roots := sandboxForbiddenRoots(daemon.cfg.WorkspacesRoot, "")
 	if len(roots) == 0 {
 		t.Fatal("no forbidden root was returned")
 	}

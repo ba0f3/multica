@@ -59,23 +59,57 @@ session.
 
 ### MVP2 — Bubblewrap task worker (#89)
 
-Not implemented on this branch. No `bwrap` policy, worker manifest, IPC
-transport or hidden `multica internal-task-worker` command exists yet. Task
-execution still runs on the host, so the filesystem-isolation guarantee in
-section 1 of the spec is **not** met by this change.
+Opt-in: `MULTICA_TASK_SANDBOX=1`. When enabled, every attempt runs inside
+`bwrap`; when enabled and the boundary cannot be built, the task fails with
+`sandbox_unavailable` and never falls back to the host.
 
-This is deliberate: the sandbox rewires the execution path for every provider,
-and shipping it half-wired would be worse than shipping it separately.
+| Piece | Where |
+| --- | --- |
+| bwrap policy and argv, mount validation | `server/internal/daemon/sandbox/policy.go` |
+| Worker manifest over stdin and the frame protocol | `server/internal/daemon/sandbox/manifest.go`, `ipc.go` |
+| Worker entrypoint and the IPC-backed backend | `server/internal/daemon/sandbox/worker.go`, `backend.go` |
+| Hidden `multica internal-task-worker` command | `server/cmd/multica/main.go` |
+| Policy construction, launch and config | `server/internal/daemon/sandbox_launch.go`, `config.go` |
+
+The boundary unshares user, PID, IPC, UTS and cgroup namespaces, drops all
+capabilities, sets `--no-new-privileges`, `--new-session` and
+`--die-with-parent`, and clears the environment. It mounts the task's checkout,
+a private HOME, a private `/tmp`, the read-only system runtime, the per-task
+provider config the daemon built, and — when a credential exists — only the
+attempt's signing socket. The host home, the shared workspaces root and the
+daemon profile are refused as mount sources; a single named file (the signing
+socket) is the only exception.
+
+The network is deliberately **not** unshared: tasks clone repositories and call
+their model provider.
+
+The agent environment travels in the manifest over stdin, never in argv or the
+process environment, because both are readable by every process of the same
+user.
 
 ### Also outstanding
 
-- **Cross-task socket access on one host.** Every attempt's socket lives under
-  the daemon user's profile and every runner currently executes as that user,
-  so one task can list a sibling attempt's directory and connect to its
-  socket. This is the same exposure the host already has — a runner can read
-  the daemon user's `~/.ssh` today — but it means the per-task boundary is not
-  a security boundary until MVP2 runs each attempt in its own namespace. Do
-  not describe the socket as task-isolated before then.
+- **Sandbox is off by default.** With `MULTICA_TASK_SANDBOX` unset, tasks still
+  run on the host and one task can reach a sibling attempt's signing socket
+  through the daemon profile. The per-task boundary holds only when the sandbox
+  is enabled; do not describe the socket as task-isolated otherwise.
+- **Sandbox provider auth is unresolved.** A private HOME means the CLI cannot
+  read host config files. Providers that accept an API key or token in the
+  environment work; providers that need a file under the host home (the shared
+  `~/.codex/auth.json` symlink in particular) will not authenticate inside the
+  boundary. The per-task config directories the daemon already builds are
+  mounted, but the host-home symlinks they may contain point outside the
+  sandbox. This needs a provider-by-provider pass before enabling the sandbox
+  in production.
+- **Run-scoped supplements are unavailable in the sandbox.** The IPC transport
+  is one-way after the manifest, so `Session.Supplement` is nil and a task
+  running inside the sandbox cannot receive an additional human instruction
+  mid-turn. The daemon treats that as "no run-scoped input" and does not claim
+  durable input.
+- **No live kernel test.** The policy and argv are unit tested, and the
+  launcher is tested against a fake `bwrap`. The boundary has not been started
+  on a host with unprivileged user namespaces available, so the spec's sandbox
+  acceptance checks are still outstanding.
 - **Live provider verification.** The GitHub and Gitea banner parsers are unit
   tested against fixtures, and the host-key pinning is tested. Neither adapter
   has been run against a real provider, so compatibility is not yet claimed.

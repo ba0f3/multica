@@ -70,6 +70,14 @@ type Policy struct {
 	// the agent environment: that travels in the manifest, because bwrap
 	// arguments are visible in the process table.
 	Env map[string]string
+	// AllowedExactPaths are single files that may be mounted even though they
+	// live under a forbidden root.
+	//
+	// This exists for exactly one thing: the per-attempt signing socket lives
+	// in the daemon's profile directory, which holds credentials and must not
+	// be mountable as a tree. Naming the socket path itself grants the socket
+	// and nothing around it.
+	AllowedExactPaths []string
 }
 
 // BuildArgs renders the bwrap argv for a policy.
@@ -181,6 +189,16 @@ func checkMountSource(source string, policy Policy) error {
 	cleaned := filepath.Clean(source)
 	if _, err := os.Stat(cleaned); err != nil {
 		return fmt.Errorf("sandbox: mount source %q is not accessible: %w", cleaned, err)
+	}
+
+	allowedExact := make(map[string]struct{}, len(policy.AllowedExactPaths))
+	for _, allowed := range policy.AllowedExactPaths {
+		if strings.TrimSpace(allowed) != "" {
+			allowedExact[filepath.Clean(allowed)] = struct{}{}
+		}
+	}
+	if _, ok := allowedExact[cleaned]; ok {
+		return nil
 	}
 
 	taskRoot := filepath.Clean(policy.TaskRoot)

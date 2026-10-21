@@ -73,7 +73,10 @@ func (d *Daemon) sandboxedBackend(
 		RuntimeRoots:   sandboxRuntimeRoots(),
 		ExtraMounts:    sandboxExtraMounts(env),
 		AgentSocket:    agentSocket,
-		ForbiddenRoots: sandboxForbiddenRoots(d.cfg.WorkspacesRoot),
+		ForbiddenRoots: sandboxForbiddenRoots(d.cfg.WorkspacesRoot, profileDir),
+		// The signing socket lives in the profile directory, which is
+		// forbidden as a tree. Naming the socket file grants exactly it.
+		AllowedExactPaths: []string{agentSocket},
 		Env: map[string]string{
 			"PATH": sandboxPath(),
 		},
@@ -141,13 +144,19 @@ func sandboxExtraMounts(env *execenv.Environment) []sandbox.Mount {
 // A per-task mount the daemon built elsewhere — a provider config under the
 // daemon's own profile — is allowed, because the daemon named it for this
 // task and it is not inherited from the host home.
-func sandboxForbiddenRoots(workspacesRoot string) []string {
+func sandboxForbiddenRoots(workspacesRoot, profileDir string) []string {
 	roots := make([]string, 0, 3)
 	if workspacesRoot != "" {
 		roots = append(roots, workspacesRoot)
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		roots = append(roots, home)
+	}
+	// The daemon's profile holds its own credentials, the CLI's config and
+	// the signing sockets of every attempt. A task must not be able to mount
+	// it as a tree.
+	if profileDir != "" {
+		roots = append(roots, profileDir)
 	}
 	return roots
 }
