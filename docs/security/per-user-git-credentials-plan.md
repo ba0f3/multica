@@ -2,7 +2,7 @@
 
 Cập nhật **2026-10-21**. Tiếp tục trên **`feature/git-security-mvp`** của **`r2d-ai/multica`**, từ implementation baseline [`d67d4d548962a22f11001490e784955fedc9127f`](https://github.com/r2d-ai/multica/commit/d67d4d548962a22f11001490e784955fedc9127f). Đây là spec sửa tiếp code đã có, không phải yêu cầu làm lại từ main.
 
-Đọc cùng [handoff](git-security-agent-handoff.md) và [implementation status](git-security-mvp-status.md). Tracker: [#84](https://github.com/r2d-ai/multica/issues/84); ba việc đang mở: [#86](https://github.com/r2d-ai/multica/issues/86), [#89](https://github.com/r2d-ai/multica/issues/89), [#88](https://github.com/r2d-ai/multica/issues/88). Spec này thay các chỉ dẫn bwrap/broker cũ trong branch; việc sửa docs không chứng nhận runtime đã an toàn hoặc đã deploy.
+Đọc cùng [handoff](git-security-agent-handoff.md) và [implementation status](git-security-mvp-status.md). Tracker: [#84](https://github.com/r2d-ai/multica/issues/84); ba việc đang mở: [#86](https://github.com/r2d-ai/multica/issues/86), [#89](https://github.com/r2d-ai/multica/issues/89), [#88](https://github.com/r2d-ai/multica/issues/88). Spec này thay các chỉ dẫn bwrap/broker cũ (kể cả bản đã merge trên `main` qua #94); việc sửa docs không chứng nhận runtime đã an toàn hoặc đã deploy.
 
 ## 1. Quyết định và giới hạn
 
@@ -114,7 +114,7 @@ Không cần generic egress-proxy platform/domain DLP trong MVP. Chọn một ba
 
 Supervisor giữ container ID và ownership của attempt. Cancel/timeout/worker failure dừng container với finite grace rồi force kill; daemon mất kết nối/crash phải có bounded expiry/cleanup, startup reconcile orphan containers/sockets, không tự khôi phục lease cũ. Dọn task state theo retention, không theo path tùy ý từ worker.
 
-Protected mode yêu cầu preflight image, mounts, signer, effective limits và network policy. Thiếu Docker/control cần thiết hoặc runtime unsupported thì báo task failure/blocked rõ ràng. Không fallback direct host exec, shared credentials hoặc bwrap workaround. `MULTICA_TASK_SANDBOX` hiện tại là opt-in; deployment mới phải bật protected mode cho tasks cần bảo vệ. **Node phục vụ protected attempts không chạy untrusted tasks ngoài sandbox bằng cùng host identity hoặc quyền truy cập daemon profile/Docker engine.** Deployment chỉ chạy protected tasks là đủ; unsupported runtime phải bị từ chối, không đưa sang direct-host execution trên node đó.
+Protected mode yêu cầu preflight image, mounts, signer, effective limits và network policy. Thiếu Docker/control cần thiết hoặc runtime unsupported thì báo task failure/blocked rõ ràng. Không fallback direct host exec, shared credentials hoặc bwrap workaround. Mặc định daemon bật Docker sandbox (`MULTICA_TASK_SANDBOX` unset); opt-out `false` chỉ cho dev. `MULTICA_TASK_PROTECTED=1` fail closed khi boundary không build được. **Node phục vụ protected attempts không chạy untrusted tasks ngoài sandbox bằng cùng host identity hoặc quyền truy cập daemon profile/Docker engine.** Unsupported runtime phải bị từ chối, không đưa sang direct-host execution trên node đó.
 
 ## 7. Thứ tự sửa và acceptance
 

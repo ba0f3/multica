@@ -2,6 +2,8 @@
 
 Đọc [spec chính](per-user-git-credentials-plan.md) và [status](git-security-mvp-status.md). Bản ngày **2026-10-21** áp dụng cho **`r2d-ai/multica:feature/git-security-mvp`**, implementation baseline **`d67d4d548962a22f11001490e784955fedc9127f`**. Tiếp tục branch này; không bắt đầu lại từ main hoặc port nguyên PR #93.
 
+**Lưu ý merge:** `main` vẫn mang spec/handoff **bwrap** đã merge trong #94. Branch này **thay bwrap bằng Docker** cho MVP; khi merge vào `main`, giữ tài liệu và code Docker của branch này, không quay lại bwrap-only contract.
+
 ## Đã chốt
 
 - **Một Docker container/attempt**, native **Codex, Cursor Agent, OpenCode**. Supervisor ở ngoài; worker/adapter/agent/local MCP/subagent và toàn bộ Git prepare → run → finalize ở trong.
@@ -57,7 +59,7 @@ Default tests dùng synthetic keys/fake CLIs, không tự discover tài khoản/
 
 Cloud CI has no Docker engine. Operators follow [docker-task-worker-manual-test.md](docker-task-worker-manual-test.md). Git performance tradeoffs: [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md).
 
-## Delivery
+## Source và delivery
 
 Migrations **900100–900113 đã có trên feature branch**; cập nhật inventory #12, không cấp/renumber trong docs. DB deployment chưa xác minh. Giữ no-FK/concurrent-index rules.
 
