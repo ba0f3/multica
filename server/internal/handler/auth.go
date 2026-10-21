@@ -764,6 +764,10 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 // This allows cookie-authenticated browser sessions to obtain a bearer token
 // that can be handed off to the CLI via the cli_callback redirect.
 func (h *Handler) IssueCliToken(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		writeError(w, http.StatusForbidden, "task tokens cannot mint CLI credentials")
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return

@@ -40,6 +40,7 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		ProviderID string `json:"provider_id"`
+		AttemptID  string `json:"attempt_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
 		return
@@ -49,7 +50,7 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := service.OpenSigningLease(r.Context(), taskID, body.ProviderID, daemonID)
+	lease, err := service.OpenSigningLease(r.Context(), taskID, body.AttemptID, body.ProviderID, daemonID)
 	if err != nil {
 		gitServiceError(w, err)
 		return

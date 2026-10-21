@@ -18,6 +18,10 @@ import (
 // connection that was opened before the revocation.
 const DefaultSigningLeaseTTL = 5 * time.Minute
 
+// maxSigningLeaseLifetime caps how long a lease may live even when signatures
+// keep extending its expiry.
+const maxSigningLeaseLifetime = 2 * time.Hour
+
 // SigningLease is the permission to sign with one key on behalf of one
 // task attempt.
 //
@@ -43,6 +47,7 @@ type TaskOriginator interface {
 type signingLease struct {
 	LeaseID    string
 	TaskID     string
+	AttemptID  string
 	UserID     string
 	IdentityID string
 	Generation uint64
@@ -50,6 +55,7 @@ type signingLease struct {
 	// DaemonID is the supervisor allowed to use the lease. A lease id alone
 	// is not a credential: the daemon that opened it is the only caller.
 	DaemonID  string
+	IssuedAt  time.Time
 	ExpiresAt time.Time
 	// Revoked marks a lease whose key was withdrawn. The record is kept
 	// so a later signature request is refused with the reason rather than
@@ -139,7 +145,7 @@ func (s *Service) ReadyIdentities(ctx context.Context, userID string) ([]RunIden
 // The key is chosen by the server: the task's originator decides which
 // identity may be used, and the provider narrows it to one credential. The
 // caller cannot name a user, an identity or a generation.
-func (s *Service) OpenSigningLease(ctx context.Context, taskID, providerID, daemonID string) (SigningLease, error) {
+func (s *Service) OpenSigningLease(ctx context.Context, taskID, attemptID, providerID, daemonID string) (SigningLease, error) {
 	if !s.available() || s.originators == nil {
 		return SigningLease{}, ErrUnavailable
 	}
@@ -189,14 +195,19 @@ func (s *Service) OpenSigningLease(ctx context.Context, taskID, providerID, daem
 
 	now := s.now().UTC()
 	s.pruneLeases(now)
+	if strings.TrimSpace(attemptID) == "" {
+		attemptID = taskID
+	}
 	lease := &signingLease{
 		LeaseID:    s.newID(),
 		TaskID:     taskID,
+		AttemptID:  attemptID,
 		UserID:     originator,
 		IdentityID: identity.ID,
 		Generation: key.Generation,
 		ProviderID: providerID,
 		DaemonID:   daemonID,
+		IssuedAt:   now,
 		ExpiresAt:  now.Add(s.leaseTTL),
 	}
 
@@ -243,10 +254,13 @@ func (s *Service) Sign(ctx context.Context, leaseID, daemonID string, data []byt
 			s.leaseMu.Unlock()
 			return nil, ErrRevoked
 		}
-		// Slide the expiry: a long run keeps signing while it keeps
-		// working, and the key state check below still stops it the
-		// moment the credential is withdrawn.
-		lease.ExpiresAt = now.Add(s.leaseTTL)
+		// Slide the expiry within a finite attempt lifetime.
+		next := now.Add(s.leaseTTL)
+		cap := lease.IssuedAt.Add(maxSigningLeaseLifetime)
+		if next.After(cap) {
+			next = cap
+		}
+		lease.ExpiresAt = next
 	}
 	s.leaseMu.Unlock()
 	if !ok {
