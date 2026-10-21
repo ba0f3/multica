@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -110,6 +112,16 @@ func main() {
 	}
 	if len(os.Args) == 2 && os.Args[1] == agent.CursorHookHelperArg {
 		agent.RunCursorHookRelay(os.Stdin, os.Stdout, os.Getenv)
+		return
+	}
+	// Hidden entrypoint for a task attempt running inside the sandbox. It is
+	// not a user-facing command: the daemon starts it under bwrap with a
+	// manifest on stdin, and nothing else should ever invoke it.
+	if len(os.Args) == 2 && os.Args[1] == sandbox.WorkerArg {
+		if err := sandbox.RunWorker(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 	cli.CleanupStaleUpdateArtifacts()
