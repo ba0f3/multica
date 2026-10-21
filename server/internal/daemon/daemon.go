@@ -5983,6 +5983,12 @@ func taskRunFailureReason(err error) string {
 	if errors.Is(err, execenv.ErrOpenclawCLITimeout) {
 		return taskfailure.ReasonRuntimeCLITimeout.String()
 	}
+	// The sandbox was required and could not be built. The run never reached
+	// an agent, so no agent-error reason is accurate, and a host fallback
+	// would be exactly the outcome the operator asked to prevent.
+	if errors.Is(err, errSandboxUnavailable) {
+		return taskfailure.ReasonSandboxUnavailable.String()
+	}
 	// Everything else that failed while building or re-opening the execution
 	// environment. Last of the structural branches: the four sentinels above
 	// each name a cause the daemon already recognises on its own (task
@@ -8477,9 +8483,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// A run with no verified credential, no provable originator or no
 	// matching provider simply has no SSH_AUTH_SOCK, and the host's agent
 	// is never inherited.
-	if profileDir, profileErr := cli.ProfileDir(d.cfg.Profile); profileErr != nil {
+	gitSocketPath := ""
+	profileDir, profileErr := cli.ProfileDir(d.cfg.Profile)
+	if profileErr != nil {
 		taskLog.Warn("git: could not resolve the profile directory; the run has no Git credential", "error", profileErr)
 	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir); socketPath != "" {
+		gitSocketPath = socketPath
 		agentEnv["SSH_AUTH_SOCK"] = socketPath
 		defer stopGitAgent()
 	}
@@ -8598,7 +8607,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// families go through New. This is the single production boundary — the
 	// daemon never calls agent.New or agent.NewRuntime directly, so the two
 	// factories stay meaning exactly one thing each.
-	backend, err := agent.ResolveBackend(provider, agent.Config{
+	backendConfig := agent.Config{
 		ExecutablePath: entry.Path,
 		LaunchPrefix:   profileFixedArgs,
 		CLIVersion:     resolvedVersion,
@@ -8609,9 +8618,23 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		DaemonVersion:  d.cfg.CLIVersion,
 		CodexVersion:   codexVersion,
 		BuiltinRuntime: !usesCustomProfileCommand,
-	})
+	}
+	backend, err := agent.ResolveBackend(provider, backendConfig)
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
+	}
+
+	// When the deployment enabled the sandbox, the adapter and everything it
+	// spawns run inside a bubblewrap boundary instead of on the host. A
+	// failure to build that boundary fails the run: a task configured to be
+	// isolated never executes outside it.
+	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath)
+	if sandboxErr != nil {
+		taskLog.Error("sandbox: the attempt cannot be isolated; refusing to run on the host", "error", sandboxErr)
+		return TaskResult{}, sandboxErr
+	}
+	if sandboxed != nil {
+		backend = sandboxed
 	}
 
 	// Two-tier model resolution: an explicit agent.model wins,
