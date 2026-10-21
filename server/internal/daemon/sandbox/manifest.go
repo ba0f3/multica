@@ -41,6 +41,7 @@ type Config struct {
 	CLIVersion     string            `json:"cli_version,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	TaskID         string            `json:"task_id"`
+	AttemptID      string            `json:"attempt_id,omitempty"`
 	RuntimeID      string            `json:"runtime_id"`
 	DaemonVersion  string            `json:"daemon_version,omitempty"`
 	CodexVersion   string            `json:"codex_version,omitempty"`

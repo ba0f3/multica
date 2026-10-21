@@ -7631,6 +7631,8 @@ func qualifyTaskModel(
 }
 
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
+	attemptID := uuid.NewString()
+	taskLog = taskLog.With("attempt_id", attemptID)
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	phaseRecorder.Mark(taskPhasePrepareStarted)
 	// A claim carries the task-row agent id both at the top level and inside
@@ -8487,7 +8489,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	profileDir, profileErr := cli.ProfileDir(d.cfg.Profile)
 	if profileErr != nil {
 		taskLog.Warn("git: could not resolve the profile directory; the run has no Git credential", "error", profileErr)
-	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir); socketPath != "" {
+	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir, attemptID); socketPath != "" {
 		gitSocketPath = socketPath
 		agentEnv["SSH_AUTH_SOCK"] = socketPath
 		defer stopGitAgent()
@@ -8614,6 +8616,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		Env:            agentEnv,
 		Logger:         d.logger,
 		TaskID:         task.ID,
+		AttemptID:      attemptID,
 		RuntimeID:      task.RuntimeID,
 		DaemonVersion:  d.cfg.CLIVersion,
 		CodexVersion:   codexVersion,
@@ -8628,7 +8631,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// spawns run inside a bubblewrap boundary instead of on the host. A
 	// failure to build that boundary fails the run: a task configured to be
 	// isolated never executes outside it.
-	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath)
+	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID)
 	if sandboxErr != nil {
 		taskLog.Error("sandbox: the attempt cannot be isolated; refusing to run on the host", "error", sandboxErr)
 		return TaskResult{}, sandboxErr

@@ -62,7 +62,7 @@ func collect(t *testing.T, session *agent.Session) ([]agent.Message, agent.Resul
 func TestIPCBackendForwardsMessagesAndTheResult(t *testing.T) {
 	// The worker reads and discards the manifest, then reports one text
 	// message and a completed result.
-	script := `cat >/dev/null
+	script := `read _
 printf '%s\n' '{"type":"message","message":{"Type":"text","Content":"working"}}'
 printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"done"}}'`
 	backend := newTestBackend(t, script)
@@ -82,7 +82,7 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"done"}}
 }
 
 func TestIPCBackendFailsWhenTheWorkerExitsWithoutAResult(t *testing.T) {
-	backend := newTestBackend(t, `cat >/dev/null; exit 3`)
+	backend := newTestBackend(t, `read _; exit 3`)
 
 	session, err := backend.Execute(context.Background(), "prompt", agent.ExecOptions{})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestIPCBackendFailsWhenTheWorkerExitsWithoutAResult(t *testing.T) {
 }
 
 func TestIPCBackendFailsOnAnInvalidFrame(t *testing.T) {
-	backend := newTestBackend(t, `cat >/dev/null; printf '%s\n' 'not a frame'`)
+	backend := newTestBackend(t, `read _; printf '%s\n' 'not a frame'`)
 
 	session, err := backend.Execute(context.Background(), "prompt", agent.ExecOptions{})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestIPCBackendFailsOnAnInvalidFrame(t *testing.T) {
 }
 
 func TestIPCBackendReportsAWorkerErrorFrame(t *testing.T) {
-	backend := newTestBackend(t, `cat >/dev/null; printf '%s\n' '{"type":"error","error":"backend unavailable"}'`)
+	backend := newTestBackend(t, `read _; printf '%s\n' '{"type":"error","error":"backend unavailable"}'`)
 
 	session, err := backend.Execute(context.Background(), "prompt", agent.ExecOptions{})
 	if err != nil {
@@ -123,7 +123,7 @@ func TestIPCBackendReportsAWorkerErrorFrame(t *testing.T) {
 func TestIPCBackendKillsTheWorkerWhenTheAttemptIsCancelled(t *testing.T) {
 	// The worker outlives the context; the backend must kill it rather than
 	// leave the sandboxed tree running after the task was cancelled.
-	backend := newTestBackend(t, `cat >/dev/null; sleep 60`)
+	backend := newTestBackend(t, `read _; sleep 60`)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	session, err := backend.Execute(ctx, "prompt", agent.ExecOptions{})

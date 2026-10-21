@@ -79,18 +79,21 @@ func repositoryHost(raw string) string {
 // SSH_AUTH_SOCK. An empty path means the run has no Git credential, which is
 // the correct outcome for a run with no provable human originator, no
 // verified key or no matching provider.
-func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot string) (string, func()) {
+func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot string, attemptID string) (string, func()) {
 	binding := pickGitIdentity(task)
 	if binding == nil || d.client == nil {
 		return "", func() {}
 	}
-	lease, err := d.client.OpenGitSigningLease(ctx, task.ID, binding.ProviderID)
+	lease, err := d.client.OpenGitSigningLease(ctx, task.ID, attemptID, binding.ProviderID)
 	if err != nil {
 		d.logger.Warn("git: could not open a signing lease", "task_id", task.ID, "error", err)
 		return "", func() {}
 	}
 
-	socketDir := filepath.Join(profileRoot, "git-agent", task.ID)
+	if strings.TrimSpace(attemptID) == "" {
+		attemptID = task.ID
+	}
+	socketDir := filepath.Join(profileRoot, "git-agent", task.ID, attemptID)
 	// A crash during an earlier attempt can leave the directory behind, and
 	// Serve refuses an existing path. Clearing it here keeps a re-delivered
 	// task from being unable to sign forever.

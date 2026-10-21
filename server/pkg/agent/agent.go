@@ -322,6 +322,10 @@ type Config struct {
 	Env            map[string]string // extra environment variables
 	Logger         *slog.Logger
 	TaskID         string
+	// AttemptID identifies one execution attempt of the task inside an
+	// isolated worker boundary. It is distinct from TaskID so retries and
+	// concurrent attempts receive separate signing sockets and leases.
+	AttemptID      string
 	RuntimeID      string
 	DaemonVersion  string
 	CodexVersion   string

@@ -22,6 +22,7 @@ func ConfigFromAgent(cfg agent.Config) Config {
 		CLIVersion:     cfg.CLIVersion,
 		Env:            cfg.Env,
 		TaskID:         cfg.TaskID,
+		AttemptID:      cfg.AttemptID,
 		RuntimeID:      cfg.RuntimeID,
 		DaemonVersion:  cfg.DaemonVersion,
 		CodexVersion:   cfg.CodexVersion,
@@ -67,29 +68,7 @@ func runManifest(ctx context.Context, manifest Manifest, out io.Writer, logger *
 	if session == nil || session.Result == nil {
 		return WriteFrame(out, Frame{Type: FrameError, Error: "the backend returned no session"})
 	}
-
-	messages := session.Messages
-	for {
-		select {
-		case message, ok := <-messages:
-			if !ok {
-				// A closed transcript channel leaves the result as the only
-				// thing left to wait for.
-				messages = nil
-				continue
-			}
-			if err := WriteFrame(out, Frame{Type: FrameMessage, Message: &message}); err != nil {
-				return err
-			}
-		case result, ok := <-session.Result:
-			if !ok {
-				return WriteFrame(out, Frame{Type: FrameError, Error: "the backend closed its result channel"})
-			}
-			return WriteFrame(out, Frame{Type: FrameResult, Result: &result})
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	return streamWorkerSession(ctx, os.Stdin, out, session)
 }
 
 // errNoResult reports a worker that exited without reporting an outcome.

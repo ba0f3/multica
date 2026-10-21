@@ -1433,10 +1433,13 @@ type GitSigningLease struct {
 //
 // The daemon names the provider; the server chooses the user, the identity
 // and the generation from the task's originator.
-func (c *Client) OpenGitSigningLease(ctx context.Context, taskID, providerID string) (*GitSigningLease, error) {
+func (c *Client) OpenGitSigningLease(ctx context.Context, taskID, attemptID, providerID string) (*GitSigningLease, error) {
 	var lease GitSigningLease
 	path := fmt.Sprintf("/api/daemon/tasks/%s/git-signing-lease", url.PathEscape(taskID))
-	if err := c.postJSON(ctx, path, map[string]string{"provider_id": providerID}, &lease); err != nil {
+	if err := c.postJSON(ctx, path, map[string]string{
+		"provider_id": providerID,
+		"attempt_id":  attemptID,
+	}, &lease); err != nil {
 		return nil, err
 	}
 	if lease.LeaseID == "" || lease.PublicKey == "" {

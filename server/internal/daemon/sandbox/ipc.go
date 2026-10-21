@@ -19,6 +19,17 @@ const (
 	FrameMessage FrameType = "message"
 	FrameResult  FrameType = "result"
 	FrameError   FrameType = "error"
+
+	// Supervisor → worker control frames (bidirectional Session IPC).
+	FrameSupplementRequest       FrameType = "supplement_request"
+	FrameSupplementReadyQuery    FrameType = "supplement_ready_query"
+	FrameSupplementReadyResponse FrameType = "supplement_ready"
+	FrameToolActivityQuery       FrameType = "tool_activity_query"
+	FrameToolActivityResponse    FrameType = "tool_activity"
+	FrameInterruptBackground     FrameType = "interrupt_background"
+	FrameInterruptResult         FrameType = "interrupt_result"
+	FrameTerminalObservedQuery   FrameType = "terminal_observed_query"
+	FrameTerminalObservedResponse FrameType = "terminal_observed"
 )
 
 // Frame is one supervisor/worker IPC record.
@@ -32,6 +43,11 @@ type Frame struct {
 	Message *agent.Message `json:"message,omitempty"`
 	Result  *agent.Result  `json:"result,omitempty"`
 	Error   string         `json:"error,omitempty"`
+	// Control payloads for bidirectional Session IPC.
+	Text      string `json:"text,omitempty"`
+	Bool      bool   `json:"bool,omitempty"`
+	Int32     int32  `json:"int32,omitempty"`
+	DurationS int64  `json:"duration_s,omitempty"`
 }
 
 // WriteFrame writes one JSON frame followed by a newline.
@@ -75,6 +91,18 @@ func ReadFrame(r *bufio.Reader) (Frame, error) {
 	case FrameError:
 		if strings.TrimSpace(frame.Error) == "" {
 			return Frame{}, errors.New("sandbox: an error frame carries no error")
+		}
+	case FrameSupplementRequest:
+		if strings.TrimSpace(frame.Text) == "" {
+			return Frame{}, errors.New("sandbox: supplement_request requires text")
+		}
+	case FrameSupplementReadyQuery, FrameToolActivityQuery, FrameTerminalObservedQuery, FrameInterruptBackground:
+		// empty payload
+	case FrameSupplementReadyResponse, FrameTerminalObservedResponse, FrameInterruptResult:
+		// bool payload
+	case FrameToolActivityResponse:
+		if frame.Int32 < 0 {
+			return Frame{}, errors.New("sandbox: tool_activity count is invalid")
 		}
 	default:
 		return Frame{}, fmt.Errorf("sandbox: unknown frame type %q", frame.Type)

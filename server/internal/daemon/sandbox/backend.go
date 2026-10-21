@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -17,17 +18,17 @@ const stderrLimit = 4 << 10
 
 // IPCBackend runs a task attempt as a sandboxed worker process and adapts its
 // frames into the agent.Backend interface.
-//
-// It is a normal backend to the daemon's execution path: the drain loop, the
-// idle watchdog, the result mapping and the retry logic all stay where they
-// are. Nothing above this type needs to know that the agent now runs in a
-// different process tree.
 type IPCBackend struct {
 	Provider string
 	Config   Config
-	// Launch builds the worker command. The daemon supplies the bwrap
-	// launcher; a test supplies a plain process.
+	// Launch builds the worker command. The daemon supplies docker or bwrap;
+	// tests supply a plain process.
 	Launch func() (*exec.Cmd, error)
+	// KeepStdinOpen keeps stdin open after the manifest for bidirectional
+	// Session IPC. Unit tests that use shell fake workers leave this false.
+	KeepStdinOpen bool
+	// StopAttempt stops the outer execution boundary (for example docker kill).
+	StopAttempt func()
 }
 
 var _ agent.Backend = (*IPCBackend)(nil)
@@ -39,18 +40,18 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 		return nil, errors.New("sandbox: no worker launcher is configured")
 	}
 	spec := ConvertExecOptions(opts)
-	// The checkout is mounted at a fixed path inside the boundary, so the
-	// host path the daemon knows does not exist in there.
 	spec.Cwd = CheckoutPath
-	// A hook relay names the daemon binary by its host path. Inside the
-	// boundary that binary lives at the worker mount instead.
 	if len(spec.CursorHookCommand) > 0 {
 		spec.CursorHookCommand = append([]string(nil), spec.CursorHookCommand...)
 		spec.CursorHookCommand[0] = sandboxWorker
 	}
+	attemptID := b.Config.AttemptID
+	if attemptID == "" {
+		attemptID = b.Config.TaskID
+	}
 	manifest := Manifest{
 		TaskID:    b.Config.TaskID,
-		AttemptID: b.Config.TaskID,
+		AttemptID: attemptID,
 		Provider:  b.Provider,
 		Prompt:    prompt,
 		Config:    b.Config,
@@ -80,44 +81,117 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 		_ = cmd.Wait()
 		return nil, err
 	}
-	if err := stdin.Close(); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("sandbox: close the worker stdin: %w", err)
+	if !b.KeepStdinOpen {
+		if err := stdin.Close(); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("sandbox: close the worker stdin: %w", err)
+		}
+		stdin = nil
 	}
 
 	messages := make(chan agent.Message, 64)
 	result := make(chan agent.Result, 1)
+	controlFrames := make(chan Frame, 8)
 	go func() {
-		b.drain(ctx, cmd, stdout, stderr, messages, result)
+		b.drain(ctx, cmd, stdout, stderr, controlFrames, messages, result)
 	}()
-	return &agent.Session{Messages: messages, Result: result}, nil
+
+	session := &agent.Session{Messages: messages, Result: result}
+	if stdin != nil {
+		attachSupervisorHooks(ctx, stdin, controlFrames, session, opts)
+	}
+	return session, nil
 }
 
-// drain reads frames until the worker reports a result or exits.
-//
-// Every failure path sends exactly one result and closes both channels: a
-// worker that dies silently must fail the run rather than leave it waiting
-// forever.
+func attachSupervisorHooks(
+	ctx context.Context,
+	stdin io.Writer,
+	controlFrames <-chan Frame,
+	session *agent.Session,
+	opts agent.ExecOptions,
+) {
+	readResponse := func(callCtx context.Context, expect FrameType) (Frame, error) {
+		for {
+			select {
+			case frame, ok := <-controlFrames:
+				if !ok {
+					return Frame{}, errors.New("sandbox: control channel closed")
+				}
+				if frame.Type == FrameError {
+					return frame, errors.New(frame.Error)
+				}
+				if frame.Type == expect {
+					return frame, nil
+				}
+			case <-callCtx.Done():
+				return Frame{}, callCtx.Err()
+			case <-ctx.Done():
+				return Frame{}, ctx.Err()
+			}
+		}
+	}
+
+	if opts.EnableTaskSupplement {
+		session.Supplement = func(callCtx context.Context, text string) error {
+			_, err := supervisorControl(callCtx, stdin, readResponse, Frame{
+				Type: FrameSupplementRequest,
+				Text: text,
+			}, FrameSupplementReadyResponse)
+			return err
+		}
+		session.SupplementReady = func() bool {
+			frame, err := supervisorControl(ctx, stdin, readResponse, Frame{Type: FrameSupplementReadyQuery}, FrameSupplementReadyResponse)
+			if err != nil {
+				return false
+			}
+			return frame.Bool
+		}
+	}
+	session.ToolActivity = func() (int32, time.Duration) {
+		frame, err := supervisorControl(ctx, stdin, readResponse, Frame{Type: FrameToolActivityQuery}, FrameToolActivityResponse)
+		if err != nil {
+			return 0, 0
+		}
+		return frame.Int32, time.Duration(frame.DurationS) * time.Second
+	}
+	session.InterruptBackgroundTools = func() bool {
+		frame, err := supervisorControl(ctx, stdin, readResponse, Frame{Type: FrameInterruptBackground}, FrameInterruptResult)
+		if err != nil {
+			return false
+		}
+		return frame.Bool
+	}
+	session.TerminalObserved = func() bool {
+		frame, err := supervisorControl(ctx, stdin, readResponse, Frame{Type: FrameTerminalObservedQuery}, FrameTerminalObservedResponse)
+		if err != nil {
+			return false
+		}
+		return frame.Bool
+	}
+}
+
 func (b *IPCBackend) drain(
 	ctx context.Context,
 	cmd *exec.Cmd,
 	stdout io.Reader,
 	stderr *boundedBuffer,
+	controlFrames chan<- Frame,
 	messages chan<- agent.Message,
 	result chan<- agent.Result,
 ) {
 	defer close(messages)
 	defer close(result)
+	defer close(controlFrames)
 
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
 		select {
 		case <-ctx.Done():
-			// Cancelling the attempt kills the whole worker tree: bwrap
-			// was started with --die-with-parent, so the sandboxed
-			// processes go with it.
+			if b.StopAttempt != nil {
+				b.StopAttempt()
+			}
 			_ = cmd.Process.Kill()
 		case <-stop:
 		}
@@ -141,6 +215,9 @@ func (b *IPCBackend) drain(
 				finish(agent.Result{Status: "failed", Error: describeFailure(errNoResult, stderr)})
 				return
 			}
+			if b.StopAttempt != nil {
+				b.StopAttempt()
+			}
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 			finish(agent.Result{Status: "failed", Error: describeFailure(err, stderr)})
@@ -157,6 +234,14 @@ func (b *IPCBackend) drain(
 			_ = cmd.Wait()
 			finish(agent.Result{Status: "failed", Error: describeFailure(errors.New(frame.Error), stderr)})
 			return
+		case FrameSupplementReadyResponse, FrameToolActivityResponse, FrameInterruptResult, FrameTerminalObservedResponse:
+			select {
+			case controlFrames <- frame:
+			default:
+			}
+		default:
+			// Ignore unexpected worker frames; protocol errors fail the run
+			// only when they prevent reaching a terminal result.
 		}
 	}
 }
@@ -170,10 +255,6 @@ func describeFailure(err error, stderr *boundedBuffer) string {
 }
 
 // boundedBuffer keeps the first `limit` bytes written to it.
-//
-// It is a ring only in the sense that it stops growing: stderr is diagnostic
-// context for a failure, not a transcript, and an agent that logs for an hour
-// must not consume the supervisor's memory.
 type boundedBuffer struct {
 	mu        sync.Mutex
 	limit     int

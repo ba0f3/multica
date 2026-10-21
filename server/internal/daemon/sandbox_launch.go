@@ -21,22 +21,64 @@ import (
 // an agent, and no agent-error label fits.
 var errSandboxUnavailable = errors.New("sandbox unavailable")
 
-// sandboxedBackend returns a bwrap-backed backend for one attempt.
+func parseTaskSandboxEnv(raw string) (enabled bool, backend string) {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	switch value {
+	case "", "0", "false":
+		return false, ""
+	case "1", "true":
+		return true, "bwrap"
+	case "bwrap", "docker":
+		return true, value
+	default:
+		return true, value
+	}
+}
+
+// sandboxedBackend returns an isolated backend for one attempt.
 //
 // A nil backend with a nil error means the deployment did not enable the
-// sandbox and the task should run on the host. Once the sandbox is enabled,
-// every failure is an error: a run that was configured to be isolated never
-// silently executes outside the boundary.
+// sandbox and the task should run on the host. Protected mode refuses host
+// execution even when the sandbox flag is unset.
 func (d *Daemon) sandboxedBackend(
 	provider string,
 	config agent.Config,
 	env *execenv.Environment,
 	profileDir string,
 	agentSocket string,
+	attemptID string,
 ) (agent.Backend, error) {
 	if !d.cfg.SandboxEnabled {
+		if d.cfg.TaskProtectedMode {
+			return nil, fmt.Errorf("%w: protected mode requires an execution boundary", errSandboxUnavailable)
+		}
 		return nil, nil
 	}
+	if d.cfg.TaskProtectedMode && d.cfg.TaskSandboxBackend == "" {
+		return nil, fmt.Errorf("%w: protected mode requires a sandbox backend", errSandboxUnavailable)
+	}
+	backend := strings.TrimSpace(d.cfg.TaskSandboxBackend)
+	if backend == "" {
+		backend = "bwrap"
+	}
+	switch backend {
+	case "docker":
+		return d.dockerBackend(provider, config, env, agentSocket, attemptID)
+	case "bwrap":
+		return d.bwrapBackend(provider, config, env, profileDir, agentSocket, attemptID)
+	default:
+		return nil, fmt.Errorf("%w: unknown sandbox backend %q", errSandboxUnavailable, backend)
+	}
+}
+
+func (d *Daemon) bwrapBackend(
+	provider string,
+	config agent.Config,
+	env *execenv.Environment,
+	profileDir string,
+	agentSocket string,
+	attemptID string,
+) (agent.Backend, error) {
 	if env == nil {
 		return nil, fmt.Errorf("%w: no execution environment", errSandboxUnavailable)
 	}
@@ -100,10 +142,12 @@ func (d *Daemon) sandboxedBackend(
 	}
 
 	sandboxConfig := sandbox.ConfigFromAgent(config)
+	sandboxConfig.AttemptID = attemptID
 	sandboxConfig.Env = sandboxAgentEnv(config.Env, hostHome)
 	backend := &sandbox.IPCBackend{
-		Provider: provider,
-		Config:   sandboxConfig,
+		Provider:      provider,
+		Config:        sandboxConfig,
+		KeepStdinOpen: true,
 		Launch: func() (*exec.Cmd, error) {
 			return exec.Command(resolvedBwrap, args...), nil
 		},

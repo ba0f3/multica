@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,16 +115,28 @@ type Config struct {
 	Agents           map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, codearts, deveco, openclaw, hermes, pi, cursor, kimi, reasonix, dsh, kiro, antigravity, qoder, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, zeroclaw (plus built-in runtime identities from agent.BuiltinRuntimes, e.g. omp)
 	WorkspacesRoot   string                // base path for execution envs (default: ~/multica_workspaces)
 	KeepEnvAfterTask bool                  // preserve env after task for debugging
-	// SandboxEnabled runs every task attempt inside a bubblewrap boundary.
-	// It is opt-in: the boundary needs a host that supports unprivileged
-	// user namespaces, and a deployment that has not verified that would
-	// otherwise fail every run.
+	// SandboxEnabled runs every task attempt inside an isolated worker
+	// boundary (bubblewrap or Docker). It is opt-in on legacy deployments.
 	SandboxEnabled bool
+	// TaskSandboxBackend selects the isolation backend: "bwrap" or "docker".
+	TaskSandboxBackend string
+	// TaskProtectedMode refuses host execution when the boundary cannot be
+	// built. Protected nodes must not run untrusted tasks outside sandbox.
+	TaskProtectedMode bool
 	// BwrapPath is the bubblewrap binary. Empty means "bwrap" on PATH.
 	BwrapPath string
-	// SandboxSelfPath is the executable the sandbox runs as the worker.
+	// SandboxSelfPath is the executable the bwrap sandbox runs as the worker.
 	// Empty means the running binary (os.Executable()).
-	SandboxSelfPath                string
+	SandboxSelfPath string
+	// DockerCLIPath is the docker binary. Empty means "docker" on PATH.
+	DockerCLIPath string
+	// DockerTaskImage is the worker image for docker-backed attempts.
+	DockerTaskImage string
+	DockerNetworkMode string
+	DockerMemoryBytes int64
+	DockerPIDsLimit   int64
+	DockerNanoCPUs    int64
+	DockerTaskUser    string
 	HealthPort                     int           // local HTTP port for health checks (default: 19514)
 	MaxConcurrentTasks             int           // max tasks running in parallel (default: 20)
 	GCEnabled                      bool          // enable periodic workspace garbage collection (default: true)
@@ -552,7 +565,20 @@ func LoadConfig(overrides Overrides) (Config, error) {
 
 	// Keep env after task: env > default (false)
 	keepEnv := os.Getenv("MULTICA_KEEP_ENV_AFTER_TASK") == "true" || os.Getenv("MULTICA_KEEP_ENV_AFTER_TASK") == "1"
-	sandboxEnabled := os.Getenv("MULTICA_TASK_SANDBOX") == "true" || os.Getenv("MULTICA_TASK_SANDBOX") == "1"
+	sandboxEnabled, sandboxBackend := parseTaskSandboxEnv(os.Getenv("MULTICA_TASK_SANDBOX"))
+	taskProtected := os.Getenv("MULTICA_TASK_PROTECTED") == "true" || os.Getenv("MULTICA_TASK_PROTECTED") == "1"
+	if taskProtected && !sandboxEnabled {
+		sandboxEnabled = true
+		if sandboxBackend == "" {
+			sandboxBackend = "docker"
+		}
+	}
+	dockerMemory, err := parseDockerMemoryBytes(os.Getenv("MULTICA_DOCKER_TASK_MEMORY"))
+	if err != nil {
+		return Config{}, fmt.Errorf("MULTICA_DOCKER_TASK_MEMORY: %w", err)
+	}
+	dockerPIDs, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_PIDS_LIMIT")), 10, 64)
+	dockerNanoCPUs, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_NANO_CPUS")), 10, 64)
 
 	// GC config: env > defaults
 	gcEnabled := true
@@ -645,8 +671,17 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		WorkspacesRoot:                  workspacesRoot,
 		KeepEnvAfterTask:                keepEnv,
 		SandboxEnabled:                  sandboxEnabled,
+		TaskSandboxBackend:            sandboxBackend,
+		TaskProtectedMode:               taskProtected,
 		BwrapPath:                       strings.TrimSpace(os.Getenv("MULTICA_BWRAP_PATH")),
 		SandboxSelfPath:                 strings.TrimSpace(os.Getenv("MULTICA_SANDBOX_SELF")),
+		DockerCLIPath:                   strings.TrimSpace(os.Getenv("MULTICA_DOCKER_CLI")),
+		DockerTaskImage:                 strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_IMAGE")),
+		DockerNetworkMode:               strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_NETWORK")),
+		DockerMemoryBytes:               dockerMemory,
+		DockerPIDsLimit:                 dockerPIDs,
+		DockerNanoCPUs:                  dockerNanoCPUs,
+		DockerTaskUser:                  strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_USER")),
 		GCEnabled:                       gcEnabled,
 		GCInterval:                      gcInterval,
 		GCTTL:                           gcTTL,

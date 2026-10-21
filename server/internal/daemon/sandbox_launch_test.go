@@ -54,7 +54,7 @@ func newSandboxTestDaemon(t *testing.T, bwrapPath string) *Daemon {
 
 func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 	daemon := &Daemon{logger: newDiscardLogger()}
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "")
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1")
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 func TestSandboxBackendFailsClosedWhenBwrapIsMissing(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "no-such-bwrap"))
 
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "")
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1")
 	if err == nil {
 		t.Fatal("the daemon accepted a sandbox it cannot build")
 	}
@@ -86,14 +86,14 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	// backend builds is what matters here, not the sandbox kernel.
 	record := filepath.Join(t.TempDir(), "argv")
 	bwrap := filepath.Join(t.TempDir(), "bwrap")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\ncat >/dev/null\nexit 0\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\nread _\nexit 0\n"
 	if err := os.WriteFile(bwrap, []byte(script), 0o755); err != nil {
 		t.Fatalf("write the fake bwrap: %v", err)
 	}
 	daemon := newSandboxTestDaemon(t, bwrap)
 	env := newSandboxTestEnv(t)
 
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{TaskID: "task-1"}, env, "", "")
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-1")
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -164,11 +164,11 @@ func TestSandboxForbidsTheProfileTreeButAllowsANamedPerTaskPath(t *testing.T) {
 	env := newSandboxTestEnv(t)
 	env.HermesHome = taskPath
 	bwrap := filepath.Join(t.TempDir(), "bwrap")
-	if err := os.WriteFile(bwrap, []byte("#!/bin/sh\ncat >/dev/null\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(bwrap, []byte("#!/bin/sh\nread _\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write the fake bwrap: %v", err)
 	}
 	daemon := newSandboxTestDaemon(t, bwrap)
-	if _, err := daemon.sandboxedBackend("claude", agent.Config{}, env, profileRoot, ""); err != nil {
+	if _, err := daemon.sandboxedBackend("claude", agent.Config{}, env, profileRoot, "", "attempt-1"); err != nil {
 		t.Fatalf("a named per-task path under the profile was refused: %v", err)
 	}
 }
@@ -176,7 +176,7 @@ func TestSandboxForbidsTheProfileTreeButAllowsANamedPerTaskPath(t *testing.T) {
 func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "argv")
 	bwrap := filepath.Join(t.TempDir(), "bwrap")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\ncat >/dev/null\nexit 0\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\nread _\nexit 0\n"
 	if err := os.WriteFile(bwrap, []byte(script), 0o755); err != nil {
 		t.Fatalf("write the fake bwrap: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 		t.Fatalf("create socket: %v", err)
 	}
 
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{TaskID: "task-1"}, env, "", socket)
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{TaskID: "task-1"}, env, "", socket, "attempt-1")
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}

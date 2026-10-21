@@ -110,7 +110,7 @@ func TestStartGitAgentSocketServesSignatures(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	socketPath, stop := daemon.startGitAgentSocket(ctx, gitAgentTestTask(), profile)
+	socketPath, stop := daemon.startGitAgentSocket(ctx, gitAgentTestTask(), profile, "attempt-1")
 	if socketPath == "" {
 		t.Fatal("the daemon did not start a signing socket")
 	}
@@ -168,9 +168,9 @@ func TestStartGitAgentSocketIsPerAttempt(t *testing.T) {
 	secondTask := gitAgentTestTask()
 	secondTask.ID = "task-b"
 
-	firstPath, stopFirst := daemon.startGitAgentSocket(ctx, firstTask, profile)
+	firstPath, stopFirst := daemon.startGitAgentSocket(ctx, firstTask, profile, "attempt-a1")
 	defer stopFirst()
-	secondPath, stopSecond := daemon.startGitAgentSocket(ctx, secondTask, profile)
+	secondPath, stopSecond := daemon.startGitAgentSocket(ctx, secondTask, profile, "attempt-b1")
 	defer stopSecond()
 
 	if firstPath == "" || secondPath == "" {
@@ -188,7 +188,7 @@ func TestStartGitAgentSocketWithoutACredentialLeavesTheEnvironmentAlone(t *testi
 	defer cancel()
 
 	task := Task{ID: "task-1", Repos: []RepoData{{URL: "git@github.com:acme/api.git"}}}
-	if socketPath, stop := daemon.startGitAgentSocket(ctx, task, profile); socketPath != "" {
+	if socketPath, stop := daemon.startGitAgentSocket(ctx, task, profile, "attempt-1"); socketPath != "" {
 		t.Fatalf("a run with no credential got the socket %q", socketPath)
 	} else {
 		stop()
