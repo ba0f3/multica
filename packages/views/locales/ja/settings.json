@@ -645,6 +645,19 @@
     "toast_avatar_failed": "アバターをアップロードできませんでした",
     "toast_profile_failed": "プロフィールを更新できませんでした"
   },
+  "git_providers": {
+    "section_title": "Git SSH ホスト",
+    "section_description": "このサーバーのすべてのワークスペースに適用されます。ホストを一度追加してから、下で鍵を生成してください。",
+    "host_keys_hint": "ホストを追加すると、Multica がこのサーバーから SSH ホスト鍵のフィンガープリントを取得します。API を実行するマシンから接続できるホストとポートを指定してください（ローカルの Gitea では、ブラウザーから localhost に接続できるだけでは不十分です）。",
+    "label": "ラベル",
+    "kind": "プロバイダーの種類",
+    "host": "ホスト",
+    "port": "SSH ポート",
+    "add": "ホストを追加",
+    "toast_invalid": "ラベル、ホスト、ポートを入力してください。",
+    "toast_created": "Git ホストを追加しました",
+    "toast_create_failed": "Git ホストを追加できませんでした"
+  },
   "git_identities": {
     "section_title": "Git 認証情報",
     "section_description": "Multica はこのキーで Git 操作に署名します。取り消しは元に戻せず、プロバイダー側の公開鍵も削除されません。",
