@@ -35,6 +35,18 @@ func (s *SQLCStore) ListProviders(ctx context.Context) ([]Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	return providersFromRows(rows), nil
+}
+
+func (s *SQLCStore) ListAllProviders(ctx context.Context) ([]Provider, error) {
+	rows, err := s.queries.ListAllR2DGitProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return providersFromRows(rows), nil
+}
+
+func providersFromRows(rows []db.R2dGitProvider) []Provider {
 	out := make([]Provider, 0, len(rows))
 	for _, row := range rows {
 		provider := Provider{
@@ -48,7 +60,7 @@ func (s *SQLCStore) ListProviders(ctx context.Context) ([]Provider, error) {
 		provider.HostPins = decodeHostPins(row.HostPins)
 		out = append(out, provider)
 	}
-	return out, nil
+	return out
 }
 
 func (s *SQLCStore) GetProvider(ctx context.Context, id string) (Provider, error) {
@@ -73,6 +85,42 @@ func (s *SQLCStore) GetProvider(ctx context.Context, id string) (Provider, error
 	}
 	provider.HostPins = decodeHostPins(row.HostPins)
 	return provider, nil
+}
+
+func (s *SQLCStore) CreateProvider(ctx context.Context, provider Provider) (Provider, error) {
+	id, err := util.ParseUUID(provider.ID)
+	if err != nil {
+		return Provider{}, ErrScope
+	}
+	pins, err := encodeHostPins(provider.HostPins)
+	if err != nil {
+		return Provider{}, ErrScope
+	}
+	row, err := s.queries.CreateR2DGitProvider(ctx, db.CreateR2DGitProviderParams{
+		ID:       id,
+		Label:    provider.Label,
+		Kind:     provider.Kind,
+		Host:     provider.Host,
+		Port:     int32(provider.Port),
+		HostPins: pins,
+		Enabled:  provider.Enabled,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Provider{}, ErrConflict
+		}
+		return Provider{}, err
+	}
+	created := Provider{
+		ID:      util.UUIDToString(row.ID),
+		Label:   row.Label,
+		Kind:    row.Kind,
+		Host:    row.Host,
+		Port:    int(row.Port),
+		Enabled: row.Enabled,
+	}
+	created.HostPins = decodeHostPins(row.HostPins)
+	return created, nil
 }
 
 func (s *SQLCStore) GetIdentityForUser(ctx context.Context, userID, providerID string) (Identity, error) {
@@ -475,6 +523,17 @@ func decodeHostPins(raw []byte) []string {
 		return nil
 	}
 	return pins
+}
+
+func encodeHostPins(pins []string) ([]byte, error) {
+	if len(pins) == 0 {
+		return nil, ErrScope
+	}
+	encoded, err := json.Marshal(pins)
+	if err != nil {
+		return nil, ErrScope
+	}
+	return encoded, nil
 }
 
 func decodeConsentProjects(raw []byte) []string {

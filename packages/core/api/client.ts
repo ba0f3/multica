@@ -123,6 +123,7 @@ import type {
   ListQuickActionsResponse,
   GitIdentity,
   GitProfile,
+  GitProvider,
   UpdatePropertyRequest,
   ListPropertiesResponse,
   IssuePropertiesResponse,
@@ -434,8 +435,10 @@ import {
   EMPTY_QUICK_ACTION,
   EMPTY_LIST_QUICK_ACTIONS_RESPONSE,
   GitProfileSchema,
+  GitProviderSchema,
   GitIdentitySchema,
   EMPTY_GIT_PROFILE,
+  EMPTY_GIT_PROVIDER,
   EMPTY_GIT_IDENTITY,
   CommentSchema,
   EMPTY_COMMENT,
@@ -5413,6 +5416,23 @@ export class ApiClient {
     const raw = await this.fetch<unknown>("/api/me/git-identities");
     return parseWithFallback(raw, GitProfileSchema, EMPTY_GIT_PROFILE, {
       endpoint: "GET /api/me/git-identities",
+    });
+  }
+
+  /** Register a deployment-scoped Git SSH host (self-host). */
+  async createGitProvider(input: {
+    label: string;
+    kind: string;
+    host: string;
+    port: number;
+    host_pins: string[];
+  }): Promise<GitProvider> {
+    const raw = await this.fetch<unknown>("/api/me/git-providers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, GitProviderSchema, EMPTY_GIT_PROVIDER, {
+      endpoint: "POST /api/me/git-providers",
     });
   }
 

@@ -650,6 +650,19 @@
     "toast_avatar_failed": "Failed to upload avatar",
     "toast_profile_failed": "Failed to update profile"
   },
+  "git_providers": {
+    "section_title": "Git SSH hosts",
+    "section_description": "Applies to this server for every workspace. Add a host once, then generate your key below.",
+    "label": "Label",
+    "kind": "Provider type",
+    "host": "Host",
+    "port": "SSH port",
+    "host_pins": "SSH host key fingerprints (one SHA256 per line)",
+    "add": "Add host",
+    "toast_invalid": "Enter a label, host, port, and at least one host key fingerprint.",
+    "toast_created": "Git host added",
+    "toast_create_failed": "Could not add the Git host"
+  },
   "git_identities": {
     "section_title": "Git credentials",
     "section_description": "Multica signs Git operations with these keys. Revoking a key cannot be undone and does not remove its public key from your provider.",

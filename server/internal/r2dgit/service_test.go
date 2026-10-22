@@ -60,13 +60,37 @@ func keySlot(identityID string, generation uint64) string {
 }
 
 func (s *fakeStore) ListProviders(context.Context) ([]Provider, error) {
+	return s.listProviders(false)
+}
+
+func (s *fakeStore) ListAllProviders(context.Context) ([]Provider, error) {
+	return s.listProviders(true)
+}
+
+func (s *fakeStore) listProviders(all bool) ([]Provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []Provider{}
 	for _, provider := range s.providers {
+		if !all && !provider.Enabled {
+			continue
+		}
 		out = append(out, provider)
 	}
 	return out, nil
+}
+
+func (s *fakeStore) CreateProvider(_ context.Context, provider Provider) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if provider.ID == "" {
+		return Provider{}, ErrScope
+	}
+	if _, exists := s.providers[provider.ID]; exists {
+		return Provider{}, ErrConflict
+	}
+	s.providers[provider.ID] = provider
+	return provider, nil
 }
 
 func (s *fakeStore) GetProvider(_ context.Context, id string) (Provider, error) {

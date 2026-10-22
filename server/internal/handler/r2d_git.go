@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,16 @@ func (h *Handler) gitService(w http.ResponseWriter) (*r2dgit.Service, bool) {
 		return nil, false
 	}
 	return h.GitSecurity, true
+}
+
+func (h *Handler) gitProviderManagementEnabled() bool {
+	if h == nil || h.GitSecurity == nil {
+		return false
+	}
+	if os.Getenv("MULTICA_GIT_PROVIDER_MANAGEMENT") == "false" {
+		return false
+	}
+	return !isOfficialCloudDeployment()
 }
 
 // gitServiceError maps a credential error to a response.
@@ -116,6 +127,48 @@ func (h *Handler) ListGitIdentities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, profile)
+}
+
+// CreateGitProvider registers a deployment-scoped Git SSH host.
+//
+// Any signed-in human may add a provider on self-hosted instances where Git
+// credential custody is enabled. The configuration is shared by every
+// workspace on the server, not repeated per workspace.
+func (h *Handler) CreateGitProvider(w http.ResponseWriter, r *http.Request) {
+	if !h.gitProviderManagementEnabled() {
+		writeErrorCode(w, http.StatusForbidden, "git_provider_management_disabled", "Git provider management is not enabled on this server.")
+		return
+	}
+	_, ok := gitHumanSession(w, r, false)
+	if !ok {
+		return
+	}
+	service, ok := h.gitService(w)
+	if !ok {
+		return
+	}
+	var body struct {
+		Label    string   `json:"label"`
+		Kind     string   `json:"kind"`
+		Host     string   `json:"host"`
+		Port     int      `json:"port"`
+		HostPins []string `json:"host_pins"`
+	}
+	if !gitJSONBody(w, r, &body) {
+		return
+	}
+	provider, err := service.CreateProvider(r.Context(), r2dgit.CreateProviderInput{
+		Label:    body.Label,
+		Kind:     body.Kind,
+		Host:     body.Host,
+		Port:     body.Port,
+		HostPins: body.HostPins,
+	})
+	if err != nil {
+		gitServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, provider)
 }
 
 // GenerateGitIdentity creates a new key generation for a provider.

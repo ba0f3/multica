@@ -392,3 +392,36 @@ func TestGitIdentityEndpointsAreUnavailableWithoutCustody(t *testing.T) {
 		t.Fatalf("code = %q, want %q", code, "git_service_unavailable")
 	}
 }
+
+func TestCreateGitProviderRegistersAHostForEveryUser(t *testing.T) {
+	installGitService(t, &gitTestVerifier{login: "gitea-user"})
+	userID := newGitTestUser(t, "git-provider-admin@multica.ai")
+
+	recorder := httptest.NewRecorder()
+	testHandler.CreateGitProvider(recorder, gitRequest(t, http.MethodPost, "/api/me/git-providers", `{
+		"label": "Gitea test",
+		"kind": "gitea",
+		"host": "gitea.test.local",
+		"port": 2222,
+		"host_pins": ["SHA256:test-pin"]
+	}`, userID))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d: %s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	testHandler.ListGitIdentities(recorder, gitRequest(t, http.MethodGet, "/api/me/git-identities", "", userID))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var profile r2dgit.Profile
+	if err := json.Unmarshal(recorder.Body.Bytes(), &profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	for _, provider := range profile.Providers {
+		if provider.Host == "gitea.test.local" && provider.Port == 2222 {
+			return
+		}
+	}
+	t.Fatalf("created provider missing from profile: %+v", profile.Providers)
+}

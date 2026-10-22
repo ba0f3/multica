@@ -76,7 +76,9 @@ type Job struct {
 // reach another user's credential by passing a foreign id.
 type Store interface {
 	ListProviders(ctx context.Context) ([]Provider, error)
+	ListAllProviders(ctx context.Context) ([]Provider, error)
 	GetProvider(ctx context.Context, id string) (Provider, error)
+	CreateProvider(ctx context.Context, provider Provider) (Provider, error)
 	GetIdentityForUser(ctx context.Context, userID, providerID string) (Identity, error)
 	ListIdentitiesForUser(ctx context.Context, userID string) ([]Identity, error)
 	ListKeysForUser(ctx context.Context, userID string) ([]Key, error)

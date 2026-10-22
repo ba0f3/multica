@@ -645,6 +645,19 @@
     "toast_avatar_failed": "上传头像失败",
     "toast_profile_failed": "更新资料失败"
   },
+  "git_providers": {
+    "section_title": "Git SSH 主机",
+    "section_description": "对本服务器的所有工作区生效。只需添加一次主机，然后在下方生成密钥。",
+    "label": "名称",
+    "kind": "类型",
+    "host": "主机",
+    "port": "SSH 端口",
+    "host_pins": "SSH 主机密钥指纹（每行一个 SHA256）",
+    "add": "添加主机",
+    "toast_invalid": "请填写名称、主机、端口和至少一条主机密钥指纹。",
+    "toast_created": "已添加 Git 主机",
+    "toast_create_failed": "无法添加 Git 主机"
+  },
   "git_identities": {
     "section_title": "Git 凭据",
     "section_description": "Multica 使用这些密钥为 Git 操作签名。吊销不可撤销，也不会删除提供方上的公钥。",

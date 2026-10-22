@@ -17,6 +17,7 @@ import {
 } from "./settings-layout";
 import { useAutoSave } from "./use-auto-save";
 import { GitIdentitiesSection } from "./git-identities-section";
+import { GitProvidersAdminSection } from "./git-providers-admin-section";
 
 // Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
 // JS String.length (UTF-16 code units) here while the server counts runes,
@@ -188,6 +189,7 @@ export function AccountTab() {
         </SettingsCard>
       </SettingsSection>
 
+      <GitProvidersAdminSection />
       <GitIdentitiesSection />
     </SettingsTab>
   );

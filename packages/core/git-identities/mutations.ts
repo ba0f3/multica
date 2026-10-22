@@ -46,3 +46,17 @@ export function useRevokeGitIdentity() {
     onSettled: invalidate,
   });
 }
+
+export function useCreateGitProvider() {
+  const invalidate = useInvalidateGitIdentities();
+  return useMutation({
+    mutationFn: (input: {
+      label: string;
+      kind: string;
+      host: string;
+      port: number;
+      host_pins: string[];
+    }) => api.createGitProvider(input),
+    onSettled: invalidate,
+  });
+}

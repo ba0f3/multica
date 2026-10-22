@@ -178,6 +178,46 @@ func (q *Queries) CreateR2DGitKeyJob(ctx context.Context, arg CreateR2DGitKeyJob
 	return i, err
 }
 
+const createR2DGitProvider = `-- name: CreateR2DGitProvider :one
+INSERT INTO r2d_git_provider (id, label, kind, host, port, host_pins, enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, label, kind, host, port, host_pins, enabled, created_at
+`
+
+type CreateR2DGitProviderParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Label    string      `json:"label"`
+	Kind     string      `json:"kind"`
+	Host     string      `json:"host"`
+	Port     int32       `json:"port"`
+	HostPins []byte      `json:"host_pins"`
+	Enabled  bool        `json:"enabled"`
+}
+
+func (q *Queries) CreateR2DGitProvider(ctx context.Context, arg CreateR2DGitProviderParams) (R2dGitProvider, error) {
+	row := q.db.QueryRow(ctx, createR2DGitProvider,
+		arg.ID,
+		arg.Label,
+		arg.Kind,
+		arg.Host,
+		arg.Port,
+		arg.HostPins,
+		arg.Enabled,
+	)
+	var i R2dGitProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Label,
+		&i.Kind,
+		&i.Host,
+		&i.Port,
+		&i.HostPins,
+		&i.Enabled,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const deleteR2DGitKeySecret = `-- name: DeleteR2DGitKeySecret :exec
 DELETE FROM r2d_git_key_secret
 WHERE secret_ref = $1
@@ -364,6 +404,41 @@ func (q *Queries) InsertR2DGitKeySecret(ctx context.Context, arg InsertR2DGitKey
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listAllR2DGitProviders = `-- name: ListAllR2DGitProviders :many
+SELECT id, label, kind, host, port, host_pins, enabled, created_at
+FROM r2d_git_provider
+ORDER BY label ASC, id ASC
+`
+
+func (q *Queries) ListAllR2DGitProviders(ctx context.Context) ([]R2dGitProvider, error) {
+	rows, err := q.db.Query(ctx, listAllR2DGitProviders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []R2dGitProvider{}
+	for rows.Next() {
+		var i R2dGitProvider
+		if err := rows.Scan(
+			&i.ID,
+			&i.Label,
+			&i.Kind,
+			&i.Host,
+			&i.Port,
+			&i.HostPins,
+			&i.Enabled,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPendingR2DGitKeyJobs = `-- name: ListPendingR2DGitKeyJobs :many

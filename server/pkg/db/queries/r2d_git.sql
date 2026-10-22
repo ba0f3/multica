@@ -7,10 +7,20 @@ FROM r2d_git_provider
 WHERE enabled = true
 ORDER BY label ASC, id ASC;
 
+-- name: ListAllR2DGitProviders :many
+SELECT id, label, kind, host, port, host_pins, enabled, created_at
+FROM r2d_git_provider
+ORDER BY label ASC, id ASC;
+
 -- name: GetR2DGitProvider :one
 SELECT id, label, kind, host, port, host_pins, enabled, created_at
 FROM r2d_git_provider
 WHERE id = $1;
+
+-- name: CreateR2DGitProvider :one
+INSERT INTO r2d_git_provider (id, label, kind, host, port, host_pins, enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, label, kind, host, port, host_pins, enabled, created_at;
 
 -- name: GetR2DGitIdentity :one
 SELECT id, user_id, provider_id, active_generation, epoch, revoked, created_at
