@@ -293,8 +293,8 @@ func TestOpencodeHandleErrorEventNilError(t *testing.T) {
 
 	b.handleErrorEvent(event, ch, &status, &errMsg)
 
-	if errMsg != "unknown opencode error" {
-		t.Errorf("error: got %q, want %q", errMsg, "unknown opencode error")
+	if !strings.Contains(errMsg, "OpenCode failed without a message") {
+		t.Errorf("error: got %q", errMsg)
 	}
 }
 
@@ -381,6 +381,48 @@ func TestOpencodeEventParsingErrorFixture(t *testing.T) {
 	}
 	if got := event.Error.Message(); got != "Model not found: definitely/not-a-model." {
 		t.Errorf("error.Message(): got %q", got)
+	}
+}
+
+func TestOpencodeProcessEventsPreservesV2Error(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		errorJSON string
+		want      string
+	}{
+		{
+			name:      "provider quota message",
+			errorJSON: `{"type":"provider.free-limit","message":"Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.","status":429,"retryAfterMs":23364000}`,
+			want:      "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+		},
+		{
+			name:      "type without message",
+			errorJSON: `{"type":"provider.free-limit","status":429}`,
+			want:      "provider.free-limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &opencodeBackend{cfg: Config{Logger: slog.Default()}}
+			ch := make(chan Message, 4)
+			line := `{"type":"error","sessionID":"ses_quota","error":` + tt.errorJSON + `}`
+			result := b.processEvents(strings.NewReader(line), ch)
+			if result.status != "failed" || result.errMsg != tt.want {
+				t.Fatalf("status = %q, error = %q; want failed with %q", result.status, result.errMsg, tt.want)
+			}
+			close(ch)
+			var errors []string
+			for msg := range ch {
+				if msg.Type == MessageError {
+					errors = append(errors, msg.Content)
+				}
+			}
+			if len(errors) != 1 || errors[0] != tt.want {
+				t.Fatalf("user-visible errors = %v, want [%s]", errors, tt.want)
+			}
+		})
 	}
 }
 

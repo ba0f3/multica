@@ -5982,6 +5982,12 @@ func taskRunFailureReason(err error) string {
 	if errors.Is(err, execenv.ErrOpenclawCLITimeout) {
 		return taskfailure.ReasonRuntimeCLITimeout.String()
 	}
+	// The sandbox was required and could not be built. The run never reached
+	// an agent, so no agent-error reason is accurate, and a host fallback
+	// would be exactly the outcome the operator asked to prevent.
+	if errors.Is(err, errSandboxUnavailable) {
+		return taskfailure.ReasonSandboxUnavailable.String()
+	}
 	// Everything else that failed while building or re-opening the execution
 	// environment. Last of the structural branches: the four sentinels above
 	// each name a cause the daemon already recognises on its own (task
@@ -7624,6 +7630,8 @@ func qualifyTaskModel(
 }
 
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
+	attemptID := uuid.NewString()
+	taskLog = taskLog.With("attempt_id", attemptID)
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	phaseRecorder.Mark(taskPhasePrepareStarted)
 	// A claim carries the task-row agent id both at the top level and inside
@@ -8098,6 +8106,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			HermesSessionStore:    hermesSessionStore,
 			ReasonixEnv:           reasonixEnv,
 			CodexCustomArgs:       codexSandboxArgs,
+			IsolatedToolBoundary:  d.cfg.SandboxEnabled,
 			Task:                  taskCtx,
 		})
 		if err != nil {
@@ -8148,6 +8157,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			HermesSessionStore:    hermesSessionStore,
 			ReasonixEnv:           reasonixEnv,
 			CodexCustomArgs:       codexSandboxArgs,
+			IsolatedToolBoundary:  d.cfg.SandboxEnabled,
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
@@ -8468,6 +8478,26 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, err
 	}
 	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir)
+	// Git operations inside this run sign as the human who authorized it,
+	// through a per-attempt agent socket the daemon hosts. The private key
+	// stays on the server; the socket only lists the granted identity and
+	// forwards signatures.
+	//
+	// A run with no verified credential, no provable originator or no
+	// matching provider simply has no SSH_AUTH_SOCK, and the host's agent
+	// is never inherited.
+	gitSocketPath := ""
+	profileDir, profileErr := cli.ProfileDir(d.cfg.Profile)
+	if profileErr != nil {
+		taskLog.Warn("git: could not resolve the profile directory; the run has no Git credential", "error", profileErr)
+	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir, attemptID); socketPath != "" {
+		gitSocketPath = socketPath
+		agentEnv["SSH_AUTH_SOCK"] = socketPath
+		defer stopGitAgent()
+	}
+	if err := validateGitCredentialForTask(task, gitSocketPath); err != nil {
+		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+	}
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}
@@ -8583,20 +8613,35 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// families go through New. This is the single production boundary — the
 	// daemon never calls agent.New or agent.NewRuntime directly, so the two
 	// factories stay meaning exactly one thing each.
-	backend, err := agent.ResolveBackend(provider, agent.Config{
+	backendConfig := agent.Config{
 		ExecutablePath: entry.Path,
 		LaunchPrefix:   profileFixedArgs,
 		CLIVersion:     resolvedVersion,
 		Env:            agentEnv,
 		Logger:         d.logger,
 		TaskID:         task.ID,
+		AttemptID:      attemptID,
 		RuntimeID:      task.RuntimeID,
 		DaemonVersion:  d.cfg.CLIVersion,
 		CodexVersion:   codexVersion,
 		BuiltinRuntime: !usesCustomProfileCommand,
-	})
+	}
+	backend, err := agent.ResolveBackend(provider, backendConfig)
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
+	}
+
+	// When the deployment enabled the sandbox, the adapter and everything it
+	// spawns run inside a bubblewrap boundary instead of on the host. A
+	// failure to build that boundary fails the run: a task configured to be
+	// isolated never executes outside it.
+	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID)
+	if sandboxErr != nil {
+		taskLog.Error("sandbox: the attempt cannot be isolated; refusing to run on the host", "error", sandboxErr)
+		return TaskResult{}, sandboxErr
+	}
+	if sandboxed != nil {
+		backend = sandboxed
 	}
 
 	// Two-tier model resolution: an explicit agent.model wins,
@@ -8699,6 +8744,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		OpenclawMode:           openclawMode,
 		ClaudeSettingsPath:     env.ClaudeSettingsPath,
 		QwenpawWorkspace:       env.QwenpawWorkspace,
+		IsolatedToolBoundary:   sandboxed != nil,
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -8752,7 +8798,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentID:     task.AgentID,
 		AgentName:   task.Agent.Name,
 		WorkDir:     env.WorkDir,
+		HostRepoCheckoutDisabled: sandboxed != nil,
 	})
+	if sandboxed != nil {
+		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
+		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
+		if env != nil {
+			taskHome := filepath.Join(env.RootDir, "home")
+			agentEnv["HOME"] = taskHome
+			agentEnv["XDG_CONFIG_HOME"] = filepath.Join(taskHome, ".config")
+			agentEnv["XDG_DATA_HOME"] = filepath.Join(taskHome, ".local", "share")
+			agentEnv["XDG_CACHE_HOME"] = filepath.Join(taskHome, ".cache")
+		}
+	}
 	defer d.clearActiveRepoCheckoutTask(agentToken)
 
 	taskLog.Debug("invoking backend",
@@ -10380,7 +10438,12 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS",
+		// The per-task signing socket is a capability chosen by the daemon.
+		// A custom env that could replace it would point the agent at an
+		// agent of the user's choosing while the run believes it holds the
+		// task's credential.
+		"SSH_AUTH_SOCK":
 		return true
 	}
 	return false

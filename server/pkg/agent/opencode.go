@@ -139,6 +139,13 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		args = append(args, "--session", opts.ResumeSessionID)
 	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, opencodeBlockedArgs, b.cfg.Logger)...)
+	if opts.IsolatedToolBoundary {
+		args, err = enforceOpenCodeIsolatedLaunch(args, usesV2)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	// The task prompt is delivered on stdin, never argv — see the StdinPipe
 	// wiring below. `opencode run` merges its variadic [message..] positional
 	// with whatever is piped in, so an invocation that passes no positional
@@ -698,10 +705,10 @@ func (b *opencodeBackend) handleErrorEvent(event opencodeEvent, ch chan<- Messag
 		errMsg = event.Error.Message()
 	}
 	if errMsg == "" {
-		errMsg = "unknown opencode error"
+		errMsg = "OpenCode failed without a message. Check the OpenCode runtime logs for details."
 	}
 
-	b.cfg.Logger.Warn("opencode error event", "error", errMsg)
+	b.cfg.Logger.Warn("opencode error event", "error", errMsg, "raw_error", event.Error)
 	trySend(ch, Message{Type: MessageError, Content: errMsg})
 
 	*finalStatus = "failed"
@@ -854,9 +861,10 @@ type opencodeToolState struct {
 
 // opencodeError represents an error event from opencode.
 type opencodeError struct {
-	Name string           `json:"name,omitempty"`
-	Text string           `json:"message,omitempty"`
+	// OpenCode 2.x sends type/message; 1.x sends name/data.message.
 	Type string           `json:"type,omitempty"`
+	Text string           `json:"message,omitempty"`
+	Name string           `json:"name,omitempty"`
 	Data *opencodeErrData `json:"data,omitempty"`
 }
 

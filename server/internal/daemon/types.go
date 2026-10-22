@@ -103,13 +103,19 @@ type Task struct {
 	// order. Rendered into the brief's status-command line; empty (including on
 	// old servers that never send the field) keeps the brief byte-identical to
 	// the built-in-only form. IssueStatusesOmitted is the cap overflow count.
-	IssueStatuses                 []IssueStatusData      `json:"issue_statuses,omitempty"`
-	IssueStatusesOmitted          int                    `json:"issue_statuses_omitted,omitempty"`
-	ProjectWorkflow               *ProjectWorkflowData   `json:"project_workflow,omitempty"`
-	ThreadName                    string                 `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Agent                         *AgentData             `json:"agent,omitempty"`
-	ConnectedApps                 []ConnectedAppData     `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
-	Repos                         []RepoData             `json:"repos,omitempty"`
+	IssueStatuses        []IssueStatusData    `json:"issue_statuses,omitempty"`
+	IssueStatusesOmitted int                  `json:"issue_statuses_omitted,omitempty"`
+	ProjectWorkflow      *ProjectWorkflowData `json:"project_workflow,omitempty"`
+	ThreadName           string               `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Agent                *AgentData           `json:"agent,omitempty"`
+	ConnectedApps        []ConnectedAppData   `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
+	Repos                []RepoData           `json:"repos,omitempty"`
+	// ExecutionUserID is the human who authorized this run. Git operations
+	// sign as this user, never as the runtime owner.
+	ExecutionUserID string `json:"execution_user_id,omitempty"`
+	// GitIdentities are the execution user's verified Git credentials, one
+	// per provider. The run picks the one whose host matches its repository.
+	GitIdentities                 []GitIdentityBinding   `json:"git_identities,omitempty"`
 	ProjectID                     string                 `json:"project_id,omitempty"`                       // active project for this task, when present
 	ProjectTitle                  string                 `json:"project_title,omitempty"`                    // human-readable project title for context injection
 	ProjectDescription            string                 `json:"project_description,omitempty"`              // durable project-level context injected into the brief
@@ -333,4 +339,18 @@ type PluginHookTool struct {
 	Name           string          `json:"name"`
 	Description    string          `json:"description"`
 	InputSchema    json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// GitIdentityBinding is one verified Git credential of the human who
+// authorized a run.
+//
+// It is the public half only: the daemon exchanges it for a short-lived
+// signing lease and never receives the private key.
+type GitIdentityBinding struct {
+	ProviderID  string `json:"provider_id"`
+	Host        string `json:"host"`
+	IdentityID  string `json:"identity_id"`
+	Generation  uint64 `json:"generation"`
+	PublicKey   string `json:"public_key"`
+	Fingerprint string `json:"fingerprint"`
 }

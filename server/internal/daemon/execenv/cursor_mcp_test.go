@@ -101,7 +101,7 @@ func TestPrepareCursorMcpConfigWritesProjectConfigAndApprovals(t *testing.T) {
 		}
 	}`)
 
-	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, "", manifest)
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, "", false, manifest)
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestPrepareCursorMcpConfigManagedEmptySet(t *testing.T) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("mkdir workDir: %v", err)
 	}
-	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{}}`), "", &sidecarManifest{})
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{}}`), "", false, &sidecarManifest{})
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestPrepareCursorMcpConfigSeedsExplicitAuthSource(t *testing.T) {
 		t.Fatalf("write source auth: %v", err)
 	}
 
-	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}`), sourceProjectDir, &sidecarManifest{})
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}`), sourceProjectDir, false, &sidecarManifest{})
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestPrepareCursorMcpConfigRemovesPriorAuthOnOptOut(t *testing.T) {
 	}
 	mcpConfig := json.RawMessage(`{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}`)
 
-	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, sourceProjectDir, nil)
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, sourceProjectDir, false, nil)
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig with auth source: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestPrepareCursorMcpConfigRemovesPriorAuthOnOptOut(t *testing.T) {
 		t.Fatalf("seeded auth missing: %v", err)
 	}
 
-	cursorDataDir, err = prepareCursorMcpConfig(envRoot, workDir, mcpConfig, "", nil)
+	cursorDataDir, err = prepareCursorMcpConfig(envRoot, workDir, mcpConfig, "", false, nil)
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig without auth source: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestPrepareCursorMcpConfigRejectsArbitraryAuthSourceFile(t *testing.T) {
 		t.Fatalf("write source: %v", err)
 	}
 
-	_, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{}}`), source, &sidecarManifest{})
+	_, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{}}`), source, false, &sidecarManifest{})
 	if err == nil {
 		t.Fatal("expected non-mcp-auth source file to fail")
 	}
@@ -278,7 +278,7 @@ func TestPrepareCursorMcpConfigNilDoesNotTakeOwnership(t *testing.T) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("mkdir workDir: %v", err)
 	}
-	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, nil, "", &sidecarManifest{})
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, nil, "", false, &sidecarManifest{})
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestPrepareCursorMcpConfigRejectsMalformedConfig(t *testing.T) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("mkdir workDir: %v", err)
 	}
-	_, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{"bad":42}}`), "", &sidecarManifest{})
+	_, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{"bad":42}}`), "", false, &sidecarManifest{})
 	if err == nil {
 		t.Fatal("expected malformed server config to fail")
 	}

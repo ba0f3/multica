@@ -173,6 +173,11 @@ const (
 	// session was touched.
 	ReasonEnvironmentPrepareFailed Reason = "environment_prepare_failed"
 
+	// ReasonSandboxUnavailable reports that the task required the sandbox and
+	// the host could not provide it: bwrap is missing, or the boundary could
+	// not be built. The run never falls back to executing on the host.
+	ReasonSandboxUnavailable Reason = "sandbox_unavailable"
+
 	// ReasonInvalidTaskIdentity: the daemon refused a claimed task because
 	// the task row's authoritative agent_id was absent or disagreed with the
 	// nested agent payload. The agent process is never launched. This is

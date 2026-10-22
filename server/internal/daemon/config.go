@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,36 +103,58 @@ var DefaultGCArtifactPatterns = []string{"node_modules", ".next", ".turbo"}
 
 // Config holds all daemon configuration.
 type Config struct {
-	ServerBaseURL                  string
-	DaemonID                       string
-	LegacyDaemonIDs                []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
-	DeviceName                     string
-	RuntimeName                    string
-	CLIVersion                     string                // multica CLI version (e.g. "0.1.13")
-	CLICommit                      string                // full build revision embedded in the running CLI; empty/unknown if unavailable
-	LaunchedBy                     string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile                        string                // profile name (empty = default)
-	Agents                         map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, codearts, deveco, openclaw, hermes, pi, cursor, kimi, reasonix, dsh, kiro, antigravity, qoder, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, zeroclaw (plus built-in runtime identities from agent.BuiltinRuntimes, e.g. omp)
-	WorkspacesRoot                 string                // base path for execution envs (default: ~/multica_workspaces)
-	KeepEnvAfterTask               bool                  // preserve env after task for debugging
-	HealthPort                     int                   // local HTTP port for health checks (default: 19514)
-	MaxConcurrentTasks             int                   // max tasks running in parallel (default: 20)
-	GCEnabled                      bool                  // enable periodic workspace garbage collection (default: true)
-	GCInterval                     time.Duration         // how often the GC loop runs (default: 2h)
-	GCTTL                          time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
-	GCCompletedTaskTTL             time.Duration         // fully clean inactive issue-task envs completed at least this long ago, regardless of parent issue status (default: 14d on Multica Cloud, 0/disabled elsewhere; local_directory envs are never fully removed)
-	GCOrphanTTL                    time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
-	GCArtifactTTL                  time.Duration         // once a task has been completed for at least this long, drop regenerable artifacts: pattern-matched build outputs when the parent record keeps the directory (an open issue), and the exact daemon-managed Codex cache for every task kind (default: 12h, set 0 to disable both)
-	GCArtifactPatterns             []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
-	GCRepoTTL                      time.Duration         // evict a cached bare repo under .repos once no task has created a worktree from it for this long, it has no worktrees left, and it is no longer attached to any watched workspace (default: 30d, set 0 to disable)
-	GCRepoMaintenanceEnabled       bool                  // run reflog expiry and git gc after stale agent refs are removed (default: true; disable independently as an operational kill switch)
-	GCCodexSessionTTL              time.Duration         // reclaim a per-issue Codex session store (~/.codex/multica-sessions/<agent>/<issue>) untouched for at least this long, so a done/abandoned issue's conversation history does not accumulate forever (default: 14d, set 0 to disable)
-	GCHermesMemoryTTL              time.Duration         // reclaim a per-agent Hermes memory store (<profile dir>/hermes-state/<agent>/<profile>) untouched for at least this long, so a deleted agent's memory does not sit on disk forever (default: 90d, set 0 to disable)
-	GCHermesSessionTTL             time.Duration         // reclaim a per-conversation Hermes session store (<profile dir>/hermes-sessions/<agent>/<profile>/<conversation>) untouched for at least this long, so a done or abandoned conversation's transcript does not accumulate forever (default: 14d, set 0 to disable)
-	GCTaskTempLegacyTTL            time.Duration         // reclaim a per-task temp dir (<temp base>/multica-task-*) that carries no execution lock — i.e. left by a daemon predating the lock — once nothing inside it has been touched for this long. Dirs that DO carry the lock are reclaimed on liveness, never on age, so this knob does not apply to them. Neither does it reclaim a dir holding no task content — an old empty leftover, or a shell left by a daemon that died between creating the dir and publishing its lock — because holding no content is exactly what a dir currently being published looks like (default: 0, disabled — see DefaultGCTaskTempLegacyTTL)
-	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
-	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
-	AutoReloadEnabled              bool                  // restart when the multica binary on disk no longer matches the running version (default: true for CLI-launched daemons)
+	ServerBaseURL    string
+	DaemonID         string
+	LegacyDaemonIDs  []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+	DeviceName       string
+	RuntimeName      string
+	CLIVersion       string                // multica CLI version (e.g. "0.1.13")
+	CLICommit        string                // full build revision embedded in the running CLI; empty/unknown if unavailable
+	LaunchedBy       string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile          string                // profile name (empty = default)
+	Agents           map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, codearts, deveco, openclaw, hermes, pi, cursor, kimi, reasonix, dsh, kiro, antigravity, qoder, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, zeroclaw (plus built-in runtime identities from agent.BuiltinRuntimes, e.g. omp)
+	WorkspacesRoot   string                // base path for execution envs (default: ~/multica_workspaces)
+	KeepEnvAfterTask bool                  // preserve env after task for debugging
+	// SandboxEnabled runs every task attempt inside an isolated worker
+	// boundary (bubblewrap or Docker). It is opt-in on legacy deployments.
+	SandboxEnabled bool
+	// TaskSandboxBackend selects the isolation backend: "bwrap" or "docker".
+	TaskSandboxBackend string
+	// TaskProtectedMode refuses host execution when the boundary cannot be
+	// built. Protected nodes must not run untrusted tasks outside sandbox.
+	TaskProtectedMode bool
+	// BwrapPath is the bubblewrap binary. Empty means "bwrap" on PATH.
+	BwrapPath string
+	// SandboxSelfPath is the executable the bwrap sandbox runs as the worker.
+	// Empty means the running binary (os.Executable()).
+	SandboxSelfPath string
+	// DockerCLIPath is the docker binary. Empty means "docker" on PATH.
+	DockerCLIPath string
+	// DockerTaskImage is the worker image for docker-backed attempts.
+	DockerTaskImage string
+	DockerNetworkMode string
+	DockerMemoryBytes int64
+	DockerPIDsLimit   int64
+	DockerNanoCPUs    int64
+	DockerTaskUser    string
+	HealthPort                     int           // local HTTP port for health checks (default: 19514)
+	MaxConcurrentTasks             int           // max tasks running in parallel (default: 20)
+	GCEnabled                      bool          // enable periodic workspace garbage collection (default: true)
+	GCInterval                     time.Duration // how often the GC loop runs (default: 2h)
+	GCTTL                          time.Duration // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
+	GCCompletedTaskTTL             time.Duration // fully clean inactive issue-task envs completed at least this long ago, regardless of parent issue status (default: 14d on Multica Cloud, 0/disabled elsewhere; local_directory envs are never fully removed)
+	GCOrphanTTL                    time.Duration // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
+	GCArtifactTTL                  time.Duration // once a task has been completed for at least this long, drop regenerable artifacts: pattern-matched build outputs when the parent record keeps the directory (an open issue), and the exact daemon-managed Codex cache for every task kind (default: 12h, set 0 to disable both)
+	GCArtifactPatterns             []string      // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
+	GCRepoTTL                      time.Duration // evict a cached bare repo under .repos once no task has created a worktree from it for this long, it has no worktrees left, and it is no longer attached to any watched workspace (default: 30d, set 0 to disable)
+	GCRepoMaintenanceEnabled       bool          // run reflog expiry and git gc after stale agent refs are removed (default: true; disable independently as an operational kill switch)
+	GCCodexSessionTTL              time.Duration // reclaim a per-issue Codex session store (~/.codex/multica-sessions/<agent>/<issue>) untouched for at least this long, so a done/abandoned issue's conversation history does not accumulate forever (default: 14d, set 0 to disable)
+	GCHermesMemoryTTL              time.Duration // reclaim a per-agent Hermes memory store (<profile dir>/hermes-state/<agent>/<profile>) untouched for at least this long, so a deleted agent's memory does not sit on disk forever (default: 90d, set 0 to disable)
+	GCHermesSessionTTL             time.Duration // reclaim a per-conversation Hermes session store (<profile dir>/hermes-sessions/<agent>/<profile>/<conversation>) untouched for at least this long, so a done or abandoned conversation's transcript does not accumulate forever (default: 14d, set 0 to disable)
+	GCTaskTempLegacyTTL            time.Duration // reclaim a per-task temp dir (<temp base>/multica-task-*) that carries no execution lock — i.e. left by a daemon predating the lock — once nothing inside it has been touched for this long. Dirs that DO carry the lock are reclaimed on liveness, never on age, so this knob does not apply to them. Neither does it reclaim a dir holding no task content — an old empty leftover, or a shell left by a daemon that died between creating the dir and publishing its lock — because holding no content is exactly what a dir currently being published looks like (default: 0, disabled — see DefaultGCTaskTempLegacyTTL)
+	AutoUpdateEnabled              bool          // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
+	AutoUpdateCheckInterval        time.Duration // how often the auto-update loop polls for a new release (default: 6h)
+	AutoReloadEnabled              bool          // restart when the multica binary on disk no longer matches the running version (default: true for CLI-launched daemons)
 	PollInterval                   time.Duration
 	WSClaimPollInterval            time.Duration // upper bound for healthy WS batch-claim safety polls; actual sleeps use downward-only jitter
 	HeartbeatInterval              time.Duration
@@ -542,6 +565,20 @@ func LoadConfig(overrides Overrides) (Config, error) {
 
 	// Keep env after task: env > default (false)
 	keepEnv := os.Getenv("MULTICA_KEEP_ENV_AFTER_TASK") == "true" || os.Getenv("MULTICA_KEEP_ENV_AFTER_TASK") == "1"
+	sandboxEnabled, sandboxBackend := parseTaskSandboxEnv(os.Getenv("MULTICA_TASK_SANDBOX"))
+	taskProtected := os.Getenv("MULTICA_TASK_PROTECTED") == "true" || os.Getenv("MULTICA_TASK_PROTECTED") == "1"
+	if taskProtected && !sandboxEnabled {
+		sandboxEnabled = true
+		if sandboxBackend == "" {
+			sandboxBackend = "docker"
+		}
+	}
+	dockerMemory, err := parseDockerMemoryBytes(os.Getenv("MULTICA_DOCKER_TASK_MEMORY"))
+	if err != nil {
+		return Config{}, fmt.Errorf("MULTICA_DOCKER_TASK_MEMORY: %w", err)
+	}
+	dockerPIDs, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_PIDS_LIMIT")), 10, 64)
+	dockerNanoCPUs, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_NANO_CPUS")), 10, 64)
 
 	// GC config: env > defaults
 	gcEnabled := true
@@ -633,6 +670,18 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		Agents:                          agents,
 		WorkspacesRoot:                  workspacesRoot,
 		KeepEnvAfterTask:                keepEnv,
+		SandboxEnabled:                  sandboxEnabled,
+		TaskSandboxBackend:            sandboxBackend,
+		TaskProtectedMode:               taskProtected,
+		BwrapPath:                       strings.TrimSpace(os.Getenv("MULTICA_BWRAP_PATH")),
+		SandboxSelfPath:                 strings.TrimSpace(os.Getenv("MULTICA_SANDBOX_SELF")),
+		DockerCLIPath:                   strings.TrimSpace(os.Getenv("MULTICA_DOCKER_CLI")),
+		DockerTaskImage:                 strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_IMAGE")),
+		DockerNetworkMode:               strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_NETWORK")),
+		DockerMemoryBytes:               dockerMemory,
+		DockerPIDsLimit:                 dockerPIDs,
+		DockerNanoCPUs:                  dockerNanoCPUs,
+		DockerTaskUser:                  strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_USER")),
 		GCEnabled:                       gcEnabled,
 		GCInterval:                      gcInterval,
 		GCTTL:                           gcTTL,

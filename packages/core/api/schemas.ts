@@ -60,6 +60,9 @@ import type {
   ListPropertiesResponse,
   QuickAction,
   ListQuickActionsResponse,
+  GitProfile,
+  GitProvider,
+  GitIdentity,
   IssuePropertiesResponse,
   IssueTableGroupDescriptor,
   IssueTableFacetsResponse,
@@ -3826,3 +3829,80 @@ export const RuntimeProfileSchema = z
     runtime_type: profile.runtime_type || profile.protocol_family,
   }));
 export const RuntimeProfileListSchema = z.array(RuntimeProfileSchema);
+
+// --- Per-user Git credentials ------------------------------------------------
+//
+// These schemas deliberately DROP unknown keys instead of passing them
+// through. A future server that adds a field to this response must not be
+// able to make a secret reach the browser: the credential surface is the one
+// place where an extra field is a risk rather than a convenience. Every
+// field the UI needs is named here.
+export const GitProviderSchema = z.object({
+  id: z.string(),
+  label: z.string().catch(""),
+  kind: z.string().catch(""),
+  host: z.string().catch(""),
+  port: z.number().catch(0),
+});
+
+export const GitIdentitySchema = z.object({
+  id: z.string(),
+  user_id: z.string().catch(""),
+  provider_id: z.string().catch(""),
+  generation: z.number().catch(0),
+  public_key: z.string().catch(""),
+  fingerprint: z.string().catch(""),
+  // Server-driven: an unknown state is kept as-is and treated as "not
+  // usable yet" by the UI.
+  state: z.string().catch(""),
+  account_id: z.string().optional().default(""),
+  login: z.string().optional().default(""),
+  verified_at: z.string().nullable().optional().default(null),
+  active: z.boolean().catch(false),
+  cleanup_pending: z.boolean().catch(false),
+  diagnostic: z.string().optional().default(""),
+});
+
+export const GitProfileSchema = z.object({
+  providers: z.array(GitProviderSchema).catch([]),
+  identities: z.array(GitIdentitySchema).catch([]),
+});
+
+export const GiteaVerifySignResponseSchema = z.object({
+  signature: z.string().catch(""),
+});
+
+export const EMPTY_GIT_PROFILE: GitProfile = {
+  providers: [],
+  identities: [],
+};
+
+export const EMPTY_GIT_PROVIDER: GitProvider = {
+  id: "",
+  label: "",
+  kind: "",
+  host: "",
+  port: 0,
+};
+
+/**
+ * The empty identity used when a credential response cannot be parsed.
+ *
+ * It is deliberately inert: no key, no fingerprint, and not active, so a
+ * failed response can never look like a usable credential.
+ */
+export const EMPTY_GIT_IDENTITY: GitIdentity = {
+  id: "",
+  user_id: "",
+  provider_id: "",
+  generation: 0,
+  public_key: "",
+  fingerprint: "",
+  state: "",
+  account_id: "",
+  login: "",
+  verified_at: null,
+  active: false,
+  cleanup_pending: false,
+  diagnostic: "",
+};

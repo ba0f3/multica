@@ -87,7 +87,13 @@ export const configStore = createStore<ConfigState>((set) => ({
     googleClientId = "",
     workspaceCreationDisabled = false,
     vcsIntegrationAvailable = false,
-  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, vcsIntegrationAvailable }),
+  }) =>
+    set({
+      allowSignup,
+      googleClientId,
+      workspaceCreationDisabled,
+      vcsIntegrationAvailable,
+    }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
   setFeatureFlags: (flags = {}) => set({ featureFlags: { ...flags } }),
