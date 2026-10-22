@@ -363,6 +363,7 @@ var concurrentIndexCleanups = map[string]string{
 	"900109_r2d_git_key_generation_index":                       "r2d_git_key_generation_uidx",
 	"900111_r2d_git_key_job_pkey_index":                         "r2d_git_key_job_pkey_uidx",
 	"900113_r2d_git_key_job_idempotency_index":                  "r2d_git_key_job_idempotency_idx",
+	"900115_r2d_git_key_secret_ref_index":                       "r2d_git_key_secret_ref_uidx",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction

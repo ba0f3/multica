@@ -1418,6 +1418,12 @@ type R2dGitKeyJob struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type R2dGitKeySecret struct {
+	SecretRef string             `json:"secret_ref"`
+	Sealed    []byte             `json:"sealed"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type R2dGitProvider struct {
 	ID        pgtype.UUID        `json:"id"`
 	Label     string             `json:"label"`

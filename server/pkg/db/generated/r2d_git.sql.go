@@ -178,6 +178,16 @@ func (q *Queries) CreateR2DGitKeyJob(ctx context.Context, arg CreateR2DGitKeyJob
 	return i, err
 }
 
+const deleteR2DGitKeySecret = `-- name: DeleteR2DGitKeySecret :exec
+DELETE FROM r2d_git_key_secret
+WHERE secret_ref = $1
+`
+
+func (q *Queries) DeleteR2DGitKeySecret(ctx context.Context, secretRef string) error {
+	_, err := q.db.Exec(ctx, deleteR2DGitKeySecret, secretRef)
+	return err
+}
+
 const getR2DGitIdentity = `-- name: GetR2DGitIdentity :one
 SELECT id, user_id, provider_id, active_generation, epoch, revoked, created_at
 FROM r2d_git_identity
@@ -284,6 +294,19 @@ func (q *Queries) GetR2DGitKeyJobByIdempotencyKey(ctx context.Context, idempoten
 	return i, err
 }
 
+const getR2DGitKeySecret = `-- name: GetR2DGitKeySecret :one
+SELECT secret_ref, sealed, created_at
+FROM r2d_git_key_secret
+WHERE secret_ref = $1
+`
+
+func (q *Queries) GetR2DGitKeySecret(ctx context.Context, secretRef string) (R2dGitKeySecret, error) {
+	row := q.db.QueryRow(ctx, getR2DGitKeySecret, secretRef)
+	var i R2dGitKeySecret
+	err := row.Scan(&i.SecretRef, &i.Sealed, &i.CreatedAt)
+	return i, err
+}
+
 const getR2DGitProvider = `-- name: GetR2DGitProvider :one
 SELECT id, label, kind, host, port, host_pins, enabled, created_at
 FROM r2d_git_provider
@@ -323,6 +346,24 @@ func (q *Queries) GetTaskOriginatorUserID(ctx context.Context, id pgtype.UUID) (
 	var originator_user_id pgtype.UUID
 	err := row.Scan(&originator_user_id)
 	return originator_user_id, err
+}
+
+const insertR2DGitKeySecret = `-- name: InsertR2DGitKeySecret :execrows
+INSERT INTO r2d_git_key_secret (secret_ref, sealed)
+VALUES ($1, $2)
+`
+
+type InsertR2DGitKeySecretParams struct {
+	SecretRef string `json:"secret_ref"`
+	Sealed    []byte `json:"sealed"`
+}
+
+func (q *Queries) InsertR2DGitKeySecret(ctx context.Context, arg InsertR2DGitKeySecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertR2DGitKeySecret, arg.SecretRef, arg.Sealed)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listPendingR2DGitKeyJobs = `-- name: ListPendingR2DGitKeyJobs :many

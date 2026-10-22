@@ -6,7 +6,7 @@ Use this on a host with Docker installed. The cloud agent VM has no Docker engin
 
 - Linux with Docker (rootful or rootless with working cgroup limits).
 - Branch `feature/git-security-mvp` built or image from `docker/task-worker/Dockerfile`.
-- Git custody configured (`MULTICA_GIT_CUSTODY_*`) if testing real signing.
+- Git credentials: database custody is on when `JWT_SECRET` or `MULTICA_GIT_SECRET_KEY` is set (private keys sealed in Postgres). Optional OpenBao: `MULTICA_GIT_CUSTODY_*`.
 - Do **not** use production keys unless explicitly authorized.
 
 ## Build worker image

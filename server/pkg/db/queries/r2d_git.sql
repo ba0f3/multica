@@ -151,3 +151,16 @@ ORDER BY created_at ASC;
 SELECT originator_user_id
 FROM agent_task_queue
 WHERE id = $1;
+
+-- name: InsertR2DGitKeySecret :execrows
+INSERT INTO r2d_git_key_secret (secret_ref, sealed)
+VALUES ($1, $2);
+
+-- name: GetR2DGitKeySecret :one
+SELECT secret_ref, sealed, created_at
+FROM r2d_git_key_secret
+WHERE secret_ref = $1;
+
+-- name: DeleteR2DGitKeySecret :exec
+DELETE FROM r2d_git_key_secret
+WHERE secret_ref = $1;

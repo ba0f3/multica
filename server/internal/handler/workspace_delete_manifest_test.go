@@ -122,6 +122,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"r2d_git_identity":               workspaceDeleteKeep,
 	"r2d_git_key":                    workspaceDeleteKeep,
 	"r2d_git_key_job":                workspaceDeleteKeep,
+	"r2d_git_key_secret":             workspaceDeleteKeep,
 	"r2d_git_provider":               workspaceDeleteKeep,
 	"runtime_profile":                workspaceDelete,
 	"schema_migrations":              workspaceDeleteKeep,
