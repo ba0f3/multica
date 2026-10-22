@@ -667,10 +667,10 @@ func (b *opencodeBackend) handleErrorEvent(event opencodeEvent, ch chan<- Messag
 		errMsg = event.Error.Message()
 	}
 	if errMsg == "" {
-		errMsg = "unknown opencode error"
+		errMsg = "OpenCode failed without a message. Check the OpenCode runtime logs for details."
 	}
 
-	b.cfg.Logger.Warn("opencode error event", "error", errMsg)
+	b.cfg.Logger.Warn("opencode error event", "error", errMsg, "raw_error", event.Error)
 	trySend(ch, Message{Type: MessageError, Content: errMsg})
 
 	*finalStatus = "failed"
@@ -823,19 +823,25 @@ type opencodeToolState struct {
 
 // opencodeError represents an error event from opencode.
 type opencodeError struct {
+	// OpenCode 2.x sends type/message; 1.x sends name/data.message.
+	Type string           `json:"type,omitempty"`
+	Text string           `json:"message,omitempty"`
 	Name string           `json:"name,omitempty"`
 	Data *opencodeErrData `json:"data,omitempty"`
 }
 
 // Message returns the human-readable error message.
 func (e *opencodeError) Message() string {
+	if e.Text != "" {
+		return e.Text
+	}
 	if e.Data != nil && e.Data.Message != "" {
 		return e.Data.Message
 	}
 	if e.Name != "" {
 		return e.Name
 	}
-	return ""
+	return e.Type
 }
 
 type opencodeErrData struct {
