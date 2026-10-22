@@ -158,6 +158,16 @@ func isSixDigitCode(code string) bool {
 }
 
 func (h *Handler) issueJWT(user db.User) (string, error) {
+	return h.issueJWTWithOrigin(user, "")
+}
+
+// issueJWTWithOrigin mints a session token and, when origin is set, records
+// where it was requested.
+//
+// The CLI stores its bearer token on disk beside the code the agent runs, so
+// it must be tellable apart from a browser session: it authorizes ordinary
+// API calls but must not authorize an account-level credential change.
+func (h *Handler) issueJWTWithOrigin(user db.User, origin string) (string, error) {
 	if auth.IsTemporarilyDisabledUser(uuidToString(user.ID), user.Email) {
 		return "", auth.ErrTemporarilyDisabledUser
 	}
@@ -170,14 +180,22 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	now := time.Now()
+	claims := jwt.MapClaims{
 		"sub":   uuidToString(user.ID),
 		"email": user.Email,
 		"name":  user.Name,
 		"sid":   sid,
-		"exp":   time.Now().Add(auth.AuthTokenTTL()).Unix(),
-		"iat":   time.Now().Unix(),
-	})
+		"exp":   now.Add(auth.AuthTokenTTL()).Unix(),
+		"iat":   now.Unix(),
+		// The sign-in moment, kept apart from `iat` so a renewed session
+		// still ages out of the recent-authentication window.
+		"auth_time": now.Unix(),
+	}
+	if origin != "" {
+		claims[auth.SessionOriginClaim] = origin
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(auth.JWTSecret())
 }
 
@@ -746,6 +764,10 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 // This allows cookie-authenticated browser sessions to obtain a bearer token
 // that can be handed off to the CLI via the cli_callback redirect.
 func (h *Handler) IssueCliToken(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		writeError(w, http.StatusForbidden, "task tokens cannot mint CLI credentials")
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -757,7 +779,7 @@ func (h *Handler) IssueCliToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, err := h.issueJWT(user)
+	tokenString, err := h.issueJWTWithOrigin(user, auth.SessionOriginCLI)
 	if err != nil {
 		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
 			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)

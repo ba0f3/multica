@@ -1,40 +1,68 @@
-# Handoff MVP: bwrap + SSH-agent theo task
+# Handoff: sửa Docker task isolation trên branch hiện tại
 
-Đọc [spec chính](per-user-git-credentials-plan.md). Quyết định 2026-10-20 rút gọn thiết kế đã merge trong #94; PR #93 đóng, chỉ trích code credentials. Bản cập nhật này chỉ sửa tài liệu.
+Đọc [spec chính](per-user-git-credentials-plan.md) và [status](git-security-mvp-status.md). Bản ngày **2026-10-21** áp dụng cho **`r2d-ai/multica:feature/git-security-mvp`**, implementation baseline **`d67d4d548962a22f11001490e784955fedc9127f`**. Tiếp tục branch này; không bắt đầu lại từ main hoặc port nguyên PR #93.
 
-## Contract cần implement
+**Lưu ý merge:** `main` vẫn mang spec/handoff **bwrap** đã merge trong #94. Branch này **thay bwrap bằng Docker** cho MVP; khi merge vào `main`, giữ tài liệu và code Docker của branch này, không quay lại bwrap-only contract.
 
-- **Worker của từng task attempt ở trong bwrap:** adapter, coding agent, ACP terminal, local MCP, subprocess, prepare/clone/finalize đều nằm trong boundary. Shared daemon làm supervisor bên ngoài.
-- **Filesystem riêng:** task checkout với `.git` tự chứa, HOME/temp/session riêng, runtime read-only. Launcher không đặc quyền, namespace riêng và cleanup cả process tree. Không mount host home, workspace/shared repo pool, host SSH-agent, privileged sockets hay admin token.
-- **SSH-agent-compatible signer ngoài sandbox:** mount đúng socket của attempt qua `SSH_AUTH_SOCK`; chỉ public identity + sign. Backend chọn key theo originator hợp lệ; runner không chọn user/key hoặc quản trị signer. Không private Git key trong worker.
-- **Remote Git theo quyền user:** A có quyền X/Y thì task X được phép clone Y; Z ngoài quyền A do provider từ chối. Không implement Git transport broker, custom remote helper, repo grant/ref-policy engine.
-- **Identity/lifecycle:** children giữ originator; B rerun dùng HOME/session/key B. Cancel/timeout/crash/revoke dừng task descendants, SSH sessions, signer và dọn socket. Missing bwrap/setup lỗi thì block.
-- **UI:** generate/copy public key/check connection/revoke; backend mã hóa private key. Rotate có thể revoke + generate; không bắt buộc seamless rotation.
+## Đã chốt
 
-Networking giữ hiện tại; host/LAN isolation, egress enforcement và output/ACL redesign nằm ngoài MVP. Git quyền read/write và branch protection theo GitHub/Gitea. Auth AI cấp tối thiểu, tách khỏi Git; không cần model-auth broker.
+- **Một Docker container/attempt**, native **Codex, Cursor Agent, OpenCode**. Supervisor ở ngoài; worker/adapter/agent/local MCP/subagent và toàn bộ Git prepare → run → finalize ở trong.
+- Giữ credentials UI/API/custody và SSH-agent List/Sign đã có; mount chỉ socket attempt, không private Git key hoặc host credentials.
+- Cấp native writable HOME/config/auth/session và image toolchain đầy đủ. Không chữa compatibility bằng mount host HOME.
+- Backend chọn originator/key/attempt; task token không trở thành full CLI/user/admin token hoặc runtime-owner authority.
+- Chặn task gọi host control/checkout APIs và host/LAN services; allow đúng task API/Git/model/DNS/package access.
+- Git theo quyền user: A có X/Y thì task X clone Y được; Z ngoài quyền bị provider deny. Không exact-repo broker/ref policy.
+- Tool-only Codex exec-server/Cursor SDK/OpenCode driver là PoC tùy chọn, không prerequisite và không thay ba native adapters trong MVP.
 
-## Ba việc, không thêm phase
+## Giữ và sửa ở đâu
 
-| Issue | Phần cần giao |
+| Phần | Hành động |
 | --- | --- |
-| #86 | MVP1: key generation/custody/public API/UI/revoke từ #93 |
-| #89 | MVP2: bwrap worker + callbacks + private HOME/checkout/session + cleanup |
-| #88 | MVP3: user binding + per-task SSH-agent socket + Git/lifecycle integration |
+| `server/internal/r2dgit/`, `server/internal/handler/r2d_git*.go`, credential UI/core | Giữ lifecycle/public DTO/custody/verify; kiểm tra owner, secret exclusion, revoke và wiring |
+| `server/internal/daemon/sandbox/{manifest,worker,backend,ipc}.go`, hidden worker command | Giữ entrypoint/adapter dispatch; thêm true attempt ID và typed bidirectional Session IPC |
+| `server/internal/daemon/sandbox_launch.go`, config | Thay bwrap launch/home shadows bằng Docker lifecycle và trusted mount/env policy |
+| `server/internal/daemon/execenv/`, `server/pkg/agent/{codex,cursor,opencode}*.go` | Container paths trước config; native state/auth; giữ version detection; service OpenCode trong container |
+| `server/internal/daemon/{daemon,health}.go`, `server/internal/daemon/repocache/`, `server/cmd/multica/cmd_repo.go` | Đưa task Git vào worker, chặn host execution bypass |
+| Claim/auth/router, `git_agent.go`, `r2dgit/signing.go` | Task principal/API gate + selected repo/provider + attempt/key lease + actual socket teardown |
 
-#86/#89 song song được; #88 tích hợp. Tests thuộc từng phần. #85/#87/#90/#91 được gộp hoặc bỏ scope, không phải đã hoàn thành implementation.
+Đọc source trước khi sửa. Source tồn tại không có nghĩa deployment hoặc ba provider đã được nghiệm thu.
 
-## Những chỗ dễ làm sai
+## Thứ tự làm, chỉ ba issue
 
-1. Bọc CLI gửi request hoặc chỉ coding-agent binary vẫn có thể để ACP callback chạy host. Tạo backend/adapter trong worker.
-2. Linked worktree `.git` trỏ ra ngoài: dùng metadata riêng, không bind shared `.repos`; mọi Git task chạy trong sandbox, kể cả clone/finalize.
-3. Runtime owner/accountable owner không phải user chọn SSH key. Dùng originator đã xác thực, không fallback admin; không cấp host daemon token cho worker.
-4. Không dùng key-loader FD, shared socket hoặc host `.codex`/`.cursor`/HOME mount để chữa lỗi auth.
-5. Xóa socket chưa dừng connection/SSH session đang mở; teardown phải dừng cả cây process và signer. Local revoke áp dụng cả active tasks.
+1. **#89:** Docker worker/image, private filesystem/native environment, full Session IPC và lifecycle; scaffold với fake CLI/socket.
+2. **#88:** signer/API authority/network integration và chuyển toàn bộ Git vào container. #89 sở hữu Docker network enforcement; #88 sở hữu server authorization.
+3. **#86:** giữ và kiểm tra credentials UI/custody hiện có, sửa gap cần thiết; không port lại. Làm song song được.
+4. Tích hợp matrix của spec, ghi actual evidence. Không mở lại #85/#87/#90/#91 hoặc dựng một phase framework mới.
 
-Nghiệm thu theo 8 mục trong spec: A/B identity, callback containment, Git metadata riêng, secret/public API, provider-scope positive/negative, cleanup/revoke, fail-closed và clean-HOME Codex/Cursor. Default dùng fake CLI/synthetic keys; real-agent smoke theo gate AGENTS.md.
+## Các lỗi không được mang sang Docker
+
+- `AttemptID = TaskID`; host-home read-only vẫn lộ source/credentials; shared Git common-dir/alternates.
+- PATH hoặc `SSH_AUTH_SOCK` bị adapter/custom env ghi đè về host path.
+- Codex host auth symlink; Cursor trust/config hash tạo theo host cwd; HOME chỉ đọc khiến native state write lỗi.
+- IPC chỉ message/result làm mất supplements, activity, background interrupt hoặc terminal state vốn adapter hỗ trợ.
+- OpenCode client ở container nhưng service ở host; kill client còn service/tools chạy; opaque custom wrapper làm 2.x bị hiểu là v1.
+- `ErrOpenCodeV2MCPUnsupported` còn nguyên nhưng báo Docker đã hỗ trợ managed MCP. Ghi rõ unsupported hoặc sửa/test; task yêu cầu feature unsupported phải bị từ chối, không silently bỏ MCP.
+- Task token mang runtime owner, mint full CLI JWT qua `POST /api/cli-token`, hoặc đi host `/repo/checkout`.
+- Lease chỉ slide TTL sau mỗi sign, unlink socket nhưng không đóng accepted connections/SSH/container.
+- Docker bridge/rootless flags được coi là bằng chứng network/resource policy đã có hiệu lực.
+- Protected node vẫn chạy untrusted task trực tiếp bằng cùng host identity hoặc quyền daemon profile/Docker engine. Node này phải từ chối unprotected execution.
+
+## Gate hoàn thành
+
+Dùng tám check trong spec: A/B; ba native runtimes; host filesystem/network boundary; task API authority; actual Git permissions; public-only secrets/UI; cleanup/effective limits; fail-closed. Chứng minh cả positive path và negative path bằng fixture phù hợp.
+
+Pin commit/image/native CLI versions và Docker mode. Codex/Cursor/OpenCode phải giữ supported config/auth, shell/file tools, session/resume và cancellation; MCP/steering theo native adapter/version đã hỗ trợ. Feature chưa hỗ trợ phải báo rõ và từ chối task yêu cầu nó, không tự đổi sang host hoặc bỏ config. AI auth provisioned trong task có thể đọc được bởi native process; Git private key và host/admin/custody credentials phải ở ngoài.
+
+Default tests dùng synthetic keys/fake CLIs, không tự discover tài khoản/CLI đã đăng nhập của user. Real-agent smoke cần ủy quyền và gate `agentintegration` + `MULTICA_RUN_REAL_AGENT_SMOKE=1` theo AGENTS.md. Không dùng bwrap smoke hoặc fixture banner tests để chứng nhận Docker/native/provider compatibility.
+
+## Manual Docker verification
+
+Cloud CI has no Docker engine. Operators follow [docker-task-worker-manual-test.md](docker-task-worker-manual-test.md). Git performance tradeoffs: [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md).
 
 ## Source và delivery
 
-Fork **r2d-ai/multica**, target **main**, baseline `5080ef180d1cb9be540895666e18a46235e9737c`. Reuse source #93: `a0c48fb5483f2f4404a050a60c3aff2e88eadcfb`; chỉ lấy UI/DTO/generation/custody/lifecycle cần thiết, không nhập Docker/control server/grant/restore framework. Refresh main trước coding; không giả định patch ACL lịch sử còn hiện diện.
+Migrations **900100–900113 đã có trên feature branch**; cập nhật inventory #12, không cấp/renumber trong docs. DB deployment chưa xác minh. Giữ no-FK/concurrent-index rules.
 
-Chưa reserve migration; inventory và cập nhật #12 trước khi cấp số, giữ `r2d_*`, no-FK/concurrent-index rules. PR nhỏ, theo AGENTS.md; cập nhật #84/#12 với SHA và evidence thật. Rollback pause task, không fallback shared Git credentials hoặc unsandboxed execution.
+Commit nhỏ trực tiếp tiếp nối branch, chỉ fork **r2d-ai/multica**. Refresh head trước sửa; không overwrite code người khác. Cập nhật status, #84 và active cursor #12; giữ upstream cursor/historical stack. #94/#95 là spec history đã merge; #93 closed để tham khảo credentials.
+
+Protected mode fail closed. Rollback pause tasks, revoke/stop attempts và sửa; không host execution fallback. Spec này không tự authorize deploy, tạo/rotate production keys hoặc real-agent account tests.

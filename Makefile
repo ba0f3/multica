@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon task-worker-image cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -314,6 +314,13 @@ server: ## Run only the Go server for the current checkout
 
 daemon: ## Restart the local agent daemon using the CLI's stored auth/session
 	@$(MAKE) multica MULTICA_ARGS="daemon restart --profile local"
+
+task-worker-image: ## Build Docker task worker; tag local name and daemon default (ghcr.io/...)
+	docker build -f docker/task-worker/Dockerfile \
+		-t multica/task-worker:local \
+		--build-arg VERSION=dev --build-arg COMMIT=$(COMMIT) \
+		.
+	docker tag multica/task-worker:local ghcr.io/r2d-ai/multica-task-worker:latest
 
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"

@@ -1379,6 +1379,62 @@ type QuickAction struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type R2dGitIdentity struct {
+	ID               pgtype.UUID        `json:"id"`
+	UserID           pgtype.UUID        `json:"user_id"`
+	ProviderID       pgtype.UUID        `json:"provider_id"`
+	ActiveGeneration int64              `json:"active_generation"`
+	Epoch            int64              `json:"epoch"`
+	Revoked          bool               `json:"revoked"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitKey struct {
+	IdentityID        pgtype.UUID        `json:"identity_id"`
+	Generation        int64              `json:"generation"`
+	PublicKey         string             `json:"public_key"`
+	Fingerprint       string             `json:"fingerprint"`
+	InternalSecretRef string             `json:"internal_secret_ref"`
+	State             string             `json:"state"`
+	AccountID         string             `json:"account_id"`
+	Login             string             `json:"login"`
+	VerifiedAt        pgtype.Timestamptz `json:"verified_at"`
+	CleanupPending    bool               `json:"cleanup_pending"`
+	Diagnostic        string             `json:"diagnostic"`
+	ConsentProjectIds []byte             `json:"consent_project_ids"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitKeyJob struct {
+	ID             pgtype.UUID        `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	IdentityID     pgtype.UUID        `json:"identity_id"`
+	Generation     int64              `json:"generation"`
+	Kind           string             `json:"kind"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	State          string             `json:"state"`
+	LastError      string             `json:"last_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type R2dGitKeySecret struct {
+	SecretRef string             `json:"secret_ref"`
+	Sealed    []byte             `json:"sealed"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type R2dGitProvider struct {
+	ID        pgtype.UUID        `json:"id"`
+	Label     string             `json:"label"`
+	Kind      string             `json:"kind"`
+	Host      string             `json:"host"`
+	Port      int32              `json:"port"`
+	HostPins  []byte             `json:"host_pins"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type RuntimeProfile struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

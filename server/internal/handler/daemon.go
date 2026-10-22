@@ -2419,6 +2419,29 @@ func claimResponseAgentIdentityMatches(resp AgentTaskResponse) bool {
 func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQueue, runtime db.AgentRuntime, runtimeID, runtimeWorkspaceID string) (resp AgentTaskResponse, deliveredCommentIDs []pgtype.UUID, issueSnapshot []byte, agentSkillCount, builtinSkillCount int, failure *claimBuildFailure) {
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp = taskToResponse(*task, runtimeWorkspaceID)
+	// Git credentials follow the human who authorized the run. A task
+	// without a provable originator gets none: an audit-only fallback
+	// names who is accountable, not who asked.
+	//
+	// A credential lookup failure never fails the claim — the run simply
+	// starts without Git signing, which is the safe direction.
+	if h.GitSecurity != nil && task.OriginatorUserID.Valid {
+		resp.ExecutionUserID = uuidToString(task.OriginatorUserID)
+		if identities, identityErr := h.GitSecurity.ReadyIdentities(r.Context(), resp.ExecutionUserID); identityErr != nil {
+			slog.Debug("git credentials: could not list the execution user's identities", "task_id", resp.ID, "error", identityErr)
+		} else {
+			for _, identity := range identities {
+				resp.GitIdentities = append(resp.GitIdentities, GitIdentityBinding{
+					ProviderID:  identity.ProviderID,
+					Host:        identity.Host,
+					IdentityID:  identity.IdentityID,
+					Generation:  identity.Generation,
+					PublicKey:   identity.PublicKey,
+					Fingerprint: identity.Fingerprint,
+				})
+			}
+		}
+	}
 	if err := (&service.IssueWakeupService{Tasks: h.TaskService}).CheckClaim(r.Context(), *task); err != nil {
 		if !errors.Is(err, service.ErrWakeupForbidden) {
 			return resp, nil, nil, 0, 0, h.rejectClaimSourceLoad(r.Context(), task, err, "wakeup", resp.WakeupID)

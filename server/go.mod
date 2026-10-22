@@ -3,6 +3,7 @@ module github.com/multica-ai/multica/server
 go 1.26.9
 
 require (
+	github.com/42wim/sshsig v0.0.0-20260317195500-b9f38cf0d432
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.4
@@ -31,6 +32,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/tdewolff/parse/v2 v2.8.16
 	github.com/yuin/goldmark v1.8.6
+	golang.org/x/crypto v0.57.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/protobuf v1.36.12

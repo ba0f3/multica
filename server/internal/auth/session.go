@@ -41,6 +41,21 @@ const (
 	// not invalidate CSRF tokens other tabs are already holding.
 	sessionIDClaim = "sid"
 
+	// SessionOriginClaim records where a session token was requested. A
+	// token without it came from a browser sign-in.
+	SessionOriginClaim = "auth_origin"
+
+	// SessionOriginCLI marks a token handed to the CLI. The CLI stores it
+	// on disk next to the code the agent runs, so it authorizes ordinary API
+	// calls but not an account-level credential change.
+	SessionOriginCLI = "cli"
+
+	// sessionAuthTimeClaim carries the moment the user signed in. Unlike
+	// `iat`, which slides forward on every renewal, it stays where it was
+	// for the whole session, so a handler can tell that a request comes
+	// from a session that was authenticated recently.
+	sessionAuthTimeClaim = "auth_time"
+
 	// sessionRenewCheckDivisor derives the client-side re-check cadence
 	// from the configured TTL: a client that checks every TTL/10 gets
 	// roughly five attempts inside the renewal window, so several
@@ -239,6 +254,19 @@ func RenewSessionToken(claims jwt.MapClaims) (string, time.Time, error) {
 		"exp":          expiresAt.Unix(),
 		"iat":          now.Unix(),
 		sessionIDClaim: sid,
+	}
+	// The sign-in moment travels with the session. Copying it forward keeps
+	// a renewed token's age anchored to the original login, so a session
+	// cannot be kept "recently authenticated" forever by renewing it.
+	if authTime, ok := claims[sessionAuthTimeClaim].(float64); ok && authTime > 0 {
+		next[sessionAuthTimeClaim] = int64(authTime)
+	} else {
+		next[sessionAuthTimeClaim] = now.Unix()
+	}
+	// The origin must survive renewal, or a renewed CLI token would become
+	// indistinguishable from a browser session.
+	if origin, ok := claims[SessionOriginClaim].(string); ok && origin != "" {
+		next[SessionOriginClaim] = origin
 	}
 	if email != "" {
 		next["email"] = email

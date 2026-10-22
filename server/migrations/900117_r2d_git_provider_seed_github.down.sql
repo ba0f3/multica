@@ -1,0 +1,2 @@
+DELETE FROM r2d_git_provider
+WHERE id = 'a0000000-0000-4000-8000-000000000001'::uuid;
