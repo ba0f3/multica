@@ -648,13 +648,13 @@
   "git_providers": {
     "section_title": "Git SSH 主机",
     "section_description": "对本服务器的所有工作区生效。只需添加一次主机，然后在下方生成密钥。",
+    "host_keys_hint": "添加主机时，Multica 会从此服务器自动获取 SSH 主机密钥指纹。请填写 API 能访问的主机和端口（本地 Gitea 需确保不是仅浏览器能连的地址）。",
     "label": "名称",
     "kind": "类型",
     "host": "主机",
     "port": "SSH 端口",
-    "host_pins": "SSH 主机密钥指纹（每行一个 SHA256）",
     "add": "添加主机",
-    "toast_invalid": "请填写名称、主机、端口和至少一条主机密钥指纹。",
+    "toast_invalid": "请填写名称、主机和端口。",
     "toast_created": "已添加 Git 主机",
     "toast_create_failed": "无法添加 Git 主机"
   },

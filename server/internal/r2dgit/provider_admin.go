@@ -39,6 +39,13 @@ func (s *Service) CreateProvider(ctx context.Context, input CreateProviderInput)
 		return PublicProvider{}, ErrScope
 	}
 	pins := normalizeHostPins(input.HostPins)
+	if len(pins) == 0 {
+		discovered, err := DiscoverSSHHostKeys(ctx, host, port)
+		if err != nil {
+			return PublicProvider{}, err
+		}
+		pins = discovered
+	}
 	if _, err := pinnedHostKeyCallback(pins); err != nil {
 		return PublicProvider{}, ErrScope
 	}
@@ -74,6 +81,14 @@ func (s *Service) CreateProvider(ctx context.Context, input CreateProviderInput)
 		Host:  created.Host,
 		Port:  created.Port,
 	}, nil
+}
+
+// DiscoverProviderHostKeys exposes SSH host key fingerprints for the UI.
+func (s *Service) DiscoverProviderHostKeys(ctx context.Context, host string, port int) ([]string, error) {
+	if !s.available() {
+		return nil, ErrUnavailable
+	}
+	return DiscoverSSHHostKeys(ctx, host, port)
 }
 
 func normalizeHostPins(pins []string) []string {

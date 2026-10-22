@@ -12,18 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@multica/ui/components/ui/select";
-import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useConfigStore } from "@multica/core/config";
 import { useCreateGitProvider } from "@multica/core/git-identities";
 import { useT } from "../../i18n";
 import { SettingsCard, SettingsSection } from "./settings-layout";
-
-function parseHostPins(raw: string): string[] {
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
 
 /**
  * Deployment-scoped Git SSH hosts. One configuration serves every workspace on
@@ -38,14 +30,12 @@ export function GitProvidersAdminSection() {
   const [kind, setKind] = useState<"github" | "gitea">("gitea");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
-  const [hostPins, setHostPins] = useState("");
 
   if (!manageable) return null;
 
   const handleSubmit = () => {
     const parsedPort = Number.parseInt(port, 10);
-    const pins = parseHostPins(hostPins);
-    if (!label.trim() || !host.trim() || !Number.isFinite(parsedPort) || pins.length === 0) {
+    if (!label.trim() || !host.trim() || !Number.isFinite(parsedPort)) {
       toast.error(t(($) => $.git_providers.toast_invalid));
       return;
     }
@@ -55,14 +45,13 @@ export function GitProvidersAdminSection() {
         kind,
         host: host.trim(),
         port: parsedPort,
-        host_pins: pins,
+        host_pins: [],
       },
       {
         onSuccess: () => {
           toast.success(t(($) => $.git_providers.toast_created));
           setLabel("");
           setHost("");
-          setHostPins("");
         },
         onError: (error: unknown) => {
           toast.error(
@@ -123,17 +112,9 @@ export function GitProvidersAdminSection() {
               />
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="git-provider-pins">{t(($) => $.git_providers.host_pins)}</Label>
-            <Textarea
-              id="git-provider-pins"
-              value={hostPins}
-              onChange={(event) => setHostPins(event.target.value)}
-              rows={4}
-              placeholder="SHA256:…"
-              className="font-mono text-caption"
-            />
-          </div>
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.git_providers.host_keys_hint)}
+          </p>
           <div className="flex justify-end">
             <Button type="button" onClick={handleSubmit} disabled={create.isPending}>
               {t(($) => $.git_providers.add)}

@@ -1678,6 +1678,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// session, so a personal access token or a task token cannot reach
 		// a credential even though the group admits it.
 		r.Get("/api/me/git-identities", h.ListGitIdentities)
+		r.Post("/api/me/git-providers/discover-host-keys", h.DiscoverGitProviderHostKeys)
 		r.Post("/api/me/git-providers", h.CreateGitProvider)
 		r.Post("/api/me/git-identities", h.GenerateGitIdentity)
 		r.Post("/api/me/git-identities/{identityId}/{generation}/verify", h.VerifyGitIdentity)

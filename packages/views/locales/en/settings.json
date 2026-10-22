@@ -653,13 +653,13 @@
   "git_providers": {
     "section_title": "Git SSH hosts",
     "section_description": "Applies to this server for every workspace. Add a host once, then generate your key below.",
+    "host_keys_hint": "Multica fetches SSH host key fingerprints from this server when you add a host. Use a host and port the API machine can reach (for local Gitea, not only localhost in your browser).",
     "label": "Label",
     "kind": "Provider type",
     "host": "Host",
     "port": "SSH port",
-    "host_pins": "SSH host key fingerprints (one SHA256 per line)",
     "add": "Add host",
-    "toast_invalid": "Enter a label, host, port, and at least one host key fingerprint.",
+    "toast_invalid": "Enter a label, host, and port.",
     "toast_created": "Git host added",
     "toast_create_failed": "Could not add the Git host"
   },

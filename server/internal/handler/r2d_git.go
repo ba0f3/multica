@@ -129,6 +129,42 @@ func (h *Handler) ListGitIdentities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
+// DiscoverGitProviderHostKeys returns SSH host key fingerprints for a host.
+func (h *Handler) DiscoverGitProviderHostKeys(w http.ResponseWriter, r *http.Request) {
+	if !h.gitProviderManagementEnabled() {
+		writeErrorCode(w, http.StatusForbidden, "git_provider_management_disabled", "Git provider management is not enabled on this server.")
+		return
+	}
+	_, ok := gitHumanSession(w, r, false)
+	if !ok {
+		return
+	}
+	service, ok := h.gitService(w)
+	if !ok {
+		return
+	}
+	var body struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+	if !gitJSONBody(w, r, &body) {
+		return
+	}
+	pins, err := service.DiscoverProviderHostKeys(r.Context(), body.Host, body.Port)
+	if err != nil {
+		switch {
+		case errors.Is(err, r2dgit.ErrScope):
+			writeErrorCode(w, http.StatusBadRequest, "git_invalid_request", "A valid host and port are required.")
+		case errors.Is(err, r2dgit.ErrProvider):
+			writeErrorCode(w, http.StatusBadGateway, "git_provider_unreachable", "Could not read SSH host keys from that host. Check the host, port, and that this server can reach it.")
+		default:
+			gitServiceError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]string{"host_pins": pins})
+}
+
 // CreateGitProvider registers a deployment-scoped Git SSH host.
 //
 // Any signed-in human may add a provider on self-hosted instances where Git
@@ -165,6 +201,10 @@ func (h *Handler) CreateGitProvider(w http.ResponseWriter, r *http.Request) {
 		HostPins: body.HostPins,
 	})
 	if err != nil {
+		if errors.Is(err, r2dgit.ErrProvider) {
+			writeErrorCode(w, http.StatusBadGateway, "git_provider_unreachable", "Could not read SSH host keys from that host. Check the host, port, and that this Multica server can reach it.")
+			return
+		}
 		gitServiceError(w, err)
 		return
 	}
