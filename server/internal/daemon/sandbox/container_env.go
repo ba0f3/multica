@@ -29,6 +29,9 @@ func ContainerEnv(env map[string]string) map[string]string {
 	rewriteIfSet(rewritten, "CURSOR_DATA_DIR", filepath.Join(HomePath, ".cursor"))
 	rewriteIfSet(rewritten, "HERMES_HOME", filepath.Join(HomePath, ".hermes"))
 	rewriteIfSet(rewritten, "OPENCLAW_CONFIG_PATH", filepath.Join(HomePath, ".openclaw", "config.json"))
+	rewriteIfSet(rewritten, "XDG_CONFIG_HOME", filepath.Join(HomePath, ".config"))
+	rewriteIfSet(rewritten, "XDG_DATA_HOME", filepath.Join(HomePath, ".local", "share"))
+	rewriteIfSet(rewritten, "XDG_CACHE_HOME", filepath.Join(HomePath, ".cache"))
 	return rewritten
 }
 

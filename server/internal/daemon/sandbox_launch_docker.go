@@ -65,9 +65,27 @@ func (d *Daemon) dockerBackend(
 		binds = append(binds, sandbox.DockerBind(socketDir, filepath.Dir(sandbox.AgentSocketPath), "rw"))
 	}
 
-	containerEnv := sandbox.ContainerEnv(config.Env)
+	agentConfig := config
+	if sandbox.ProviderUsesDockerAgentBinary(provider) {
+		containerExec, agentBind, err := sandbox.DockerAgentBinaryBind(config.ExecutablePath)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+		}
+		binds = append(binds, agentBind)
+		agentConfig.ExecutablePath = containerExec
+	}
+
+	containerEnv := sandbox.ContainerEnv(agentConfig.Env)
 	if agentSocket != "" {
 		containerEnv["SSH_AUTH_SOCK"] = sandbox.AgentSocketPath
+	}
+
+	dockerUser := strings.TrimSpace(d.cfg.DockerTaskUser)
+	if dockerUser == "" {
+		// Match the daemon uid so bind-mounted task homes (owned by the daemon)
+		// remain writable inside the worker. Override with MULTICA_DOCKER_TASK_USER
+		// when the image runs as a fixed non-root user.
+		dockerUser = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	}
 
 	spec := sandbox.DockerRunSpec{
@@ -78,7 +96,7 @@ func (d *Daemon) dockerBackend(
 		MemoryBytes:   d.cfg.DockerMemoryBytes,
 		PIDsLimit:     d.cfg.DockerPIDsLimit,
 		NanoCPUs:      d.cfg.DockerNanoCPUs,
-		User:          d.cfg.DockerTaskUser,
+		User:          dockerUser,
 		Workdir:       sandbox.CheckoutPath,
 		Env:           containerEnv,
 		Binds:         binds,
@@ -92,7 +110,7 @@ func (d *Daemon) dockerBackend(
 		return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
 	}
 
-	sandboxConfig := sandbox.ConfigFromAgent(config)
+	sandboxConfig := sandbox.ConfigFromAgent(agentConfig)
 	sandboxConfig.AttemptID = attemptID
 	sandboxConfig.Env = containerEnv
 

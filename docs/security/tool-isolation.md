@@ -16,6 +16,7 @@ This document describes how Multica constrains **Codex**, **Cursor**, and **Open
 | --- | --- |
 | Provider gate | Only `codex`, `cursor`, and `opencode` may run when the sandbox is enabled (`server/internal/daemon/sandbox/providers.go`). |
 | Worker boundary | Agent CLI runs inside Docker or bwrap; Session IPC and git signing stay on controlled mounts. |
+| Docker agent CLI | For codex/cursor/opencode, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
 | Provider prep | `IsolatedToolBoundary` on execenv prepare/reuse copies provider secrets into the task env and fixes container identity paths. |
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
 
@@ -33,6 +34,7 @@ This document describes how Multica constrains **Codex**, **Cursor**, and **Open
 
 ## OpenCode
 
+- **Credentials and config** are copied into the task `home/` tree (`~/.config/opencode`, `~/.local/share/opencode`) before Docker launch; the worker runs with `HOME` and XDG dirs pointed at that tree.
 - **`--server` is forbidden** in the isolated boundary so the agent cannot attach to a host or shared background service.
 - **OpenCode 2.x** runs with **`--standalone`** so the service stays in the worker process tree (cancellation and tool execution remain inside the boundary).
 - **OpenCode 2.x + Multica-managed MCP** is still refused at launch (`ErrOpenCodeV2MCPUnsupported`) until MUL-7523 delivers env-backed MCP via standalone; use OpenCode 1.x or remove composed MCP servers for isolated 2.x tasks.

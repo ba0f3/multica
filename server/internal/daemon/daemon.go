@@ -8790,6 +8790,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if sandboxed != nil {
 		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
 		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
+		if env != nil {
+			taskHome := filepath.Join(env.RootDir, "home")
+			agentEnv["HOME"] = taskHome
+			agentEnv["XDG_CONFIG_HOME"] = filepath.Join(taskHome, ".config")
+			agentEnv["XDG_DATA_HOME"] = filepath.Join(taskHome, ".local", "share")
+			agentEnv["XDG_CACHE_HOME"] = filepath.Join(taskHome, ".cache")
+		}
 	}
 	defer d.clearActiveRepoCheckoutTask(agentToken)
 

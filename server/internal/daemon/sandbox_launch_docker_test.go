@@ -25,7 +25,14 @@ func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
 	daemon.cfg.DockerTaskImage = "multica/task-worker:test"
 	env := newSandboxTestEnv(t)
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-docker-1")
+	fakeCodex := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{
+		TaskID:         "task-1",
+		ExecutablePath: fakeCodex,
+	}, env, "", "", "attempt-docker-1")
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -53,6 +60,7 @@ func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
 		"--name", sandbox.SanitizeContainerName("attempt-docker-1"),
 		"-v", env.WorkDir + ":" + sandbox.CheckoutPath + ":rw",
 		"-v", filepath.Join(env.RootDir, "home") + ":" + sandbox.HomePath + ":rw",
+		"-v", fakeCodex + ":/usr/local/bin/codex:ro",
 		"multica/task-worker:test",
 		sandbox.WorkerArg,
 	} {

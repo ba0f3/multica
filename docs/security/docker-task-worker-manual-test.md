@@ -21,6 +21,11 @@ docker build -f docker/task-worker/Dockerfile \
 docker images multica/task-worker:local --digests
 ```
 
+The image ships the `multica` worker binary only (Debian/glibc base). For isolated
+**codex**, **cursor**, and **opencode** tasks, the daemon bind-mounts the host CLI
+into `/usr/local/bin/<basename>` read-only at launch time — you do not bake agent
+CLIs into the image for local dev.
+
 Record **image digest** in your test notes.
 
 ## Daemon environment

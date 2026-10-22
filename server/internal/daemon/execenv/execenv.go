@@ -703,6 +703,16 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		env.CursorDataDir = cursorDataDir
 	}
 
+	if params.Provider == "opencode" && params.IsolatedToolBoundary {
+		taskHome := filepath.Join(envRoot, "home")
+		if err := os.MkdirAll(taskHome, 0o700); err != nil {
+			return nil, fmt.Errorf("execenv: create task home: %w", err)
+		}
+		if err := prepareOpenCodeIsolatedHome(taskHome, logger); err != nil {
+			return nil, fmt.Errorf("execenv: prepare opencode isolated home: %w", err)
+		}
+	}
+
 	if err := writeSidecarManifest(envRoot, manifest); err != nil {
 		// In place the manifest is the ONLY record of what we wrote into the
 		// user's own directory, so losing it strands the sidecar tree there
