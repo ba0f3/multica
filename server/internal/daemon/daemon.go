@@ -8485,6 +8485,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentEnv["SSH_AUTH_SOCK"] = socketPath
 		defer stopGitAgent()
 	}
+	if err := validateGitCredentialForTask(task, gitSocketPath); err != nil {
+		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+	}
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}

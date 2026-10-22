@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -25,6 +26,18 @@ func (s *serverGitSigner) PublicKey() string { return s.publicKey }
 
 func (s *serverGitSigner) Sign(ctx context.Context, data []byte) ([]byte, error) {
 	return s.client.SignGitData(ctx, s.leaseID, data)
+}
+
+// validateGitCredentialForTask requires a signing socket only when a matching
+// verified credential was supplied. Missing credentials do not block startup.
+func validateGitCredentialForTask(task Task, gitSocketPath string) error {
+	if binding := pickGitIdentity(task); binding != nil && gitSocketPath == "" {
+		return fmt.Errorf(
+			"git signing is unavailable for %s; Check connection on your Git credential or retry the task",
+			binding.Host,
+		)
+	}
+	return nil
 }
 
 // pickGitIdentity chooses the credential whose provider matches one of the

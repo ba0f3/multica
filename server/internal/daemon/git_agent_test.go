@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,51 @@ func TestPickGitIdentityReturnsNilWithoutCredentials(t *testing.T) {
 	task := Task{Repos: []RepoData{{URL: "git@github.com:acme/api.git"}}}
 	if binding := pickGitIdentity(task); binding != nil {
 		t.Fatalf("an identity was picked for a task with no credentials: %+v", binding)
+	}
+}
+
+func TestValidateGitCredentialForTaskAllowsMissingCredential(t *testing.T) {
+	task := Task{
+		Repos: []RepoData{{URL: "git@github.com:acme/api.git"}},
+	}
+	if err := validateGitCredentialForTask(task, ""); err != nil {
+		t.Fatalf("missing credentials must not block task startup: %v", err)
+	}
+}
+
+func TestValidateGitCredentialForTaskAllowsUnmatchedRepository(t *testing.T) {
+	task := Task{
+		Repos: []RepoData{
+			{URL: "git@github.com:acme/api.git"},
+			{URL: "ssh://git@git.r2d.dev:2222/r2d/sveltia-test.git"},
+		},
+		GitIdentities: []GitIdentityBinding{{ProviderID: "provider-gitea", Host: "git.r2d.dev"}},
+	}
+	if err := validateGitCredentialForTask(task, "/tmp/fake.sock"); err != nil {
+		t.Fatalf("an unrelated repository must not block task startup: %v", err)
+	}
+}
+
+func TestValidateGitCredentialForTaskRejectsUnavailableSigning(t *testing.T) {
+	task := Task{
+		Repos:         []RepoData{{URL: "git@github.com:acme/api.git"}},
+		GitIdentities: []GitIdentityBinding{{ProviderID: "provider-github", Host: "github.com"}},
+	}
+	err := validateGitCredentialForTask(task, "")
+	if err == nil || !strings.Contains(err.Error(), "git signing is unavailable") {
+		t.Fatalf("expected unavailable signing error, got %v", err)
+	}
+}
+
+func TestValidateGitCredentialForTaskAllowsReadyCredential(t *testing.T) {
+	task := Task{
+		Repos: []RepoData{{URL: "git@github.com:acme/api.git"}},
+		GitIdentities: []GitIdentityBinding{
+			{ProviderID: "provider-github", Host: "github.com"},
+		},
+	}
+	if err := validateGitCredentialForTask(task, "/tmp/fake.sock"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
