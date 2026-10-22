@@ -650,6 +650,19 @@
     "toast_avatar_failed": "Échec de l'envoi de l'avatar",
     "toast_profile_failed": "Échec de la mise à jour du profil"
   },
+  "git_providers": {
+    "section_title": "Hôtes SSH Git",
+    "section_description": "S’applique à tous les espaces de travail de ce serveur. Ajoutez un hôte une seule fois, puis générez votre clé ci-dessous.",
+    "host_keys_hint": "À l’ajout d’un hôte, Multica récupère ses empreintes de clés SSH depuis ce serveur. L’hôte et le port doivent être accessibles depuis la machine qui exécute l’API (pour Gitea en local, pas seulement via localhost dans votre navigateur).",
+    "label": "Libellé",
+    "kind": "Type de fournisseur",
+    "host": "Hôte",
+    "port": "Port SSH",
+    "add": "Ajouter un hôte",
+    "toast_invalid": "Saisissez un libellé, un hôte et un port.",
+    "toast_created": "Hôte Git ajouté",
+    "toast_create_failed": "Impossible d’ajouter l’hôte Git"
+  },
   "git_identities": {
     "section_title": "Identifiants Git",
     "section_description": "Multica signe les opérations Git avec ces clés. La révocation est irréversible et ne supprime pas la clé publique de votre fournisseur.",
