@@ -47,16 +47,17 @@ export function useRevokeGitIdentity() {
   });
 }
 
-export function useCreateGitProvider() {
-  const invalidate = useInvalidateGitIdentities();
+export function useSignGiteaGitIdentityVerification() {
   return useMutation({
     mutationFn: (input: {
-      label: string;
-      kind: string;
-      host: string;
-      port: number;
-      host_pins: string[];
-    }) => api.createGitProvider(input),
-    onSettled: invalidate,
+      identityId: string;
+      generation: number;
+      token: string;
+    }) =>
+      api.signGiteaGitIdentityVerification(
+        input.identityId,
+        input.generation,
+        input.token,
+      ),
   });
 }

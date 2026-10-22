@@ -3,6 +3,7 @@ module github.com/multica-ai/multica/server
 go 1.26.9
 
 require (
+	github.com/42wim/sshsig v0.0.0-20260317195500-b9f38cf0d432
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.4

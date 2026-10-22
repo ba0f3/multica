@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 
@@ -21,6 +24,7 @@ import (
 // and stored in PostgreSQL.
 func gitCredentialService(queries *db.Queries) *r2dgit.Service {
 	store := r2dgit.NewSQLCStore(queries)
+	bootstrapGitProviders(store)
 
 	custodyURL := strings.TrimSpace(os.Getenv("MULTICA_GIT_CUSTODY_URL"))
 	custodyMount := strings.TrimSpace(os.Getenv("MULTICA_GIT_CUSTODY_MOUNT"))
@@ -36,7 +40,7 @@ func gitCredentialService(queries *db.Queries) *r2dgit.Service {
 			if err != nil {
 				slog.Error("git credentials: OpenBao custody was rejected", "error", err)
 			} else {
-				return r2dgit.NewService(store, custody, r2dgit.NewSSHVerifier(custody))
+				return newGitCredentialService(store, custody)
 			}
 		}
 	}
@@ -57,5 +61,23 @@ func gitCredentialService(queries *db.Queries) *r2dgit.Service {
 		return nil
 	}
 	slog.Info("git credentials: using database custody (encrypted at rest in PostgreSQL)")
+	return newGitCredentialService(store, custody)
+}
+
+func newGitCredentialService(store *r2dgit.SQLCStore, custody r2dgit.EncryptedCustody) *r2dgit.Service {
 	return r2dgit.NewService(store, custody, r2dgit.NewSSHVerifier(custody))
+}
+
+func bootstrapGitProviders(store *r2dgit.SQLCStore) {
+	raw := strings.TrimSpace(os.Getenv("MULTICA_GIT_PROVIDERS"))
+	if raw == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := r2dgit.BootstrapProvidersFromEnv(ctx, store, uuid.NewString, raw); err != nil {
+		slog.Error("git credentials: MULTICA_GIT_PROVIDERS bootstrap failed", "error", err)
+		return
+	}
+	slog.Info("git credentials: providers synced from MULTICA_GIT_PROVIDERS")
 }

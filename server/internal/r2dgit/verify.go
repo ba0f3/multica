@@ -18,7 +18,12 @@ var githubBanner = regexp.MustCompile(`^Hi ([A-Za-z0-9][A-Za-z0-9-]{0,38})! You'
 // giteaBanner is the message Gitea sends when an account key authenticates.
 // It names the key and continues with the deployment hint, so the whole
 // message has to match — a truncated banner is not proof of anything.
-var giteaBanner = regexp.MustCompile(`^Hi there, ([A-Za-z0-9][A-Za-z0-9_.-]{0,39})! You've successfully authenticated with the SSH key named [^\r\n]{1,200}\.\nGitea does not provide shell access\. If this is unexpected, please setup Gitea under another SSH user or use container to deploy\.$`)
+// Gitea prints several banner variants across versions; the second line may
+// mention password login or container deploy. All forms end after the first
+// "Gitea does not provide shell access." sentence with more guidance.
+var giteaBanner = regexp.MustCompile(
+	`(?s)^Hi there, ([A-Za-z0-9][A-Za-z0-9_.-]{0,39})! You've successfully authenticated with the (?:SSH )?key named [^\r\n]{1,200}\.\nGitea does not provide shell access\..*$`,
+)
 
 // ParseProviderLogin extracts the provider account a key authenticated.
 //
@@ -148,6 +153,9 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 			Timeout: v.timeout,
 		})
 		if err != nil {
+			if isSSHAuthFailure(err) {
+				return ErrIdentity
+			}
 			return ErrProvider
 		}
 		defer client.Close()
@@ -158,7 +166,7 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 		}
 		defer session.Close()
 		session.Stderr = &stderr
-		if err := session.Start(v.execProbe); err != nil {
+		if err := startProviderVerifySession(provider.Kind, session, v.execProbe); err != nil {
 			return ErrProvider
 		}
 		waitErr := session.Wait()
@@ -191,4 +199,17 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 		return "", ErrIdentity
 	}
 	return login, nil
+}
+
+// startProviderVerifySession opens the provider check the way each host
+// expects. Gitea only prints its authentication banner when
+// SSH_ORIGINAL_COMMAND is empty (as with `ssh -T`), so a remote `true`
+// command makes serv reject the session before any banner is sent.
+func startProviderVerifySession(kind string, session *ssh.Session, execProbe string) error {
+	switch kind {
+	case "gitea":
+		return session.Shell()
+	default:
+		return session.Start(execProbe)
+	}
 }

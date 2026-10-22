@@ -121,9 +121,9 @@ import type {
   CreateQuickActionRequest,
   UpdateQuickActionRequest,
   ListQuickActionsResponse,
+  GiteaVerifySignResponse,
   GitIdentity,
   GitProfile,
-  GitProvider,
   UpdatePropertyRequest,
   ListPropertiesResponse,
   IssuePropertiesResponse,
@@ -435,10 +435,9 @@ import {
   EMPTY_QUICK_ACTION,
   EMPTY_LIST_QUICK_ACTIONS_RESPONSE,
   GitProfileSchema,
-  GitProviderSchema,
   GitIdentitySchema,
+  GiteaVerifySignResponseSchema,
   EMPTY_GIT_PROFILE,
-  EMPTY_GIT_PROVIDER,
   EMPTY_GIT_IDENTITY,
   CommentSchema,
   EMPTY_COMMENT,
@@ -5419,23 +5418,6 @@ export class ApiClient {
     });
   }
 
-  /** Register a deployment-scoped Git SSH host (self-host). */
-  async createGitProvider(input: {
-    label: string;
-    kind: string;
-    host: string;
-    port: number;
-    host_pins: string[];
-  }): Promise<GitProvider> {
-    const raw = await this.fetch<unknown>("/api/me/git-providers", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
-    return parseWithFallback(raw, GitProviderSchema, EMPTY_GIT_PROVIDER, {
-      endpoint: "POST /api/me/git-providers",
-    });
-  }
-
   /**
    * Create the next key generation for a provider.
    *
@@ -5463,6 +5445,25 @@ export class ApiClient {
     );
     return parseWithFallback(raw, GitIdentitySchema, EMPTY_GIT_IDENTITY, {
       endpoint: "POST /api/me/git-identities/{identityId}/{generation}/verify",
+    });
+  }
+
+  /** Sign Gitea's SSH key verification token with the stored private key. */
+  async signGiteaGitIdentityVerification(
+    identityId: string,
+    generation: number,
+    token: string,
+  ): Promise<GiteaVerifySignResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/me/git-identities/${identityId}/${generation}/gitea-verify-sign`,
+      {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      },
+    );
+    return parseWithFallback(raw, GiteaVerifySignResponseSchema, { signature: "" }, {
+      endpoint:
+        "POST /api/me/git-identities/{identityId}/{generation}/gitea-verify-sign",
     });
   }
 

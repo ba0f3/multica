@@ -170,10 +170,13 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 
 	provider, err := s.store.GetProvider(ctx, providerID)
 	if err != nil {
-		return PublicIdentity{}, ErrScope
+		if errors.Is(err, ErrScope) {
+			return PublicIdentity{}, ErrProviderNotFound
+		}
+		return PublicIdentity{}, err
 	}
 	if !provider.Enabled {
-		return PublicIdentity{}, ErrScope
+		return PublicIdentity{}, ErrProviderNotFound
 	}
 
 	idempotencyKey := "generate:" + userID + ":" + providerID + ":" + requestID
@@ -207,6 +210,13 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 	}
 
 	generation := identity.ActiveGeneration + 1
+	if existingKey, err := s.store.GetKey(ctx, identity.ID, generation); err == nil {
+		if err := s.ensureProvisionJobDone(ctx, userID, identity.ID, generation, idempotencyKey); err != nil {
+			return PublicIdentity{}, err
+		}
+		return publicIdentity(identity, existingKey), nil
+	}
+
 	material, err := GenerateKeyMaterial(s.random)
 	if err != nil {
 		return PublicIdentity{}, err
@@ -214,6 +224,14 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 
 	secretRef := secretRefFor(identity.ID, generation)
 	if _, err := s.custody.Store(ctx, secretRef, material); err != nil {
+		if errors.Is(err, ErrConflict) {
+			if existingKey, keyErr := s.store.GetKey(ctx, identity.ID, generation); keyErr == nil {
+				if err := s.ensureProvisionJobDone(ctx, userID, identity.ID, generation, idempotencyKey); err != nil {
+					return PublicIdentity{}, err
+				}
+				return publicIdentity(identity, existingKey), nil
+			}
+		}
 		return PublicIdentity{}, err
 	}
 
@@ -233,19 +251,39 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 		return PublicIdentity{}, err
 	}
 
-	if _, err := s.store.CreateJob(ctx, Job{
-		ID:             s.newID(),
-		UserID:         userID,
-		IdentityID:     identity.ID,
-		Generation:     generation,
-		Kind:           "provision",
-		IdempotencyKey: idempotencyKey,
-		State:          "done",
-	}); err != nil && !errors.Is(err, ErrConflict) {
+	if err := s.ensureProvisionJobDone(ctx, userID, identity.ID, generation, idempotencyKey); err != nil {
 		return PublicIdentity{}, err
 	}
 
 	return publicIdentity(identity, key), nil
+}
+
+func (s *Service) ensureProvisionJobDone(ctx context.Context, userID, identityID string, generation uint64, idempotencyKey string) error {
+	existing, err := s.store.GetJobByIdempotencyKey(ctx, idempotencyKey)
+	switch {
+	case err == nil && existing.State == "done":
+		return nil
+	case err == nil && existing.Kind == "provision":
+		_, err = s.store.UpdateJobState(ctx, existing.ID, "done", "")
+		return err
+	case err == nil:
+		return ErrConflict
+	case !errors.Is(err, ErrScope):
+		return err
+	}
+	_, err = s.store.CreateJob(ctx, Job{
+		ID:             s.newID(),
+		UserID:         userID,
+		IdentityID:     identityID,
+		Generation:     generation,
+		Kind:           "provision",
+		IdempotencyKey: idempotencyKey,
+		State:          "done",
+	})
+	if err != nil && !errors.Is(err, ErrConflict) {
+		return err
+	}
+	return nil
 }
 
 // Verify proves that a stored generation authenticates the provider account

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/42wim/sshsig"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -100,6 +101,29 @@ func (s *fakeStore) GetProvider(_ context.Context, id string) (Provider, error) 
 	if !ok {
 		return Provider{}, ErrScope
 	}
+	return provider, nil
+}
+
+func (s *fakeStore) GetProviderByKindHostPort(_ context.Context, kind, host string, port int) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, provider := range s.providers {
+		if strings.EqualFold(provider.Kind, kind) &&
+			strings.EqualFold(provider.Host, host) &&
+			provider.Port == port {
+			return provider, nil
+		}
+	}
+	return Provider{}, ErrScope
+}
+
+func (s *fakeStore) UpdateProvider(_ context.Context, provider Provider) (Provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.providers[provider.ID]; !ok {
+		return Provider{}, ErrScope
+	}
+	s.providers[provider.ID] = provider
 	return provider, nil
 }
 
@@ -307,6 +331,16 @@ func (c *fakeCustody) DestroyAll(_ context.Context, ref string) error {
 }
 
 func (c *fakeCustody) WithSigner(_ context.Context, ref string, fn func(ssh.Signer) error) error {
+	return c.WithPrivatePEM(context.Background(), ref, func(pem []byte) error {
+		signer, err := ssh.ParsePrivateKey(pem)
+		if err != nil {
+			return ErrIdentity
+		}
+		return fn(signer)
+	})
+}
+
+func (c *fakeCustody) WithPrivatePEM(_ context.Context, ref string, fn func([]byte) error) error {
 	c.mu.Lock()
 	signing := c.signing
 	material, ok := c.stored[ref]
@@ -317,11 +351,10 @@ func (c *fakeCustody) WithSigner(_ context.Context, ref string, fn func(ssh.Sign
 	if !ok {
 		return ErrIdentity
 	}
-	signer, err := ssh.ParsePrivateKey(material.Private)
-	if err != nil {
-		return ErrIdentity
+	if fn == nil {
+		return ErrScope
 	}
-	return fn(signer)
+	return fn(material.Private)
 }
 
 type fakeVerifier struct {
@@ -426,11 +459,11 @@ func TestGenerateRefusesUnknownOrDisabledProvider(t *testing.T) {
 	service, store, _, _ := newTestService(t)
 	store.providers["provider-2"] = Provider{ID: "provider-2", Label: "Disabled", Kind: "gitea", Enabled: false}
 
-	if _, err := service.Generate(context.Background(), "user-a", "missing", "request-1", nil); !errors.Is(err, ErrScope) {
-		t.Fatalf("unknown provider error = %v, want %v", err, ErrScope)
+	if _, err := service.Generate(context.Background(), "user-a", "missing", "request-1", nil); !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("unknown provider error = %v, want %v", err, ErrProviderNotFound)
 	}
-	if _, err := service.Generate(context.Background(), "user-a", "provider-2", "request-2", nil); !errors.Is(err, ErrScope) {
-		t.Fatalf("disabled provider error = %v, want %v", err, ErrScope)
+	if _, err := service.Generate(context.Background(), "user-a", "provider-2", "request-2", nil); !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("disabled provider error = %v, want %v", err, ErrProviderNotFound)
 	}
 }
 
@@ -631,5 +664,49 @@ func TestVerifyDoesNotReviveAKeyRevokedDuringTheRoundTrip(t *testing.T) {
 	}
 	if key.State != Revoked {
 		t.Fatalf("key state = %q, want %q: a revoked key must not be marked ready", key.State, Revoked)
+	}
+}
+
+func TestSignGiteaSSHKeyVerification(t *testing.T) {
+	service, store, custody, _ := newTestService(t)
+	custody.signing = true
+	store.providers["gitea-1"] = Provider{
+		ID: "gitea-1", Label: "Gitea", Kind: "gitea", Host: "git.example.com", Port: 22,
+		Enabled: true,
+	}
+
+	generated, err := service.Generate(context.Background(), "user-a", "gitea-1", "request-gitea", nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	token := "gitea-verification-token-abc"
+	signature, err := service.SignGiteaSSHKeyVerification(
+		context.Background(), "user-a", generated.ID, generated.Generation, token,
+	)
+	if err != nil {
+		t.Fatalf("SignGiteaSSHKeyVerification: %v", err)
+	}
+	if err := sshsig.Verify(
+		strings.NewReader(token),
+		[]byte(signature),
+		[]byte(generated.PublicKey),
+		giteaSSHVerifyNamespace,
+	); err != nil {
+		t.Fatalf("Verify armored signature: %v", err)
+	}
+}
+
+func TestSignGiteaSSHKeyVerificationRejectsNonGiteaProvider(t *testing.T) {
+	service, _, custody, _ := newTestService(t)
+	custody.signing = true
+
+	generated, err := service.Generate(context.Background(), "user-a", "provider-1", "request-1", nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, err := service.SignGiteaSSHKeyVerification(
+		context.Background(), "user-a", generated.ID, generated.Generation, "token",
+	); !errors.Is(err, ErrScope) {
+		t.Fatalf("error = %v, want %v", err, ErrScope)
 	}
 }

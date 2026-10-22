@@ -49,11 +49,6 @@ type AppConfig struct {
 	// defaults absent to false (hidden).
 	VCSIntegrationAvailable bool `json:"vcs_integration_available,omitempty"`
 
-	// GitSSHProvidersManageable tells account settings that this deployment
-	// accepts POST /api/me/git-providers. Providers are instance-scoped, not
-	// workspace-scoped. Omitted when custody is off or management is disabled.
-	GitSSHProvidersManageable bool `json:"git_ssh_providers_manageable,omitempty"`
-
 	// PostHog public config for the frontend. The key is the same Project
 	// API Key the backend uses; returning it here (instead of baking it
 	// into the frontend bundle via NEXT_PUBLIC_*) means self-hosted
@@ -133,7 +128,6 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config.CdnSigned = h.CFSigner != nil
 	config.DaemonServerURL, config.DaemonAppURL = daemonSetupURLsFromEnv()
 	config.VCSIntegrationAvailable = h.cfg.VCSIntegrationEnabled
-	config.GitSSHProvidersManageable = h.gitProviderManagementEnabled()
 	config.FeatureFlags = featureflags.EvaluateFrontendPublicFlags(r.Context(), h.FeatureFlags)
 	// Only surface the build version on self-hosted deployments. The managed
 	// cloud is continuously deployed and its users can't choose the build, so

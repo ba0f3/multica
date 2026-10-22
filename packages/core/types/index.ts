@@ -150,6 +150,7 @@ export type {
   ListQuickActionsResponse,
 } from "./quick-action";
 export type {
+  GiteaVerifySignResponse,
   GitIdentity,
   GitIdentityState,
   GitProfile,

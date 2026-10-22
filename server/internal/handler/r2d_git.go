@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -53,16 +52,6 @@ func (h *Handler) gitService(w http.ResponseWriter) (*r2dgit.Service, bool) {
 	return h.GitSecurity, true
 }
 
-func (h *Handler) gitProviderManagementEnabled() bool {
-	if h == nil || h.GitSecurity == nil {
-		return false
-	}
-	if os.Getenv("MULTICA_GIT_PROVIDER_MANAGEMENT") == "false" {
-		return false
-	}
-	return !isOfficialCloudDeployment()
-}
-
 // gitServiceError maps a credential error to a response.
 //
 // A credential that belongs to somebody else is reported as unavailable
@@ -75,6 +64,8 @@ func gitServiceError(w http.ResponseWriter, err error) {
 		// Reached only by the daemon route: the browser route rejects a
 		// missing session before the service is called.
 		writeErrorCode(w, http.StatusForbidden, "git_principal_unproven", "This run has no provable human owner.")
+	case errors.Is(err, r2dgit.ErrProviderNotFound):
+		writeErrorCode(w, http.StatusNotFound, "git_provider_not_configured", "That Git host is not configured or is disabled.")
 	case errors.Is(err, r2dgit.ErrScope):
 		writeErrorCode(w, http.StatusNotFound, "git_resource_unavailable", "That Git credential is not available.")
 	case errors.Is(err, r2dgit.ErrIdentity):
@@ -129,88 +120,6 @@ func (h *Handler) ListGitIdentities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
-// DiscoverGitProviderHostKeys returns SSH host key fingerprints for a host.
-func (h *Handler) DiscoverGitProviderHostKeys(w http.ResponseWriter, r *http.Request) {
-	if !h.gitProviderManagementEnabled() {
-		writeErrorCode(w, http.StatusForbidden, "git_provider_management_disabled", "Git provider management is not enabled on this server.")
-		return
-	}
-	_, ok := gitHumanSession(w, r, false)
-	if !ok {
-		return
-	}
-	service, ok := h.gitService(w)
-	if !ok {
-		return
-	}
-	var body struct {
-		Host string `json:"host"`
-		Port int    `json:"port"`
-	}
-	if !gitJSONBody(w, r, &body) {
-		return
-	}
-	pins, err := service.DiscoverProviderHostKeys(r.Context(), body.Host, body.Port)
-	if err != nil {
-		switch {
-		case errors.Is(err, r2dgit.ErrScope):
-			writeErrorCode(w, http.StatusBadRequest, "git_invalid_request", "A valid host and port are required.")
-		case errors.Is(err, r2dgit.ErrProvider):
-			writeErrorCode(w, http.StatusBadGateway, "git_provider_unreachable", "Could not read SSH host keys from that host. Check the host, port, and that this server can reach it.")
-		default:
-			gitServiceError(w, err)
-		}
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string][]string{"host_pins": pins})
-}
-
-// CreateGitProvider registers a deployment-scoped Git SSH host.
-//
-// Any signed-in human may add a provider on self-hosted instances where Git
-// credential custody is enabled. The configuration is shared by every
-// workspace on the server, not repeated per workspace.
-func (h *Handler) CreateGitProvider(w http.ResponseWriter, r *http.Request) {
-	if !h.gitProviderManagementEnabled() {
-		writeErrorCode(w, http.StatusForbidden, "git_provider_management_disabled", "Git provider management is not enabled on this server.")
-		return
-	}
-	_, ok := gitHumanSession(w, r, false)
-	if !ok {
-		return
-	}
-	service, ok := h.gitService(w)
-	if !ok {
-		return
-	}
-	var body struct {
-		Label    string   `json:"label"`
-		Kind     string   `json:"kind"`
-		Host     string   `json:"host"`
-		Port     int      `json:"port"`
-		HostPins []string `json:"host_pins"`
-	}
-	if !gitJSONBody(w, r, &body) {
-		return
-	}
-	provider, err := service.CreateProvider(r.Context(), r2dgit.CreateProviderInput{
-		Label:    body.Label,
-		Kind:     body.Kind,
-		Host:     body.Host,
-		Port:     body.Port,
-		HostPins: body.HostPins,
-	})
-	if err != nil {
-		if errors.Is(err, r2dgit.ErrProvider) {
-			writeErrorCode(w, http.StatusBadGateway, "git_provider_unreachable", "Could not read SSH host keys from that host. Check the host, port, and that this Multica server can reach it.")
-			return
-		}
-		gitServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, provider)
-}
-
 // GenerateGitIdentity creates a new key generation for a provider.
 //
 // The response carries the public key and nothing else: the private key
@@ -262,10 +171,59 @@ func (h *Handler) VerifyGitIdentity(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := service.Verify(r.Context(), userID, identityID, generation)
 	if err != nil {
-		gitServiceError(w, err)
+		switch {
+		case errors.Is(err, r2dgit.ErrIdentity):
+			writeErrorCode(w, http.StatusConflict, "git_identity_unverified",
+				"Multica could not authenticate this key over SSH. On Gitea, finish key verification in the web UI (paste the signature), confirm the public key is on your account, wait a minute, then try again.")
+		case errors.Is(err, r2dgit.ErrProvider):
+			writeErrorCode(w, http.StatusBadGateway, "git_provider_unreachable",
+				"Multica could not reach that Git host over SSH. Ask an administrator to check MULTICA_GIT_PROVIDERS, host fingerprints, and that the API server can open the SSH port.")
+		default:
+			gitServiceError(w, err)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, identity)
+}
+
+// SignGiteaGitIdentityVerification signs Gitea's SSH key verification token
+// with the stored private key and returns the armored signature for pasting
+// into Gitea.
+func (h *Handler) SignGiteaGitIdentityVerification(w http.ResponseWriter, r *http.Request) {
+	userID, ok := gitHumanSession(w, r, false)
+	if !ok {
+		return
+	}
+	service, ok := h.gitService(w)
+	if !ok {
+		return
+	}
+	identityID := chi.URLParam(r, "identityId")
+	generation, err := strconv.ParseUint(chi.URLParam(r, "generation"), 10, 64)
+	if err != nil || generation == 0 {
+		writeErrorCode(w, http.StatusBadRequest, "git_invalid_request", "That key generation is not valid.")
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if !gitJSONBody(w, r, &body) {
+		return
+	}
+	signature, err := service.SignGiteaSSHKeyVerification(r.Context(), userID, identityID, generation, body.Token)
+	if err != nil {
+		switch {
+		case errors.Is(err, r2dgit.ErrScope):
+			writeErrorCode(w, http.StatusBadRequest, "git_invalid_request",
+				"Enter the verification token from Gitea and make sure this key is still pending verification.")
+		case errors.Is(err, r2dgit.ErrRevoked):
+			writeErrorCode(w, http.StatusConflict, "git_grant_revoked", "This Git key was revoked.")
+		default:
+			gitServiceError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"signature": signature})
 }
 
 // RevokeGitIdentity stops the use of a key and destroys its stored secret.

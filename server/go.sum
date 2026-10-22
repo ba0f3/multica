@@ -1,3 +1,5 @@
+github.com/42wim/sshsig v0.0.0-20260317195500-b9f38cf0d432 h1:3Fcz1QzlS7Jv4FT2KI3cHNSZL+KPN3dXxurn9f3YL/Y=
+github.com/42wim/sshsig v0.0.0-20260317195500-b9f38cf0d432/go.mod h1:BLWe6Nol65Xxncvaw07yYMxiyk02We1lBrbRYsMYsjE=
 github.com/aws/aws-sdk-go-v2 v1.47.0 h1:0jsHallhJCeaU0Ko48c/3FK1ctOQ7NpzggxriJOQ8MQ=
 github.com/aws/aws-sdk-go-v2 v1.47.0/go.mod h1:bttEH6JqnUL8LepvDVfdrds/fZ5bCIxzpe3abyUrhDU=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 h1:GPRlPwz40I2B2VrBEASOA3Bi77NyeqejNLkifosX0rs=

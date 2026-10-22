@@ -887,8 +887,6 @@ export interface AppConfigResponse {
    * (self-host only; off on the managed cloud). Absent/false hides the whole
    * Settings → Integrations "Git providers" section. */
   vcs_integration_available?: boolean;
-  /** POST /api/me/git-providers is available (self-host Git SSH custody). */
-  git_ssh_providers_manageable?: boolean;
   feature_flags?: Record<string, boolean>;
   /** Whether this server understands local_directory `execution_mode` and
    * gates worktree mode at save time. Absent on every server that predates this
@@ -1163,7 +1161,6 @@ export const AppConfigSchema = z.object({
   daemon_app_url: OptionalStringSchema,
   workspace_creation_disabled: BooleanWithDefaultSchema(false).optional(),
   vcs_integration_available: BooleanWithDefaultSchema(false).optional(),
-  git_ssh_providers_manageable: BooleanWithDefaultSchema(false).optional(),
   feature_flags: FeatureFlagsSchema,
   local_worktree_supported: BooleanWithDefaultSchema(false),
   agent_conversation_starters_supported: BooleanWithDefaultSchema(false),
@@ -1182,7 +1179,6 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   daemon_app_url: "",
   workspace_creation_disabled: false,
   vcs_integration_available: false,
-  git_ssh_providers_manageable: false,
   // Fail closed: an unreadable config must not look like a server that
   // validates execution_mode.
   local_worktree_supported: false,
@@ -3870,6 +3866,10 @@ export const GitIdentitySchema = z.object({
 export const GitProfileSchema = z.object({
   providers: z.array(GitProviderSchema).catch([]),
   identities: z.array(GitIdentitySchema).catch([]),
+});
+
+export const GiteaVerifySignResponseSchema = z.object({
+  signature: z.string().catch(""),
 });
 
 export const EMPTY_GIT_PROFILE: GitProfile = {

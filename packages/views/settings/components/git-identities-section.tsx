@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Copy, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
+import { Copy, KeyRound, Plug, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -12,6 +12,7 @@ import {
   gitIdentityListOptions,
   useGenerateGitIdentity,
   useRevokeGitIdentity,
+  useSignGiteaGitIdentityVerification,
   useVerifyGitIdentity,
 } from "@multica/core/git-identities";
 import type { GitIdentity, GitProvider } from "@multica/core/types";
@@ -113,7 +114,7 @@ export function GitIdentitiesSection() {
           toast.error(
             error instanceof Error
               ? error.message
-              : t(($) => $.git_identities.toast_verify_failed),
+              : t(($) => $.git_identities.toast_check_connection_failed),
           );
         },
       },
@@ -140,6 +141,9 @@ export function GitIdentitiesSection() {
       <SettingsCard>
         {providers.map((provider) => {
           const providerIdentities = identitiesByProvider.get(provider.id) ?? [];
+          const hasActiveKey = providerIdentities.some(
+            (item) => item.state !== "revoked",
+          );
           return (
             <div key={provider.id} className="px-4 py-3.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -152,15 +156,17 @@ export function GitIdentitiesSection() {
                     {provider.host}
                   </span>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleGenerate(provider)}
-                  disabled={generate.isPending}
-                >
-                  {t(($) => $.git_identities.generate)}
-                </Button>
+                {hasActiveKey ? null : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleGenerate(provider)}
+                    disabled={generate.isPending}
+                  >
+                    {t(($) => $.git_identities.generate)}
+                  </Button>
+                )}
               </div>
 
               {providerIdentities.length === 0 ? (
@@ -175,9 +181,14 @@ export function GitIdentitiesSection() {
                       className="rounded-md border border-surface-border p-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-mono text-caption text-muted-foreground">
-                          {identity.fingerprint}
-                        </span>
+                        <div className="min-w-0">
+                          <p className="text-caption text-muted-foreground">
+                            {t(($) => $.git_identities.fingerprint)}
+                          </p>
+                          <p className="truncate font-mono text-caption">
+                            {identity.fingerprint}
+                          </p>
+                        </div>
                         <GitIdentityStateBadge state={identity.state} />
                       </div>
 
@@ -222,8 +233,8 @@ export function GitIdentitiesSection() {
                             onClick={() => handleVerify(identity)}
                             disabled={verify.isPending}
                           >
-                            <ShieldCheck className="size-4" />
-                            {t(($) => $.git_identities.verify)}
+                            <Plug className="size-4" />
+                            {t(($) => $.git_identities.check_connection)}
                           </Button>
                         ) : null}
                         {identity.state !== "revoked" ? (
@@ -242,8 +253,15 @@ export function GitIdentitiesSection() {
 
                       {identity.state === "pending_verification" ? (
                         <p className="mt-2 text-caption text-muted-foreground">
-                          {t(($) => $.git_identities.pending_hint)}
+                          {provider.kind === "gitea"
+                            ? t(($) => $.git_identities.pending_hint_gitea)
+                            : t(($) => $.git_identities.pending_hint)}
                         </p>
+                      ) : null}
+
+                      {provider.kind === "gitea" &&
+                      identity.state === "pending_verification" ? (
+                        <GiteaVerificationTokenSign identity={identity} />
                       ) : null}
                     </li>
                   ))}
@@ -254,6 +272,85 @@ export function GitIdentitiesSection() {
         })}
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+function GiteaVerificationTokenSign({ identity }: { identity: GitIdentity }) {
+  const { t } = useT("settings");
+  const sign = useSignGiteaGitIdentityVerification();
+  const [token, setToken] = useState("");
+  const [signature, setSignature] = useState("");
+
+  const handleSign = () => {
+    const trimmed = token.trim();
+    if (!trimmed) return;
+    sign.mutate(
+      {
+        identityId: identity.id,
+        generation: identity.generation,
+        token: trimmed,
+      },
+      {
+        onSuccess: (result) => setSignature(result.signature),
+        onError: (error: unknown) => {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t(($) => $.git_identities.toast_sign_token_failed),
+          );
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-surface-border pt-3">
+      <Input
+        value={token}
+        onChange={(event) => setToken(event.target.value)}
+        placeholder={t(($) => $.git_identities.gitea_verify_token)}
+        aria-label={t(($) => $.git_identities.gitea_verify_token)}
+        className="font-mono text-caption"
+      />
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={handleSign}
+        disabled={!token.trim() || sign.isPending}
+      >
+        {t(($) => $.git_identities.gitea_sign_token)}
+      </Button>
+      {signature ? (
+        <div className="flex items-center gap-2">
+          <Input
+            readOnly
+            value={signature}
+            aria-label={t(($) => $.git_identities.gitea_signature)}
+            className="font-mono text-caption"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={t(($) => $.git_identities.copy_signature)}
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(signature)
+                .then(() =>
+                  toast.success(t(($) => $.git_identities.toast_signature_copied)),
+                )
+                .catch(() =>
+                  toast.error(t(($) => $.git_identities.toast_copy_failed)),
+                );
+            }}
+          >
+            <Copy className="size-4" />
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

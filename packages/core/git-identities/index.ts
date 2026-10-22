@@ -3,5 +3,5 @@ export {
   useGenerateGitIdentity,
   useVerifyGitIdentity,
   useRevokeGitIdentity,
-  useCreateGitProvider,
+  useSignGiteaGitIdentityVerification,
 } from "./mutations";

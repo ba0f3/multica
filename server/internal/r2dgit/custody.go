@@ -33,6 +33,8 @@ type KeyCustody interface {
 // socket.
 type SigningCustody interface {
 	WithSigner(ctx context.Context, ref string, fn func(ssh.Signer) error) error
+	// WithPrivatePEM exposes the OpenSSH-encoded private key only inside fn.
+	WithPrivatePEM(ctx context.Context, ref string, fn func(pem []byte) error) error
 }
 
 // EncryptedCustody is a custody adapter that can both store and sign.
@@ -168,9 +170,7 @@ func (b *baoCustody) Store(ctx context.Context, ref string, material KeyMaterial
 	return output.Data.Version, nil
 }
 
-// WithSigner loads a stored generation and hands it to fn while the decoded
-// bytes are alive. Nothing outside the callback can reach the signer.
-func (b *baoCustody) WithSigner(ctx context.Context, ref string, fn func(ssh.Signer) error) error {
+func (b *baoCustody) withPrivatePEM(ctx context.Context, ref string, fn func([]byte) error) error {
 	if fn == nil {
 		return ErrScope
 	}
@@ -190,15 +190,31 @@ func (b *baoCustody) WithSigner(ctx context.Context, ref string, fn func(ssh.Sig
 		return ErrUnavailable
 	}
 	defer clear(private)
+	return fn(private)
+}
 
-	signer, err := ssh.ParsePrivateKey(private)
-	if err != nil {
-		return ErrIdentity
+// WithPrivatePEM loads a stored generation and hands PEM bytes to fn while
+// they are alive.
+func (b *baoCustody) WithPrivatePEM(ctx context.Context, ref string, fn func([]byte) error) error {
+	return b.withPrivatePEM(ctx, ref, fn)
+}
+
+// WithSigner loads a stored generation and hands it to fn while the decoded
+// bytes are alive. Nothing outside the callback can reach the signer.
+func (b *baoCustody) WithSigner(ctx context.Context, ref string, fn func(ssh.Signer) error) error {
+	if fn == nil {
+		return ErrScope
 	}
-	if signer.PublicKey().Type() != ssh.KeyAlgoED25519 {
-		return ErrIdentity
-	}
-	return fn(signer)
+	return b.withPrivatePEM(ctx, ref, func(private []byte) error {
+		signer, err := ssh.ParsePrivateKey(private)
+		if err != nil {
+			return ErrIdentity
+		}
+		if signer.PublicKey().Type() != ssh.KeyAlgoED25519 {
+			return ErrIdentity
+		}
+		return fn(signer)
+	})
 }
 
 // DestroyAll implements KV v2 hard destruction, not soft deletion. The caller

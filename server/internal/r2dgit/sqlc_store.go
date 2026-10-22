@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -85,6 +86,68 @@ func (s *SQLCStore) GetProvider(ctx context.Context, id string) (Provider, error
 	}
 	provider.HostPins = decodeHostPins(row.HostPins)
 	return provider, nil
+}
+
+func (s *SQLCStore) GetProviderByKindHostPort(ctx context.Context, kind, host string, port int) (Provider, error) {
+	kind = strings.TrimSpace(strings.ToLower(kind))
+	host = strings.TrimSpace(strings.ToLower(host))
+	if kind == "" || host == "" || port <= 0 || port >= 65536 {
+		return Provider{}, ErrScope
+	}
+	row, err := s.queries.GetR2DGitProviderByKindHostPort(ctx, db.GetR2DGitProviderByKindHostPortParams{
+		Kind: kind,
+		Host: host,
+		Port: int32(port),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Provider{}, ErrScope
+		}
+		return Provider{}, err
+	}
+	provider := Provider{
+		ID:      util.UUIDToString(row.ID),
+		Label:   row.Label,
+		Kind:    row.Kind,
+		Host:    row.Host,
+		Port:    int(row.Port),
+		Enabled: row.Enabled,
+	}
+	provider.HostPins = decodeHostPins(row.HostPins)
+	return provider, nil
+}
+
+func (s *SQLCStore) UpdateProvider(ctx context.Context, provider Provider) (Provider, error) {
+	id, err := util.ParseUUID(provider.ID)
+	if err != nil {
+		return Provider{}, ErrScope
+	}
+	pins, err := encodeHostPins(provider.HostPins)
+	if err != nil {
+		return Provider{}, ErrScope
+	}
+	row, err := s.queries.UpdateR2DGitProvider(ctx, db.UpdateR2DGitProviderParams{
+		ID:       id,
+		Label:    provider.Label,
+		HostPins: pins,
+		Enabled:  provider.Enabled,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Provider{}, ErrScope
+		}
+		return Provider{}, err
+	}
+	updated := Provider{
+		ID:      util.UUIDToString(row.ID),
+		Label:   row.Label,
+		Kind:    row.Kind,
+		Host:    row.Host,
+		Port:    int(row.Port),
+		Enabled: row.Enabled,
+	}
+	updated.HostPins = decodeHostPins(row.HostPins)
+	return updated, nil
 }
 
 func (s *SQLCStore) CreateProvider(ctx context.Context, provider Provider) (Provider, error) {

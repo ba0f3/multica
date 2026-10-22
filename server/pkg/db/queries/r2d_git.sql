@@ -17,6 +17,17 @@ SELECT id, label, kind, host, port, host_pins, enabled, created_at
 FROM r2d_git_provider
 WHERE id = $1;
 
+-- name: GetR2DGitProviderByKindHostPort :one
+SELECT id, label, kind, host, port, host_pins, enabled, created_at
+FROM r2d_git_provider
+WHERE kind = $1 AND host = $2 AND port = $3;
+
+-- name: UpdateR2DGitProvider :one
+UPDATE r2d_git_provider
+SET label = $2, host_pins = $3, enabled = $4
+WHERE id = $1
+RETURNING id, label, kind, host, port, host_pins, enabled, created_at;
+
 -- name: CreateR2DGitProvider :one
 INSERT INTO r2d_git_provider (id, label, kind, host, port, host_pins, enabled)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

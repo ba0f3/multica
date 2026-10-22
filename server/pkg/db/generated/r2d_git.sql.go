@@ -369,6 +369,34 @@ func (q *Queries) GetR2DGitProvider(ctx context.Context, id pgtype.UUID) (R2dGit
 	return i, err
 }
 
+const getR2DGitProviderByKindHostPort = `-- name: GetR2DGitProviderByKindHostPort :one
+SELECT id, label, kind, host, port, host_pins, enabled, created_at
+FROM r2d_git_provider
+WHERE kind = $1 AND host = $2 AND port = $3
+`
+
+type GetR2DGitProviderByKindHostPortParams struct {
+	Kind string `json:"kind"`
+	Host string `json:"host"`
+	Port int32  `json:"port"`
+}
+
+func (q *Queries) GetR2DGitProviderByKindHostPort(ctx context.Context, arg GetR2DGitProviderByKindHostPortParams) (R2dGitProvider, error) {
+	row := q.db.QueryRow(ctx, getR2DGitProviderByKindHostPort, arg.Kind, arg.Host, arg.Port)
+	var i R2dGitProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Label,
+		&i.Kind,
+		&i.Host,
+		&i.Port,
+		&i.HostPins,
+		&i.Enabled,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getTaskOriginatorUserID = `-- name: GetTaskOriginatorUserID :one
 SELECT originator_user_id
 FROM agent_task_queue
@@ -801,6 +829,41 @@ func (q *Queries) UpdateR2DGitKeyJobState(ctx context.Context, arg UpdateR2DGitK
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateR2DGitProvider = `-- name: UpdateR2DGitProvider :one
+UPDATE r2d_git_provider
+SET label = $2, host_pins = $3, enabled = $4
+WHERE id = $1
+RETURNING id, label, kind, host, port, host_pins, enabled, created_at
+`
+
+type UpdateR2DGitProviderParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Label    string      `json:"label"`
+	HostPins []byte      `json:"host_pins"`
+	Enabled  bool        `json:"enabled"`
+}
+
+func (q *Queries) UpdateR2DGitProvider(ctx context.Context, arg UpdateR2DGitProviderParams) (R2dGitProvider, error) {
+	row := q.db.QueryRow(ctx, updateR2DGitProvider,
+		arg.ID,
+		arg.Label,
+		arg.HostPins,
+		arg.Enabled,
+	)
+	var i R2dGitProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Label,
+		&i.Kind,
+		&i.Host,
+		&i.Port,
+		&i.HostPins,
+		&i.Enabled,
+		&i.CreatedAt,
 	)
 	return i, err
 }

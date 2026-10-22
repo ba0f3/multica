@@ -36,6 +36,19 @@ func TestParseProviderLoginRecognizesGitea(t *testing.T) {
 	}
 }
 
+func TestParseProviderLoginRecognizesLegacyGiteaBanner(t *testing.T) {
+	banner := "Hi there, alice! You've successfully authenticated with the key named laptop.\n" +
+		"Gitea does not provide shell access.\n" +
+		"If this is unexpected, please log in with password and setup Gitea under another user."
+	login, err := ParseProviderLogin("gitea", banner)
+	if err != nil {
+		t.Fatalf("ParseProviderLogin: %v", err)
+	}
+	if login != "alice" {
+		t.Fatalf("login = %q, want %q", login, "alice")
+	}
+}
+
 func TestParseProviderLoginRejectsTheOtherProvidersBanner(t *testing.T) {
 	if _, err := ParseProviderLogin("gitea", githubBannerFixture); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("GitHub banner parsed as Gitea: err = %v, want %v", err, ErrIdentity)
@@ -47,19 +60,18 @@ func TestParseProviderLoginRejectsTheOtherProvidersBanner(t *testing.T) {
 
 func TestParseProviderLoginRejectsIncompleteBanners(t *testing.T) {
 	cases := map[string]string{
-		"empty":            "",
-		"truncated":        "Hi octocat! You've successfully authenticated",
-		"missing sentence": "Hi octocat!",
-		"extra text":       githubBannerFixture + " and more",
-		"gitea without hint": "Hi there, alice! You've successfully authenticated with the SSH key named laptop.\n" +
-			"Gitea does not provide shell access.",
+		"empty":                  "",
+		"truncated":              "Hi octocat! You've successfully authenticated",
+		"missing sentence":       "Hi octocat!",
+		"extra text":             githubBannerFixture + " and more",
+		"gitea without key line": "Hi there, alice!\nGitea does not provide shell access.",
 	}
 	for name, banner := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseProviderLogin("github", banner); err == nil && name != "gitea without hint" {
+			if _, err := ParseProviderLogin("github", banner); err == nil && name != "gitea without key line" {
 				t.Fatal("expected the incomplete banner to be refused")
 			}
-			if _, err := ParseProviderLogin("gitea", banner); err == nil && name == "gitea without hint" {
+			if _, err := ParseProviderLogin("gitea", banner); err == nil && name == "gitea without key line" {
 				t.Fatal("expected the truncated Gitea banner to be refused")
 			}
 		})

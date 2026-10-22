@@ -29,4 +29,7 @@ var (
 	// ErrProvider means the Git provider could not be reached or did not
 	// answer in a way the adapter understands.
 	ErrProvider = errors.New("git_provider_unavailable")
+	// ErrProviderNotFound means the requested host is missing or disabled.
+	// Unlike ErrScope, this is safe to expose when choosing a provider id.
+	ErrProviderNotFound = errors.New("git_provider_not_configured")
 )

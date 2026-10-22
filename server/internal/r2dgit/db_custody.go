@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/ssh"
 
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // DBCustody stores Git private keys as secretbox ciphertext in PostgreSQL.
@@ -61,9 +61,7 @@ func (c *DBCustody) Store(ctx context.Context, ref string, material KeyMaterial)
 	return 1, nil
 }
 
-// WithSigner loads a stored generation and hands it to fn while the decoded
-// bytes are alive.
-func (c *DBCustody) WithSigner(ctx context.Context, ref string, fn func(ssh.Signer) error) error {
+func (c *DBCustody) withPrivatePEM(ctx context.Context, ref string, fn func([]byte) error) error {
 	if fn == nil {
 		return ErrScope
 	}
@@ -82,15 +80,31 @@ func (c *DBCustody) WithSigner(ctx context.Context, ref string, fn func(ssh.Sign
 		return ErrUnavailable
 	}
 	defer clear(private)
+	return fn(private)
+}
 
-	signer, err := ssh.ParsePrivateKey(private)
-	if err != nil {
-		return ErrIdentity
+// WithPrivatePEM loads a stored generation and hands PEM bytes to fn while
+// they are alive.
+func (c *DBCustody) WithPrivatePEM(ctx context.Context, ref string, fn func([]byte) error) error {
+	return c.withPrivatePEM(ctx, ref, fn)
+}
+
+// WithSigner loads a stored generation and hands it to fn while the decoded
+// bytes are alive.
+func (c *DBCustody) WithSigner(ctx context.Context, ref string, fn func(ssh.Signer) error) error {
+	if fn == nil {
+		return ErrScope
 	}
-	if signer.PublicKey().Type() != ssh.KeyAlgoED25519 {
-		return ErrIdentity
-	}
-	return fn(signer)
+	return c.withPrivatePEM(ctx, ref, func(private []byte) error {
+		signer, err := ssh.ParsePrivateKey(private)
+		if err != nil {
+			return ErrIdentity
+		}
+		if signer.PublicKey().Type() != ssh.KeyAlgoED25519 {
+			return ErrIdentity
+		}
+		return fn(signer)
+	})
 }
 
 // DestroyAll permanently removes the secret for one ref.

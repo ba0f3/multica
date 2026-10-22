@@ -90,6 +90,10 @@ vi.mock("@multica/core/git-identities", () => ({
   useGenerateGitIdentity: () => mockUseMutation({ mutationFn: mockGenerate }),
   useVerifyGitIdentity: () => mockUseMutation({ mutationFn: mockVerify }),
   useRevokeGitIdentity: () => mockUseMutation({ mutationFn: mockRevoke }),
+  useSignGiteaGitIdentityVerification: () =>
+    mockUseMutation({
+      mutationFn: vi.fn(() => Promise.resolve({ signature: "-----BEGIN SSH SIGNATURE-----" })),
+    }),
 }));
 
 vi.mock("@multica/core/auth", () => ({
@@ -157,6 +161,16 @@ describe("GitIdentitiesSection", () => {
     expect(screen.getByText(/ready/i)).toBeTruthy();
   });
 
+  it("hides generate when the provider already has a key", () => {
+    profileRef.current = {
+      providers: [provider()],
+      identities: [identity()],
+    };
+    renderSection();
+
+    expect(screen.queryByRole("button", { name: /generate/i })).toBeNull();
+  });
+
   it("generates a key for a provider", async () => {
     profileRef.current = { providers: [provider()], identities: [] };
     renderSection();
@@ -190,7 +204,7 @@ describe("GitIdentitiesSection", () => {
     };
     renderSection();
 
-    await userEvent.click(screen.getByRole("button", { name: /verify/i }));
+    await userEvent.click(screen.getByRole("button", { name: /check connection/i }));
 
     await waitFor(() => expect(mockVerify).toHaveBeenCalledTimes(1));
     const input = mockVerify.mock.calls[0]?.[0];

@@ -52,3 +52,8 @@ export interface GitProfile {
   providers: GitProvider[];
   identities: GitIdentity[];
 }
+
+/** Armored SSH signature for Gitea's key verification token. */
+export interface GiteaVerifySignResponse {
+  signature: string;
+}
