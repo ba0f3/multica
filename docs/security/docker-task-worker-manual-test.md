@@ -21,6 +21,15 @@ docker build -f docker/task-worker/Dockerfile \
 docker images multica/task-worker:local --digests
 ```
 
+Or tag the same image as the daemon default so you do not need
+`MULTICA_DOCKER_TASK_IMAGE` (Docker uses the local tag and does not pull GHCR):
+
+```bash
+docker tag multica/task-worker:local ghcr.io/r2d-ai/multica-task-worker:latest
+```
+
+`make task-worker-image` builds and applies both tags.
+
 The image ships the `multica` worker binary only (Debian/glibc base). For isolated
 **codex**, **cursor**, and **opencode** tasks, the daemon bind-mounts the host CLI
 into `/usr/local/bin/<basename>` read-only at launch time — you do not bake agent
@@ -33,7 +42,8 @@ Record **image digest** in your test notes.
 ```bash
 export MULTICA_TASK_SANDBOX=docker
 export MULTICA_TASK_PROTECTED=1
-export MULTICA_DOCKER_TASK_IMAGE=multica/task-worker:local
+# Optional if you tagged ghcr.io/r2d-ai/multica-task-worker:latest locally:
+# export MULTICA_DOCKER_TASK_IMAGE=multica/task-worker:local
 # Optional limits (verify with docker inspect during a run):
 export MULTICA_DOCKER_TASK_MEMORY=4294967296
 export MULTICA_DOCKER_TASK_PIDS_LIMIT=512
