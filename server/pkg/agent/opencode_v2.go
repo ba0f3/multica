@@ -32,7 +32,7 @@ import (
 // fixing the loud failure from exposing the quiet ones.
 //
 // The event names remain the same, but 2.0.18 can omit the final step_finish
-// (see opencode_v2_completion.go), and errors carry type/message instead of
+// (see processEvents in opencode.go), and errors carry type/message instead of
 // name/data.message. The backend handles both error shapes. `--session` resume,
 // `.opencode/skills/` discovery, AGENTS.md, and
 // `--dangerously-skip-permissions` remain unchanged across the two majors.

@@ -435,19 +435,19 @@ uses the installed binary's argv and completion contract immediately. An
 unreadable or unsupported version fails the launch instead of using stale
 registration data. Custom runtime commands keep their existing version policy.
 
-OpenCode 2.0.18 can return complete text without a final `step_finish`. For
-2.0.18 and later 2.x releases, a clean exit with an open step triggers one bounded
-read of the same server's latest two session messages in newest-first order. Recovery requires a
-successful `idle` record followed by the exact completed assistant message seen
-on stdout, a `stop` finish reason, matching text and terminal tools, and no
-stream, process, prompt-write, or cancellation error. Missing usage is not
-invented. This contract was checked against the v2.0.18 source; regression tests
-use isolated fake CLIs, not an authenticated agent installation.
+Built-in OpenCode 2.x runtimes can finish without a final `step_finish`.
+The process outcome determines completion, as in upstream v0.7.0. Nonzero exit,
+error events, stream read errors, failed prompt writes, cancellation, and timeouts
+still fail the run. A closed empty step also fails unless later text or a tool
+call shows recovery. No extra session-history query is made to confirm completion.
+OpenCode 1.x, unknown versions, future major versions, and custom runtimes retain
+their existing step-bracketing checks. Regression tests use fake CLIs and do not
+exercise an authenticated OpenCode installation.
 
-If verification fails, the original incomplete-stream failure is retained.
-Standalone runs cannot query their exited private server, and custom runtimes,
-older v2 releases, and future major versions do not use this recovery. Normal
-`step_finish` handling and the v1 completion policy remain unchanged.
+The resume clock check runs only for host tasks. Isolated tasks keep their
+existing resume pointer and log `resume_clock_check=unverified`, because a host
+export would inspect a different session store outside the worker boundary.
+Clock-rollback detection inside isolated workers is not verified.
 
 #### `mcp_config` on ACP runtimes
 
@@ -615,13 +615,23 @@ multica issue list --metadata pipeline_status=waiting_review
 multica issue list --metadata pr_number=482 --metadata is_blocked=true
 ```
 
-Use `--property "Name=Value"` (repeatable; one value per flag) to filter by custom property. Names and select option values are case-insensitive and resolve to ids; repeating the same property matches any of its values, different properties must all match. Values are option names or ids (select types), `true`/`false` (checkbox), a member name, email, or id (actor types), or the stored value itself for `text`, `url`, `number`, and `date` (`YYYY-MM-DD`). Only `=` is supported today; the `>=`, `<=` and `!=` spellings are reserved for comparison filters and are rejected. The reserved value `__none__` matches issues where the property is unset:
+Use `--property "Name=Value"` (repeatable; one member per flag) to filter by custom property. Names and select option values are case-insensitive and resolve to ids; repeating the same property matches any of its members, different properties must all match. Values are option names or ids (select types), `true`/`false` (checkbox), a member name, email, or id (actor types), or the stored value itself for `text`, `url`, `number`, and `date` (`YYYY-MM-DD`). The reserved value `__none__` matches issues where the property is unset:
 
 ```bash
 multica issue list --property "Impact=High" --property "Impact=Medium"
 multica issue list --property "Impact=__none__" --status in_review
 multica issue list --property "Score=42" --property "Ship Date=2026-08-28"
 ```
+
+Comparisons go in the same flag. `number` takes `>`, `>=`, `<` and `<=`; `date` takes `>` (after) and `<` (before); `text` and `url` take `~=` (contains, case-insensitive, matched exactly as typed). Quote the flag so the shell does not read `<` and `>` as redirection:
+
+```bash
+multica issue list --property "Score>=3" --property "Impact=High"
+multica issue list --property "Ship Date<2026-09-01" --status todo
+multica issue list --property "Notes~=follow up"
+```
+
+A comparison on a type that cannot honour it is rejected with an error naming the type. So is `!=` (the server has no not-equal filter), and so are `>=` and `<=` on a date: the server only compares dates strictly, and the error names the strict form to use instead. Repeating a property ORs its members, so `"Score>1"` plus `"Score<10"` is not a range. A property whose name contains `=`, `<`, `>`, `!` or `~` has to be given by its UUID.
 
 In JSON output, `properties` is a map from definition id to the stored value: an option id for `select`, a list of option ids for `multi_select`, a `member:<uuid>` reference for the actor types, and the value itself otherwise. Pass `--resolve-properties` to replace that map with the rows `issue property list` prints, one per set property, in catalog order: `property_id`, `name`, `type`, the stored `value`, a human `display`, `display_values` (the per-item names of a `multi_select` or `multi_actor` value) and `archived` when the definition is archived. Archived definitions still resolve, since their values stay on the issue. An option that is no longer in the definition, or a member who has left the workspace, keeps its raw id in `display`. The flag adds at most two requests: the catalog, shared with `--property` and `--sort property:`, and the member list, fetched only when an actor `--property` filter or an actor value on the page needs it and shared between the two. If either request fails the command fails rather than printing ids. In JSON output it combines with `--fields` only when that list keeps `properties`; a `--fields` list without it is rejected rather than resolving a key the same command would delete. The flag has no effect on `--output table`, where it and `--fields` are both ignored and neither is rejected.
 
