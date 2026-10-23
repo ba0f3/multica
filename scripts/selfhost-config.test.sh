@@ -11,6 +11,8 @@ cd "$ROOT_DIR"
 # include .env and bare-`export` it to the recipe environment, clobbering
 # this value, so run_recipe seeds it into the recipe .env as well.
 export JWT_SECRET=test-secret-for-config-test
+# Use only fixture custody keys, even if the calling shell has one configured.
+unset MULTICA_GIT_SECRET_KEY
 
 require_config() {
   local config=$1
@@ -50,6 +52,31 @@ config="$(
     -f docker-compose.selfhost.yml \
     config
 )"
+
+# Missing and blank custody keys must remain optional; a dedicated key in the
+# env file must reach the backend unchanged. All values here are synthetic.
+git_key_env="$tmp_dir/git-key.env"
+for git_key_state in unset empty dedicated; do
+  grep -v '^MULTICA_GIT_SECRET_KEY=' "$tmp_env" >"$git_key_env"
+  expected_git_key=""
+  if [ "$git_key_state" = dedicated ]; then
+    expected_git_key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  fi
+  if [ "$git_key_state" != unset ]; then
+    printf '\nMULTICA_GIT_SECRET_KEY=%s\n' "$expected_git_key" >>"$git_key_env"
+  fi
+  docker compose --env-file "$git_key_env" -f docker-compose.selfhost.yml config --format json |
+    node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => (raw += chunk));
+process.stdin.on("end", () => {
+  if (JSON.parse(raw).services.backend.environment.MULTICA_GIT_SECRET_KEY !== process.argv[1]) {
+    console.error("Backend custody key mapping failed for " + process.argv[2]);
+    process.exit(1);
+  }
+});
+' "$expected_git_key" "$git_key_state"
+done
 
 require_config "$config" 'published: "3100"'
 require_config "$config" 'published: "9100"'

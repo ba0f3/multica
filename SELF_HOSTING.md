@@ -470,6 +470,14 @@ This reconfigures the CLI for multica.ai, re-authenticates, and restarts the dae
 
 ## Upgrading
 
+> Before upgrading, check continuity of the effective Git custody key.
+> Compose now forwards `MULTICA_GIT_SECRET_KEY` to the backend. A nonempty value
+> already in `.env` that was previously ignored can replace the `JWT_SECRET`-derived
+> key and make existing SSH keys undecryptable. If custody used the fallback, keep
+> `MULTICA_GIT_SECRET_KEY` empty and preserve `JWT_SECRET` during this upgrade.
+> If custody used a dedicated key, preserve that same key. Changing custody keys
+> requires a separate migration; this upgrade does not re-encrypt stored keys.
+
 ```bash
 docker compose -f docker-compose.selfhost.yml pull
 docker compose -f docker-compose.selfhost.yml up -d
