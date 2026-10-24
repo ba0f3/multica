@@ -166,6 +166,9 @@ func runGitWithTimeoutContext(parent context.Context, timeout time.Duration, arg
 // RepoInfo describes a repository to cache.
 type RepoInfo struct {
 	URL string
+	// Ref optionally selects the branch, tag, or commit to prepare. Empty
+	// means the remote's default branch.
+	Ref string
 }
 
 // CachedRepo describes a cached bare clone ready for worktree creation.
