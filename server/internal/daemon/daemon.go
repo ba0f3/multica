@@ -8735,7 +8735,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// spawns run inside a bubblewrap boundary instead of on the host. A
 	// failure to build that boundary fails the run: a task configured to be
 	// isolated never executes outside it.
-	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID)
+	//
+	// The isolation markers are set before the backend is built so both
+	// docker and bwrap snapshot them; Task 6 passes the prepared repo cache
+	// entries and reused-workdir cache paths here.
+	if d.cfg.SandboxEnabled {
+		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
+		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
+	}
+	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID, nil, nil)
 	if sandboxErr != nil {
 		taskLog.Error("sandbox: the attempt cannot be isolated; refusing to run on the host", "error", sandboxErr)
 		return TaskResult{}, sandboxErr
@@ -8901,8 +8909,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		HostRepoCheckoutDisabled: sandboxed != nil,
 	})
 	if sandboxed != nil {
-		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
-		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
 		if env != nil {
 			taskHome := filepath.Join(env.RootDir, "home")
 			agentEnv["HOME"] = taskHome

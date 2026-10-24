@@ -10,6 +10,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
+	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -53,6 +54,8 @@ func (d *Daemon) sandboxedBackend(
 	profileDir string,
 	agentSocket string,
 	attemptID string,
+	repos []workercheckout.Entry,
+	extraCachePaths []string,
 ) (agent.Backend, error) {
 	if !d.cfg.SandboxEnabled {
 		if d.cfg.TaskProtectedMode {
@@ -72,7 +75,7 @@ func (d *Daemon) sandboxedBackend(
 	}
 	switch backend {
 	case "docker":
-		return d.dockerBackend(provider, config, env, agentSocket, attemptID)
+		return d.dockerBackend(provider, config, env, agentSocket, attemptID, repos, extraCachePaths)
 	case "bwrap":
 		return d.bwrapBackend(provider, config, env, profileDir, agentSocket, attemptID)
 	default:

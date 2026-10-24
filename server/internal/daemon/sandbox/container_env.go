@@ -1,9 +1,16 @@
 package sandbox
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 )
+
+// RepoManifestPath is the in-container path of the task repo cache manifest,
+// which the daemon writes and the worker CLI reads.
+const RepoManifestPath = HomePath + "/.multica/" + workercheckout.ManifestFileName
 
 // ContainerEnv rewrites agent environment variables to the fixed in-container
 // paths used by the Docker worker. Keys managed by the launcher are replaced
@@ -18,6 +25,10 @@ func ContainerEnv(env map[string]string) map[string]string {
 	rewritten["TMP"] = TempPath
 	rewritten["TEMP"] = TempPath
 	rewritten["PATH"] = containerPath()
+	// The Docker worker is always isolated, so the markers are fixed here and
+	// never depend on the daemon's later runTask assignment order.
+	rewritten["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
+	rewritten["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
 	if _, ok := rewritten["SSH_AUTH_SOCK"]; ok {
 		rewritten["SSH_AUTH_SOCK"] = AgentSocketPath
 	}
@@ -25,6 +36,7 @@ func ContainerEnv(env map[string]string) map[string]string {
 		rewritten["CLAUDE_CODE_TMPDIR"] = TempPath
 	}
 	rewriteIfSet(rewritten, "MULTICA_CONFIG_ROOT", filepath.Join(HomePath, ".multica"))
+	rewriteIfSet(rewritten, "MULTICA_TASK_CONFIG_ROOT", filepath.Join(HomePath, ".multica"))
 	rewriteIfSet(rewritten, "CODEX_HOME", filepath.Join(HomePath, ".codex"))
 	rewriteIfSet(rewritten, "CURSOR_DATA_DIR", filepath.Join(HomePath, ".cursor"))
 	rewriteIfSet(rewritten, "HERMES_HOME", filepath.Join(HomePath, ".hermes"))
@@ -86,4 +98,55 @@ func DockerConfigBinds(hostHome, hostMultica, hostCodex, hostCursor, hostHermes 
 		binds = append(binds, DockerBind(host, item.target, "rw"))
 	}
 	return binds
+}
+
+// DockerRepoCacheBinds returns one read-only bind per unique absolute cache
+// path across the prepared entries and the extra cache paths. The worker sees
+// each cache at the same host path, so Git alternates the host writes stay
+// valid inside the container. Relative or `..`-containing paths are refused:
+// a cache path the daemon hands over must already be a clean, absolute host
+// path.
+func DockerRepoCacheBinds(repos []workercheckout.Entry, extraCachePaths []string) ([]string, error) {
+	var binds []string
+	seen := make(map[string]struct{})
+	add := func(raw string) error {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil
+		}
+		if !filepath.IsAbs(raw) {
+			return fmt.Errorf("sandbox: repo cache path %q is not absolute", raw)
+		}
+		if containsDotDot(raw) {
+			return fmt.Errorf("sandbox: repo cache path %q contains ..", raw)
+		}
+		clean := filepath.Clean(raw)
+		if _, ok := seen[clean]; ok {
+			return nil
+		}
+		seen[clean] = struct{}{}
+		binds = append(binds, DockerBind(clean, clean, "ro"))
+		return nil
+	}
+	for _, entry := range repos {
+		if err := add(entry.CachePath); err != nil {
+			return nil, err
+		}
+	}
+	for _, path := range extraCachePaths {
+		if err := add(path); err != nil {
+			return nil, err
+		}
+	}
+	return binds, nil
+}
+
+// containsDotDot reports whether any path component is the parent marker.
+func containsDotDot(path string) bool {
+	for _, component := range strings.Split(path, string(filepath.Separator)) {
+		if component == ".." {
+			return true
+		}
+	}
+	return false
 }

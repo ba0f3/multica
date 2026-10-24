@@ -54,7 +54,7 @@ func newSandboxTestDaemon(t *testing.T, bwrapPath string) *Daemon {
 
 func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 	daemon := &Daemon{logger: newDiscardLogger()}
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1")
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 
 func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "bwrap"))
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1")
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err == nil {
 		t.Fatal("expected unsupported provider to be rejected")
 	}
@@ -83,7 +83,7 @@ func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 func TestSandboxBackendFailsClosedWhenBwrapIsMissing(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "no-such-bwrap"))
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1")
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err == nil {
 		t.Fatal("the daemon accepted a sandbox it cannot build")
 	}
@@ -110,7 +110,7 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, bwrap)
 	env := newSandboxTestEnv(t)
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-1")
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-1", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestSandboxForbidsTheProfileTreeButAllowsANamedPerTaskPath(t *testing.T) {
 		t.Fatalf("write the fake bwrap: %v", err)
 	}
 	daemon := newSandboxTestDaemon(t, bwrap)
-	if _, err := daemon.sandboxedBackend("codex", agent.Config{}, env, profileRoot, "", "attempt-1"); err != nil {
+	if _, err := daemon.sandboxedBackend("codex", agent.Config{}, env, profileRoot, "", "attempt-1", nil, nil); err != nil {
 		t.Fatalf("a named per-task path under the profile was refused: %v", err)
 	}
 }
@@ -208,7 +208,7 @@ func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 		t.Fatalf("create socket: %v", err)
 	}
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", socket, "attempt-1")
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", socket, "attempt-1", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
