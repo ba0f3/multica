@@ -5,7 +5,7 @@
 Release from a reviewed commit on `main` by creating and pushing a new semantic
 version tag such as `v0.18.4`. The Release workflow intentionally has no manual
 trigger: a tag push is the only event that can publish binaries, Homebrew
-formulae, and container images.
+formulae, and release container images.
 
 The verification job runs the Go tests and `govulncheck` before any publishing
 job starts. The vulnerability scan is fail-closed by default.
@@ -35,6 +35,20 @@ The daemon defaults to `ghcr.io/ba0f3/multica-task-worker:latest`. Set
 `MULTICA_DOCKER_TASK_IMAGE=ghcr.io/ba0f3/multica-task-worker:<release-tag>`
 or use an image digest to pin a worker release. Other forks must set this
 variable to their own published image.
+
+### Publish only the worker image
+
+The Worker image workflow also supports manual runs without creating a release
+or publishing backend/web images. Run it on `main` to publish the default worker:
+
+```bash
+gh workflow run worker-image.yml --repo ba0f3/multica --ref main -f tag_name=latest
+```
+
+Set `tag_name` to publish a different image tag. Enable `is_stable` to also update
+`latest` when publishing a version tag. The same native builds and CLI smoke
+tests run for manual and release-triggered publication. Manual runs do not run
+the full release Go test suite or vulnerability scan.
 
 ## Emergency vulnerability-scan bypass
 
