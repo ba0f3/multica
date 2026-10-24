@@ -55,9 +55,14 @@ func DockerBind(hostPath, containerPath, mode string) string {
 
 // DockerConfigBinds maps per-task host directories into the container home
 // layout. Only non-empty host paths are bound.
-func DockerConfigBinds(hostHome, hostMultica, hostCodex, hostCursor, hostHermes, hostOpenclaw string) []string {
+//
+// OpenClaw is deliberately absent: the isolated tool boundary only admits
+// codex, cursor, and opencode, so there is never a per-task OpenClaw config to
+// mount. Passing filepath.Dir of an empty path here used to bind "." — the
+// daemon's working directory, which is the user's home on a systemd user unit.
+func DockerConfigBinds(hostHome, hostMultica, hostCodex, hostCursor, hostHermes string) []string {
 	type pair struct {
-		host string
+		host   string
 		target string
 	}
 	pairs := []pair{
@@ -66,9 +71,6 @@ func DockerConfigBinds(hostHome, hostMultica, hostCodex, hostCursor, hostHermes,
 		{hostCodex, filepath.Join(HomePath, ".codex")},
 		{hostCursor, filepath.Join(HomePath, ".cursor")},
 		{hostHermes, filepath.Join(HomePath, ".hermes")},
-	}
-	if hostOpenclaw != "" {
-		pairs = append(pairs, pair{hostOpenclaw, filepath.Join(HomePath, ".openclaw")})
 	}
 	var binds []string
 	seen := map[string]struct{}{}

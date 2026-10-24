@@ -54,7 +54,6 @@ func (d *Daemon) dockerBackend(
 		env.CodexHome,
 		env.CursorDataDir,
 		env.HermesHome,
-		filepath.Dir(env.OpenclawConfigPath),
 	)...)
 
 	if agentSocket != "" {

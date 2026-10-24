@@ -8,11 +8,58 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
+	env, fakeCodex, joined := dockerBackendArgv(t)
+	for _, want := range []string{
+		"run", "--rm", "-i",
+		"--name", sandbox.SanitizeContainerName("attempt-docker-1"),
+		"-v", env.WorkDir + ":" + sandbox.CheckoutPath + ":rw",
+		"-v", filepath.Join(env.RootDir, "home") + ":" + sandbox.HomePath + ":rw",
+		"-v", fakeCodex + ":/usr/local/bin/codex:ro",
+		"multica/task-worker:test",
+		sandbox.WorkerArg,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("docker argv missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+// TestDockerBackendDoesNotBindHostWorkingDirectory guards the empty
+// OpenclawConfigPath case: filepath.Dir("") is ".", and a relative docker
+// bind source resolves against the daemon's working directory. On a systemd
+// user unit that is the daemon user's home, which would hand every worker a
+// read-write mount of ~/.ssh and ~/.multica.
+func TestDockerBackendDoesNotBindHostWorkingDirectory(t *testing.T) {
+	_, _, joined := dockerBackendArgv(t)
+	lines := strings.Split(joined, "\n")
+	for i, line := range lines {
+		if line != "-v" || i+1 >= len(lines) {
+			continue
+		}
+		bind := lines[i+1]
+		source := bind
+		if idx := strings.Index(bind, ":"); idx >= 0 {
+			source = bind[:idx]
+		}
+		if source == "." {
+			t.Fatalf("docker bind %q mounts the daemon working directory", bind)
+		}
+		if strings.Contains(bind, sandbox.HomePath+"/.openclaw") {
+			t.Fatalf("docker bind %q mounts openclaw state into the worker", bind)
+		}
+	}
+}
+
+// dockerBackendArgv runs one codex attempt through a fake docker CLI and
+// returns the execution environment, mounted agent binary, and captured argv.
+func dockerBackendArgv(t *testing.T) (*execenv.Environment, string, string) {
+	t.Helper()
 	record := filepath.Join(t.TempDir(), "argv")
 	fakeDocker := filepath.Join(t.TempDir(), "docker")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\nwhile [ $# -gt 0 ]; do case \"$1\" in multica/task-worker:test) shift; break;; *) shift;; esac; done\nread _\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
@@ -54,20 +101,7 @@ func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read argv: %v", err)
 	}
-	joined := string(raw)
-	for _, want := range []string{
-		"run", "--rm", "-i",
-		"--name", sandbox.SanitizeContainerName("attempt-docker-1"),
-		"-v", env.WorkDir + ":" + sandbox.CheckoutPath + ":rw",
-		"-v", filepath.Join(env.RootDir, "home") + ":" + sandbox.HomePath + ":rw",
-		"-v", fakeCodex + ":/usr/local/bin/codex:ro",
-		"multica/task-worker:test",
-		sandbox.WorkerArg,
-	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("docker argv missing %q:\n%s", want, joined)
-		}
-	}
+	return env, fakeCodex, string(raw)
 }
 
 func collectSandboxSession(ctx context.Context, t *testing.T, session *agent.Session) ([]agent.Message, agent.Result) {
