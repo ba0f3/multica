@@ -320,7 +320,7 @@ task-worker-image: ## Build Docker task worker; tag local name and daemon defaul
 		-t multica/task-worker:local \
 		--build-arg VERSION=dev --build-arg COMMIT=$(COMMIT) \
 		.
-	docker tag multica/task-worker:local ghcr.io/r2d-ai/multica-task-worker:latest
+	docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
 
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"

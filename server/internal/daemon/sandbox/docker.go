@@ -11,7 +11,7 @@ const AgentSocketPath = sandboxAgentSocket
 
 // DefaultDockerTaskImage is the worker image reference when the operator does
 // not set MULTICA_DOCKER_TASK_IMAGE.
-const DefaultDockerTaskImage = "ghcr.io/r2d-ai/multica-task-worker:latest"
+const DefaultDockerTaskImage = "ghcr.io/ba0f3/multica-task-worker:latest"
 
 // DockerRunSpec describes one trusted docker run invocation for a task attempt.
 type DockerRunSpec struct {

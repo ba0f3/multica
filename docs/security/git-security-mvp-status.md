@@ -11,7 +11,7 @@ Status date: **2026-10-21**. Branch: `feature/git-security-mvp`. Spec revision: 
 | Docker `run` launcher, private mounts, resource flags | **Implemented** | `server/internal/daemon/sandbox/docker.go`, `sandbox_launch_docker.go`; `go test ./internal/daemon/ -run TestDocker -count=1` **pass** |
 | `MULTICA_TASK_SANDBOX` default **docker** (opt-out `false`) | **Implemented** | `parseTaskSandboxEnv` in `sandbox_launch.go`; `TestTaskIsolationE2E_DefaultConfigEnablesDockerSandbox` |
 | Protected mode | **Implemented** | `MULTICA_TASK_PROTECTED` in `config.go` |
-| Task worker image scaffold | **Added** | `docker/task-worker/Dockerfile` (not built in CI here) |
+| Task worker image publishing | **Configured** | `.github/workflows/release.yml` builds native amd64/arm64 images, smoke-tests the CLI, and publishes `multica-task-worker` to GHCR on release tags |
 | Real Docker daemon integration | **Blocked** | VM has no `docker` CLI/engine (`which docker` missing) |
 | Native agent matrix (Codex/Cursor/OpenCode) | **Not run** | Requires image build + authorized real-agent smoke per AGENTS.md |
 | Network deny policy on live bridge | **Deferred** | Code accepts `MULTICA_DOCKER_TASK_NETWORK`; not in scope for tool-isolation slice |

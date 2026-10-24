@@ -1,7 +1,7 @@
 # Task worker image for Docker-isolated agent attempts.
 # Build from repo root:
 #   docker build -f docker/task-worker/Dockerfile -t multica/task-worker:local .
-FROM golang:1.26.9-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY server/go.mod server/go.sum ./server/

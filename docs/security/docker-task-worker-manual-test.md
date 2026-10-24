@@ -1,15 +1,21 @@
 # Manual test: Docker task worker
 
-Use this on a host with Docker installed. The cloud agent VM has no Docker engine; CI here only runs **fake-docker** unit tests.
+Use this on a host with Docker installed. Release CI builds and smoke-tests the
+worker image for Linux amd64 and arm64, then publishes it to GHCR. Task isolation
+and agent compatibility still require the checks below.
 
 ## Prerequisites
 
 - Linux with Docker (rootful or rootless with working cgroup limits).
-- Branch `feature/git-security-mvp` built or image from `docker/task-worker/Dockerfile`.
+- Worker image from GHCR or built from `docker/task-worker/Dockerfile`.
 - Git credentials: database custody is on when `JWT_SECRET` or `MULTICA_GIT_SECRET_KEY` is set (private keys sealed in Postgres). Optional OpenBao: `MULTICA_GIT_CUSTODY_*`.
 - Do **not** use production keys unless explicitly authorized.
 
 ## Build worker image
+
+To use a published release, set
+`MULTICA_DOCKER_TASK_IMAGE=ghcr.io/ba0f3/multica-task-worker:<release-tag>`.
+Stable releases also update the daemon's default `latest` tag.
 
 From repository root:
 
@@ -25,7 +31,7 @@ Or tag the same image as the daemon default so you do not need
 `MULTICA_DOCKER_TASK_IMAGE` (Docker uses the local tag and does not pull GHCR):
 
 ```bash
-docker tag multica/task-worker:local ghcr.io/r2d-ai/multica-task-worker:latest
+docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
 ```
 
 `make task-worker-image` builds and applies both tags.
@@ -42,7 +48,7 @@ Record **image digest** in your test notes.
 ```bash
 export MULTICA_TASK_SANDBOX=docker
 export MULTICA_TASK_PROTECTED=1
-# Optional if you tagged ghcr.io/r2d-ai/multica-task-worker:latest locally:
+# Optional if you tagged ghcr.io/ba0f3/multica-task-worker:latest locally:
 # export MULTICA_DOCKER_TASK_IMAGE=multica/task-worker:local
 # Optional limits (verify with docker inspect during a run):
 export MULTICA_DOCKER_TASK_MEMORY=4294967296
