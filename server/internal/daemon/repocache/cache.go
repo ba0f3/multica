@@ -21,8 +21,8 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/processtree"
 )
 
-// gitEnv returns an environment for git subprocesses that contact remotes.
-// It passes the full daemon environment so credential helpers (e.g. gh) can
+// GitEnv returns an environment for git subprocesses that contact remotes.
+// It passes the full process environment so credential helpers (e.g. gh) can
 // locate their config, and disables TTY prompting so auth failures produce
 // clear errors instead of blocking on a non-existent terminal.
 //
@@ -40,8 +40,9 @@ import (
 // directories regardless of ownership. The daemon manages its own bare
 // caches and worktrees, so the ownership check adds no security value
 // and breaks CI environments where the runner UID differs from the
-// directory owner.
-func gitEnv() []string {
+// directory owner. The worker checkout reuses this environment because the
+// bind-mounted cache is owned by the daemon, not the worker.
+func GitEnv() []string {
 	base := os.Environ()
 
 	// Find the existing GIT_CONFIG_COUNT so we append at the next index
@@ -65,6 +66,9 @@ func gitEnv() []string {
 		"GIT_CONFIG_VALUE_"+idx+"=*",
 	)
 }
+
+// gitEnv is the historical unexported name for GitEnv.
+func gitEnv() []string { return GitEnv() }
 
 var agentGitExcludePatterns = []string{
 	".agent_context",

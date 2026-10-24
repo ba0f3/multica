@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/multica-ai/multica/server/internal/daemon/processtree"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 )
 
@@ -55,16 +57,26 @@ func Checkout(ctx context.Context, workDir string, entry Entry, opts Options) (R
 	target := filepath.Join(workDir, repocache.RepoDirName(entry.URL))
 	branch := repocache.BranchName(opts.AgentName, opts.TaskID)
 
-	if isExistingCheckout(target) {
+	if existing, err := isExistingCheckout(target); err != nil {
+		return Result{}, fmt.Errorf("stat checkout: %w", err)
+	} else if existing {
 		return updateExistingCheckout(ctx, target, entry, opts, branch)
 	}
 	return createCheckout(ctx, target, entry, opts, branch)
 }
 
-// isExistingCheckout reports whether target already holds a git checkout.
-func isExistingCheckout(target string) bool {
+// isExistingCheckout reports whether target already holds a git checkout. It
+// distinguishes a missing .git (not a checkout) from a stat error the caller
+// must surface.
+func isExistingCheckout(target string) (bool, error) {
 	_, err := os.Stat(filepath.Join(target, ".git"))
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // createCheckout initializes a fresh checkout whose objects are borrowed from
@@ -122,8 +134,9 @@ func writeAlternates(target, cachePath string) error {
 
 // copyCacheRefs mirrors the cache's remote-tracking and tag refs into the
 // checkout so an agent can diff and push against the same origin/* refs the
-// daemon fetched. Symbolic refs (refs/remotes/origin/HEAD) are skipped: they
-// carry no object name of their own and would materialize as a stale pointer.
+// daemon fetched. Symbolic refs (refs/remotes/origin/HEAD) are skipped because
+// their %(symref) field is non-empty; copying one would materialize a plain
+// ref pointing at its target's object instead of the symbolic pointer.
 func copyCacheRefs(ctx context.Context, cachePath, target string) error {
 	out, err := gitOutput(ctx, cachePath, "for-each-ref", "--format=%(refname) %(objectname) %(symref)", "refs/remotes/origin", "refs/tags")
 	if err != nil {
@@ -295,12 +308,16 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 }
 
 func gitCombined(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.Command("git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = os.Environ()
-	out, err := cmd.CombinedOutput()
+	// The cache is owned by the daemon, so a worker running as a different UID
+	// needs the same git hardening repocache uses: safe.directory=* trusts the
+	// bind-mounted cache, and credential prompting is disabled so a fetch that
+	// lacks credentials fails fast instead of blocking.
+	cmd.Env = repocache.GitEnv()
+	out, err := processtree.CombinedOutput(ctx, cmd, 5*time.Second)
 	if err != nil {
 		return strings.TrimSpace(string(out)), fmt.Errorf("git %v: %s: %w", args, strings.TrimSpace(string(out)), err)
 	}
