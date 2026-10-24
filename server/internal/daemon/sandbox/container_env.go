@@ -12,6 +12,22 @@ import (
 // which the daemon writes and the worker CLI reads.
 const RepoManifestPath = HomePath + "/.multica/" + workercheckout.ManifestFileName
 
+// RepoCABundlePath is the in-container path of the CA bundle the worker's
+// git/curl/node/python must trust for private Git hosts.
+const RepoCABundlePath = HomePath + "/.multica/ca-bundle.pem"
+
+// CAEnv returns the environment variables that point a worker's TLS tooling at
+// the mounted CA bundle, all set to bundlePath.
+func CAEnv(bundlePath string) map[string]string {
+	return map[string]string{
+		"GIT_SSL_CAINFO":      bundlePath,
+		"SSL_CERT_FILE":       bundlePath,
+		"CURL_CA_BUNDLE":      bundlePath,
+		"NODE_EXTRA_CA_CERTS": bundlePath,
+		"REQUESTS_CA_BUNDLE":  bundlePath,
+	}
+}
+
 // ContainerEnv rewrites agent environment variables to the fixed in-container
 // paths used by the Docker worker. Keys managed by the launcher are replaced
 // even when the task supplied a host path.

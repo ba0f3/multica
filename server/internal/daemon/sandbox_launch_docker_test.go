@@ -60,7 +60,9 @@ func TestDockerBackendDoesNotBindHostWorkingDirectory(t *testing.T) {
 
 // dockerBackendArgv runs one codex attempt through a fake docker CLI and
 // returns the execution environment, mounted agent binary, and captured argv.
-func dockerBackendArgv(t *testing.T, repos []workercheckout.Entry, extraCachePaths []string) (*execenv.Environment, string, string) {
+// Optional setup callbacks mutate the environment before the backend is built,
+// so tests can, for example, set WorkerCABundlePath.
+func dockerBackendArgv(t *testing.T, repos []workercheckout.Entry, extraCachePaths []string, setup ...func(*execenv.Environment)) (*execenv.Environment, string, string) {
 	t.Helper()
 	record := filepath.Join(t.TempDir(), "argv")
 	fakeDocker := filepath.Join(t.TempDir(), "docker")
@@ -73,6 +75,9 @@ func dockerBackendArgv(t *testing.T, repos []workercheckout.Entry, extraCachePat
 	daemon.cfg.DockerCLIPath = fakeDocker
 	daemon.cfg.DockerTaskImage = "multica/task-worker:test"
 	env := newSandboxTestEnv(t)
+	for _, fn := range setup {
+		fn(env)
+	}
 
 	fakeCodex := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -248,5 +253,46 @@ func TestIsolatedMarkersReachDockerEnv(t *testing.T) {
 	}
 	if env["MULTICA_ISOLATED_TOOL_BOUNDARY"] != "1" {
 		t.Errorf("MULTICA_ISOLATED_TOOL_BOUNDARY = %q, want 1", env["MULTICA_ISOLATED_TOOL_BOUNDARY"])
+	}
+}
+
+func TestDockerBackendMountsCABundleReadOnly(t *testing.T) {
+	env, _, joined := dockerBackendArgv(t, nil, nil, func(env *execenv.Environment) {
+		env.WorkerCABundlePath = filepath.Join(env.RootDir, "ca-bundle.pem")
+	})
+
+	binds := dockerBinds(joined)
+	wantBind := env.WorkerCABundlePath + ":" + sandbox.RepoCABundlePath + ":ro"
+	found := false
+	for _, bind := range binds {
+		if bind == wantBind {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("docker argv missing bind %q:\n%s", wantBind, strings.Join(binds, "\n"))
+	}
+
+	caEnv := dockerEnv(joined)
+	for _, key := range []string{"GIT_SSL_CAINFO", "SSL_CERT_FILE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE"} {
+		if caEnv[key] != sandbox.RepoCABundlePath {
+			t.Errorf("%s = %q, want %q", key, caEnv[key], sandbox.RepoCABundlePath)
+		}
+	}
+}
+
+func TestDockerBackendOmitsCABundleWhenUnset(t *testing.T) {
+	_, _, joined := dockerBackendArgv(t, nil, nil)
+
+	for _, bind := range dockerBinds(joined) {
+		if strings.Contains(bind, sandbox.RepoCABundlePath) {
+			t.Errorf("unexpected CA bundle bind %q", bind)
+		}
+	}
+	caEnv := dockerEnv(joined)
+	for _, key := range []string{"GIT_SSL_CAINFO", "SSL_CERT_FILE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE"} {
+		if _, ok := caEnv[key]; ok {
+			t.Errorf("%s = %q, want unset", key, caEnv[key])
+		}
 	}
 }

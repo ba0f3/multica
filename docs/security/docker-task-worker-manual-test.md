@@ -54,9 +54,17 @@ export MULTICA_TASK_PROTECTED=1
 export MULTICA_DOCKER_TASK_MEMORY=4294967296
 export MULTICA_DOCKER_TASK_PIDS_LIMIT=512
 export MULTICA_DOCKER_TASK_NETWORK=bridge
+# Extra CA the worker must trust for private Git hosts (public cert material):
+export MULTICA_DOCKER_TASK_CA_BUNDLE=/home/tui/Projects/multica/.orca/drops/MUOI_TIEU_XANH.crt
 ```
 
 Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=1` or `bwrap` still selects bubblewrap.
+
+`MULTICA_DOCKER_TASK_CA_BUNDLE` names a host PEM file whose valid `CERTIFICATE`
+blocks the daemon appends to the worker's CA bundle (the machine trust the repo
+cache already hands over, plus the extra file). Set it and restart the daemon;
+a configured path that is missing, unreadable, or holds no valid certificate
+fails the task at prepare rather than dropping trust.
 
 ## Smoke checklist
 
@@ -65,6 +73,7 @@ Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=1` or `bwrap` still selects bubbl
 3. **Host checkout blocked** — with sandbox on, `multica repo checkout` from the task must fail with *host repo checkout is disabled*; native `git clone` in workdir should still work when signer is configured.
 4. **A/B** — two tasks same runtime: distinct attempt sockets and no shared `SSH_AUTH_SOCK` path.
 5. **Teardown** — cancel task: container removed, signing socket directory under `git-agent/<task>/<attempt>/` gone.
+6. **CA bundle** — with `MULTICA_DOCKER_TASK_CA_BUNDLE` set, `docker inspect <container>` must show a read-only mount of the task's `ca-bundle.pem` at `/home/agent/.multica/ca-bundle.pem` and the CA env vars (`GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`) all pointing there.
 
 ## Native agents (authorized only)
 

@@ -286,6 +286,11 @@ type Environment struct {
 	// child CLI invocations. It prevents implicit discovery of the daemon
 	// owner's ~/.multica profile without changing the provider-facing HOME.
 	MulticaConfigRoot string
+	// WorkerCABundlePath is the host path of the CA bundle written for this
+	// task's Docker worker (<RootDir>/ca-bundle.pem). Empty when the host had
+	// no machine trust and no extra CA to hand over. Set by the daemon, not by
+	// execenv.
+	WorkerCABundlePath string
 	// LocalWorktree is set when the task runs in worktree mode against a
 	// local_directory resource. The daemon calls Finalize on it after the
 	// agent exits to commit leftovers, drop the worktree, and learn the

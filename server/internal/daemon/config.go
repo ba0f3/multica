@@ -131,12 +131,16 @@ type Config struct {
 	// DockerCLIPath is the docker binary. Empty means "docker" on PATH.
 	DockerCLIPath string
 	// DockerTaskImage is the worker image for docker-backed attempts.
-	DockerTaskImage string
+	DockerTaskImage   string
 	DockerNetworkMode string
 	DockerMemoryBytes int64
 	DockerPIDsLimit   int64
 	DockerNanoCPUs    int64
 	DockerTaskUser    string
+	// DockerTaskCABundle is a host path to a PEM file of extra CA certificates
+	// the Docker worker must trust, in addition to the machine trust the repo
+	// cache already hands over. Empty means no extra bundle.
+	DockerTaskCABundle             string
 	HealthPort                     int           // local HTTP port for health checks (default: 19514)
 	MaxConcurrentTasks             int           // max tasks running in parallel (default: 20)
 	GCEnabled                      bool          // enable periodic workspace garbage collection (default: true)
@@ -671,7 +675,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		WorkspacesRoot:                  workspacesRoot,
 		KeepEnvAfterTask:                keepEnv,
 		SandboxEnabled:                  sandboxEnabled,
-		TaskSandboxBackend:            sandboxBackend,
+		TaskSandboxBackend:              sandboxBackend,
 		TaskProtectedMode:               taskProtected,
 		BwrapPath:                       strings.TrimSpace(os.Getenv("MULTICA_BWRAP_PATH")),
 		SandboxSelfPath:                 strings.TrimSpace(os.Getenv("MULTICA_SANDBOX_SELF")),
@@ -682,6 +686,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		DockerPIDsLimit:                 dockerPIDs,
 		DockerNanoCPUs:                  dockerNanoCPUs,
 		DockerTaskUser:                  strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_USER")),
+		DockerTaskCABundle:              strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_CA_BUNDLE")),
 		GCEnabled:                       gcEnabled,
 		GCInterval:                      gcInterval,
 		GCTTL:                           gcTTL,

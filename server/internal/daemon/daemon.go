@@ -2135,6 +2135,8 @@ func (d *Daemon) run(ctx context.Context, healthLn net.Listener) error {
 		"gc_enabled", d.cfg.GCEnabled,
 		"auto_update", d.cfg.AutoUpdateEnabled,
 		"launched_by", d.cfg.LaunchedBy,
+		"docker_task_ca_bundle", d.cfg.DockerTaskCABundle,
+		"docker_task_ca_bundle_exists", dockerTaskCABundleExists(d.cfg.DockerTaskCABundle),
 	)
 
 	// Mark the daemon-owned workspaces tree before any task runs. A sandbox
@@ -9008,6 +9010,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if d.cfg.SandboxEnabled {
 		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
 		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
+	}
+	// Task 7: hand the Docker worker the CA bundle its git/curl/node/python
+	// must trust for private Git hosts. A configured-but-invalid extra bundle
+	// fails the task rather than silently dropping trust.
+	if dockerRepoCache {
+		bundlePath, bundleErr := d.writeWorkerCABundle(env.RootDir, d.cfg.DockerTaskCABundle)
+		if bundleErr != nil {
+			return TaskResult{}, fmt.Errorf("write worker CA bundle: %w", bundleErr)
+		}
+		env.WorkerCABundlePath = bundlePath
 	}
 	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID, taskRepoCaches, extraCachePaths)
 	if sandboxErr != nil {

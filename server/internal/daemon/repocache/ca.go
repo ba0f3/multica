@@ -124,7 +124,27 @@ func machineCATrust(ownPath string) ([]byte, error) {
 	if system := readSystemCABundle(); len(system) > 0 {
 		return system, nil
 	}
-	return nil, errors.New("no system CA bundle found; not overriding git's trust store")
+	return nil, errNoSystemCABundle
+}
+
+// errNoSystemCABundle reports that this machine has no CA trust to hand a
+// worker: no http.sslCAInfo in the git config and no system bundle. Callers
+// that may legitimately have nothing (CABundlePEM) treat it as empty.
+var errNoSystemCABundle = errors.New("no system CA bundle found; not overriding git's trust store")
+
+// CABundlePEM returns the CA bundle a Docker worker must trust: the active
+// bundle file when the server sent extra CAs, otherwise the machine trust (an
+// operator's http.sslCAInfo or the system bundle). It returns nil, nil when
+// this machine has no bundle to hand over.
+func (c *Cache) CABundlePEM() ([]byte, error) {
+	if st := caState.Load(); st != nil && st.active {
+		return os.ReadFile(st.path)
+	}
+	data, err := machineCATrust(c.caBundlePath())
+	if errors.Is(err, errNoSystemCABundle) {
+		return nil, nil
+	}
+	return data, err
 }
 
 const gitConfigReadTimeout = 30 * time.Second

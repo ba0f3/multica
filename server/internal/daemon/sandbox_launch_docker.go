@@ -102,6 +102,15 @@ func (d *Daemon) dockerBackend(
 	if agentSocket != "" {
 		containerEnv["SSH_AUTH_SOCK"] = sandbox.AgentSocketPath
 	}
+	if env.WorkerCABundlePath != "" {
+		// Mount the bundle read-only after the config binds so the .multica
+		// parent exists, and point every TLS tool at it before the environment
+		// is written to the manifest and argv.
+		binds = append(binds, sandbox.DockerBind(env.WorkerCABundlePath, sandbox.RepoCABundlePath, "ro"))
+		for key, value := range sandbox.CAEnv(sandbox.RepoCABundlePath) {
+			containerEnv[key] = value
+		}
+	}
 
 	dockerUser := strings.TrimSpace(d.cfg.DockerTaskUser)
 	if dockerUser == "" {
