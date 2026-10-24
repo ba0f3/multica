@@ -181,3 +181,39 @@ func TestPrepareEmptyReposReturnsNil(t *testing.T) {
 		t.Errorf("Prepare with no repos returned %d repos, want nil", len(got))
 	}
 }
+
+// TestPrepareRefreshesCABundleOnCachedRepo proves Prepare applies the cache's
+// extra-CA bundle before fetching an existing cache, the same way SyncContext
+// does. A cache created before the server sent private CAs would otherwise
+// keep fetching with the trust it had at clone time.
+func TestPrepareRefreshesCABundleOnCachedRepo(t *testing.T) {
+	isolateGitConfig(t)
+	if len(readSystemCABundle()) == 0 {
+		t.Skip("no system CA bundle")
+	}
+	remote := createTestRepo(t)
+	cache := newTestCacheQuiet(t)
+
+	if _, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}}); err != nil {
+		t.Fatalf("initial Prepare failed: %v", err)
+	}
+	_, caPEM := newServerCert(t, "prepare-ca")
+	if err := cache.SetExtraCACerts(caPEM); err != nil {
+		t.Fatalf("SetExtraCACerts: %v", err)
+	}
+	barePath := cache.BarePath("ws-1", remote)
+	if out, _ := agentGit(t, barePath, "config", "--local", "--get", caBundleConfigKey); strings.TrimSpace(out) != "" {
+		t.Fatalf("%s already set on the pre-existing cache: %q", caBundleConfigKey, out)
+	}
+
+	if _, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}}); err != nil {
+		t.Fatalf("second Prepare failed: %v", err)
+	}
+	out, err := agentGit(t, barePath, "config", "--local", "--get", caBundleConfigKey)
+	if err != nil {
+		t.Fatalf("read %s: %s: %v", caBundleConfigKey, out, err)
+	}
+	if got, want := strings.TrimSpace(out), cache.caBundlePath(); got != want {
+		t.Fatalf("%s = %q, want %q", caBundleConfigKey, got, want)
+	}
+}

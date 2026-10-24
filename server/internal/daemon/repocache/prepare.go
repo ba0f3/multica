@@ -67,6 +67,10 @@ func (c *Cache) prepareRepo(ctx context.Context, workspaceID string, repo RepoIn
 	defer repoLock.Unlock()
 
 	if isBareRepo(barePath) {
+		// Record the active CA bundle before fetching, exactly as SyncContext
+		// does: a cache cloned before the server sent private CAs would
+		// otherwise fetch with the trust it had at clone time.
+		c.configureRepoCABundleLogged(ctx, barePath)
 		if err := gitFetchContext(ctx, barePath); err != nil {
 			return PreparedRepo{}, err
 		}
