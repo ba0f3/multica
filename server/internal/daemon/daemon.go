@@ -3471,11 +3471,11 @@ func (d *Daemon) workspaceRepoCacheRoot(workspaceID string) string {
 // strictly inside the resolved workspace cache root before it is trusted.
 func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]workercheckout.Entry, error) {
 	if d.repoCache == nil {
-		return nil, errors.New("prepare task repo cache: repo cache is not configured")
+		return nil, errors.New("repo cache is not configured")
 	}
 	preparer, ok := d.repoCache.(repoCachePreparer)
 	if !ok {
-		return nil, errors.New("prepare task repo cache: repo cache does not support Prepare")
+		return nil, errors.New("repo cache does not support Prepare")
 	}
 
 	// Dedupe task.Repos by URL (first Ref wins) and skip empty URLs.
@@ -3498,24 +3498,25 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 
 	prepared, err := preparer.Prepare(ctx, task.WorkspaceID, infos)
 	if err != nil {
-		return nil, fmt.Errorf("prepare task repo cache: %w", err)
+		return nil, err
 	}
 
 	resolvedRoot, err := filepath.EvalSymlinks(d.workspaceRepoCacheRoot(task.WorkspaceID))
 	if err != nil {
-		return nil, fmt.Errorf("prepare task repo cache: resolve workspace cache root: %w", err)
+		return nil, fmt.Errorf("resolve workspace cache root: %w", err)
 	}
 
 	entries := make([]workercheckout.Entry, 0, len(prepared))
 	seenPaths := make(map[string]struct{}, len(prepared))
 	for _, repo := range prepared {
-		if err := validatePreparedRepoCachePath(repo.BarePath, resolvedRoot); err != nil {
+		resolved, err := resolvePreparedRepoCachePath(repo.BarePath, resolvedRoot)
+		if err != nil {
 			return nil, err
 		}
-		if _, dup := seenPaths[repo.BarePath]; dup {
-			return nil, fmt.Errorf("prepare task repo cache: duplicate cache path %q", repo.BarePath)
+		if _, dup := seenPaths[resolved]; dup {
+			return nil, fmt.Errorf("duplicate cache path %q", repo.BarePath)
 		}
-		seenPaths[repo.BarePath] = struct{}{}
+		seenPaths[resolved] = struct{}{}
 		entries = append(entries, workercheckout.Entry{
 			URL:       repo.URL,
 			Ref:       repo.Ref,
@@ -3526,25 +3527,25 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 	return entries, nil
 }
 
-// validatePreparedRepoCachePath requires barePath to be an absolute, cleaned
-// path that resolves strictly inside the already-resolved workspace cache root.
-// It is the boundary that keeps a tampered or misbehaving Prepare from handing
-// the worker an arbitrary host path to mount.
-func validatePreparedRepoCachePath(barePath, resolvedWorkspaceCacheRoot string) error {
+// resolvePreparedRepoCachePath validates barePath — absolute, cleaned, and
+// resolving strictly inside the already-resolved workspace cache root — and
+// returns its resolved form. It is the boundary that keeps a tampered or
+// misbehaving Prepare from handing the worker an arbitrary host path to mount.
+func resolvePreparedRepoCachePath(barePath, resolvedWorkspaceCacheRoot string) (string, error) {
 	if !filepath.IsAbs(barePath) {
-		return fmt.Errorf("prepare task repo cache: bare path %q is not absolute", barePath)
+		return "", fmt.Errorf("bare path %q is not absolute", barePath)
 	}
 	if cleaned := filepath.Clean(barePath); cleaned != barePath {
-		return fmt.Errorf("prepare task repo cache: bare path %q is not clean (want %q)", barePath, cleaned)
+		return "", fmt.Errorf("bare path %q is not clean (want %q)", barePath, cleaned)
 	}
 	resolved, err := filepath.EvalSymlinks(barePath)
 	if err != nil {
-		return fmt.Errorf("prepare task repo cache: resolve bare path %q: %w", barePath, err)
+		return "", fmt.Errorf("resolve bare path %q: %w", barePath, err)
 	}
 	if !isStrictChild(resolved, resolvedWorkspaceCacheRoot) {
-		return fmt.Errorf("prepare task repo cache: bare path %q resolves outside the workspace cache root %q", barePath, resolvedWorkspaceCacheRoot)
+		return "", fmt.Errorf("bare path %q resolves outside the workspace cache root %q", barePath, resolvedWorkspaceCacheRoot)
 	}
-	return nil
+	return resolved, nil
 }
 
 // repoCachePathsForReusedWorkdir returns the cache paths a reused workdir's
@@ -3588,11 +3589,16 @@ func (d *Daemon) repoCachePathsForReusedWorkdir(workspaceID, workDir string) ([]
 			if !isStrictChild(resolved, resolvedRoot) {
 				continue
 			}
-			if _, dup := seen[resolved]; dup {
+			// Keep the raw path the checkout actually references: the alternates
+			// file names the cache through whatever spelling the checkout was
+			// written with, and that is the path the worker must still see
+			// mounted when the cache root sits behind a symlink.
+			raw := filepath.Clean(line)
+			if _, dup := seen[raw]; dup {
 				continue
 			}
-			seen[resolved] = struct{}{}
-			paths = append(paths, resolved)
+			seen[raw] = struct{}{}
+			paths = append(paths, raw)
 		}
 	}
 	return paths, nil
@@ -7943,8 +7949,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// to a stale snapshot. Every other task keeps the historical background
 	// sync (and `multica repo checkout` still clones on demand inside the
 	// boundary).
+	dockerRepoCache := d.usesDockerRepoCache(provider)
 	var taskRepoCaches []workercheckout.Entry
-	if d.usesDockerRepoCache(provider) {
+	if dockerRepoCache {
 		prepared, prepareErr := d.prepareTaskRepoCaches(prepareCtx, task)
 		if prepareErr != nil {
 			return TaskResult{}, fmt.Errorf("prepare task repo cache: %w", prepareErr)
@@ -8533,7 +8540,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// failure to write or record fails the task: the cache lifecycle must not
 	// outlive the workdir's use of it.
 	var extraCachePaths []string
-	if d.usesDockerRepoCache(provider) {
+	if dockerRepoCache {
 		reused, reusedErr := d.repoCachePathsForReusedWorkdir(task.WorkspaceID, env.WorkDir)
 		if reusedErr != nil {
 			return TaskResult{}, fmt.Errorf("resolve reused workdir repo cache paths: %w", reusedErr)

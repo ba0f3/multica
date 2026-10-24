@@ -434,6 +434,52 @@ func TestReusedWorkdirKeepsOldCacheMounted(t *testing.T) {
 	}
 }
 
+func TestReusedWorkdirReturnsRawAlternatesPath(t *testing.T) {
+	// A cache root that sits behind a symlink: the checkout's alternates file
+	// names the cache through the symlinked spelling, and the mount/dependents
+	// set must keep that raw spelling rather than the resolved target, or the
+	// reused checkout breaks when the worker no longer sees the referenced path.
+	realRoot := t.TempDir()
+	createBareRepoDir(t, filepath.Join(realRoot, ".repos", "ws-1", "old-repo.git"))
+
+	linkRoot := filepath.Join(t.TempDir(), "workspaces-link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	workDir := t.TempDir()
+	altPath := filepath.Join(linkRoot, ".repos", "ws-1", "old-repo.git", "objects")
+	alternates := filepath.Join(workDir, "oldrepo", ".git", "objects", "info", "alternates")
+	if err := os.MkdirAll(filepath.Dir(alternates), 0o755); err != nil {
+		t.Fatalf("mkdir alternates dir: %v", err)
+	}
+	if err := os.WriteFile(alternates, []byte(altPath+"\n"), 0o644); err != nil {
+		t.Fatalf("write alternates: %v", err)
+	}
+
+	d := &Daemon{cfg: Config{WorkspacesRoot: linkRoot}, logger: newDiscardLogger()}
+	paths, err := d.repoCachePathsForReusedWorkdir("ws-1", workDir)
+	if err != nil {
+		t.Fatalf("repoCachePathsForReusedWorkdir: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != altPath {
+		t.Fatalf("reused cache paths = %v, want the raw alternates path [%q]", paths, altPath)
+	}
+	// The returned raw path must still pass the strict-child boundary against
+	// the resolved cache root.
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(linkRoot, ".repos", "ws-1"))
+	if err != nil {
+		t.Fatalf("eval symlinks cache root: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(paths[0])
+	if err != nil {
+		t.Fatalf("eval symlinks returned path: %v", err)
+	}
+	if !isStrictChild(resolved, resolvedRoot) {
+		t.Fatalf("raw path %q resolves to %q, not a strict child of %q", paths[0], resolved, resolvedRoot)
+	}
+}
+
 func TestReusedWorkdirIgnoresAlternatesOutsideCacheRoot(t *testing.T) {
 	workspacesRoot := t.TempDir()
 	workspaceID := "ws-1"
