@@ -76,11 +76,18 @@ brews:
     ids:
       - versioned
     repository:
-      owner: multica-ai
+      # Upstream publishes to multica-ai/homebrew-tap; the release workflow
+      # supplies the owner (default: the repository owner) so forks use their
+      # own tap.
+      owner: "{{ .Env.HOMEBREW_TAP_OWNER }}"
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
+    # The release workflow sets this to true when no tap token exists (forks),
+    # so the formula is still generated but never pushed to a tap the run
+    # cannot write to.
+    skip_upload: "{{ .Env.HOMEBREW_SKIP_UPLOAD }}"
     homepage: "https://github.com/multica-ai/multica"
     description: "Multica CLI — local agent runtime and management tool for the Multica platform"
     # No license stanza: Multica ships under the Multica License (Apache 2.0

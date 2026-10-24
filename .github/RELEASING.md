@@ -18,6 +18,27 @@ When raising the security floor, update all Go workflows and the pinned
 Go builder images in `Dockerfile` and `docker/task-worker/Dockerfile` together
 so shipped binaries also receive the fixes.
 
+## CLI and daemon
+
+The daemon has no separate artifact: it ships inside the `multica` CLI built
+from `server/cmd/multica`. The `release` job runs GoReleaser on every owner, so a
+fork's tag publishes `multica-cli-<version>-<os>-<arch>` archives (plus the
+legacy `multica_<os>_<arch>` names), `checksums.txt`, and the Windows/macOS
+desktop metadata assets for its own repository.
+
+Homebrew is pushed to `<owner>/homebrew-tap` when
+`HOMEBREW_TAP_GITHUB_TOKEN` is set. Upstream defaults the owner to
+`multica-ai` from `github.repository_owner`; a fork that wants its own tap sets
+the `HOMEBREW_TAP_OWNER` repository variable and the token secret. Without the
+token the formula is generated into `dist/` but not pushed, and the CLI release
+still succeeds.
+
+Daemons installed from a fork's release do not update from it by default:
+`multica update` reads `multica-ai/multica` unless
+`MULTICA_RELEASE_API_BASE_URL` and `MULTICA_RELEASE_DOWNLOAD_BASE_URL` point at
+a mirror carrying that fork's assets. Keep `MULTICA_DAEMON_AUTO_UPDATE` off
+when running a patched fork, or the next update replaces it with upstream.
+
 ## Container images
 
 After verification, the workflow builds and pushes `multica-backend`,

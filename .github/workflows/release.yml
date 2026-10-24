@@ -82,12 +82,11 @@ jobs:
 
   release:
     needs: verify
-    # Only run on the canonical upstream repo. Forks don't have the
-    # HOMEBREW_TAP_GITHUB_TOKEN secret and should not be publishing to
-    # `multica-ai/homebrew-tap` anyway. Without this guard, every fork's
-    # tag push fails this job (401 against the upstream tap), which makes
-    # downstream CI go red without affecting the actual artifact pipeline.
-    if: github.repository_owner == 'multica-ai'
+    # Every owner publishes its own CLI/daemon binaries here: the daemon has
+    # no separate artifact and ships inside the `multica` CLI archives. The
+    # Homebrew tap push is skipped when HOMEBREW_TAP_GITHUB_TOKEN is absent,
+    # so forks without a tap still get GitHub Release archives + checksums
+    # instead of failing on a 401 against `multica-ai/homebrew-tap`.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -115,6 +114,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Upstream defaults to `multica-ai/homebrew-tap`; a fork can point at
+          # its own tap by setting the HOMEBREW_TAP_OWNER repository variable
+          # and the tap token secret. Without the token the formula is built
+          # into dist/ but not pushed.
+          HOMEBREW_TAP_OWNER: ${{ vars.HOMEBREW_TAP_OWNER || github.repository_owner }}
+          HOMEBREW_SKIP_UPLOAD: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN == '' }}
 
   # Multi-arch images are built natively per platform on dedicated runners
   # (amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm) and merged into a
@@ -407,8 +412,13 @@ jobs:
   # Desktop continues to ship via the manual `release-desktop` skill so it
   # can be signed + notarized with Apple Developer credentials that are
   # not (yet) wired into CI.
+  #
+  # Upstream-only: the packaged app bootstraps the CLI from
+  # multica-ai/multica, so a fork's installers would install an upstream
+  # daemon. Forks publish the CLI archives (the daemon) and images instead.
   desktop:
     needs: release
+    if: github.repository_owner == 'multica-ai'
     strategy:
       fail-fast: false
       matrix:
