@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 	"github.com/spf13/cobra"
 )
 
@@ -343,6 +344,10 @@ func runRepoRemove(cmd *cobra.Command, args []string) error {
 func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	repoURL := args[0]
 
+	if os.Getenv("MULTICA_ISOLATED_TOOL_BOUNDARY") == "1" {
+		return runRepoCheckoutIsolated(cmd, repoURL)
+	}
+
 	daemonPort := os.Getenv("MULTICA_DAEMON_PORT")
 	if daemonPort == "" {
 		return fmt.Errorf("MULTICA_DAEMON_PORT not set (this command is intended to be run by an agent inside a daemon task)")
@@ -466,6 +471,77 @@ func repoCheckoutSummary(repoURL string, result repoCheckoutResult) string {
 		repoURL, result.Path, branch,
 		result.UncommittedFiles, pluralS(result.UncommittedFiles),
 		result.UnpushedCommits, pluralS(result.UnpushedCommits))
+}
+
+// runRepoCheckoutIsolated checks out a task repo from the daemon-written,
+// read-only cache manifest inside an isolated tool boundary (Docker worker),
+// where the host daemon's /repo/checkout endpoint is unreachable and the host
+// handler is blocked. It accepts only task.Repos URLs from the manifest and
+// never contacts the daemon, so MULTICA_TOKEN and MULTICA_DAEMON_PORT are not
+// required.
+func runRepoCheckoutIsolated(cmd *cobra.Command, repoURL string) error {
+	path, err := workercheckout.ManifestPath()
+	if err != nil {
+		return err
+	}
+	manifest, err := workercheckout.ReadManifest(path)
+	if err != nil {
+		return err
+	}
+	entry, err := workercheckout.Find(manifest, repoURL)
+	if err != nil {
+		return err
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+
+	parentCtx := cmd.Context()
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Minute)
+	defer cancel()
+
+	result, err := workercheckout.Checkout(ctx, cwd, entry, workercheckout.Options{
+		Ref:       repoCheckoutRef,
+		Fresh:     repoCheckoutFresh,
+		AgentName: os.Getenv("MULTICA_AGENT_NAME"),
+		TaskID:    os.Getenv("MULTICA_TASK_ID"),
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(os.Stdout, result.Path)
+	fmt.Fprintln(os.Stderr, repoCheckoutIsolatedSummary(repoURL, result))
+	return nil
+}
+
+// repoCheckoutIsolatedSummary describes what the in-worker checkout did. A
+// fresh checkout starts from the daemon-resolved base SHA rather than a
+// network fetch, so it reports the base; a kept checkout reports how far the
+// local HEAD has moved from that base (ahead/behind) and the uncommitted and
+// unpushed counts, and that nothing was reset.
+func repoCheckoutIsolatedSummary(repoURL string, result workercheckout.Result) string {
+	if result.Kept {
+		branch := result.Branch
+		if branch == "" {
+			branch = "detached HEAD"
+		}
+		return fmt.Sprintf("Kept the existing checkout of %s at %s (branch: %s; %d commit%s ahead, %d commit%s behind, %d uncommitted file%s, %d unpushed commit%s): "+
+			"nothing was reset, cleaned, or switched.\n"+
+			"To discard its uncommitted changes and untracked files and start over on a new branch from the latest default branch (or --ref), "+
+			"re-run with --fresh; commits stay on the old branch, but push any you still need first.",
+			repoURL, result.Path, branch,
+			result.Ahead, pluralS(result.Ahead),
+			result.Behind, pluralS(result.Behind),
+			result.Uncommitted, pluralS(result.Uncommitted),
+			result.Unpushed, pluralS(result.Unpushed))
+	}
+	return fmt.Sprintf("Checked out %s → %s (branch: %s, base %s)", repoURL, result.Path, result.Branch, result.BaseSHA)
 }
 
 func repoCheckoutRetryDelay(value string, now time.Time) time.Duration {
