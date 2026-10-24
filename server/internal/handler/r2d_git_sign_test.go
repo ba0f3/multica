@@ -24,7 +24,9 @@ import (
 func daemonRequest(method, path, body string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	return req.WithContext(middleware.WithDaemonContext(req.Context(), testWorkspaceID, testDaemonID))
+	ctx := middleware.WithDaemonContext(req.Context(), testWorkspaceID, testDaemonID)
+	ctx = middleware.WithDaemonTokenOwnerID(ctx, testUserID)
+	return req.WithContext(ctx)
 }
 
 // signingTaskRequest is daemonRequest for the signing-lease route: the
@@ -291,12 +293,13 @@ func TestSigningLeaseRefusesATaskOnAnotherDaemonsRuntime(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/git-signing-lease",
 		strings.NewReader(`{"provider_id":"`+providerID+`"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(middleware.WithDaemonContext(req.Context(), testWorkspaceID, "another-daemon"))
+	ctx := middleware.WithDaemonContext(req.Context(), testWorkspaceID, "another-daemon")
+	req = req.WithContext(middleware.WithDaemonTokenOwnerID(ctx, testUserID))
 	req = testutil.WithURLParams(req, "taskId", taskID)
 
 	recorder := httptest.NewRecorder()
 	testHandler.OpenGitSigningLease(recorder, req)
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusNotFound, recorder.Body.String())
 	}
 }

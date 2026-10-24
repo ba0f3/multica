@@ -395,7 +395,7 @@ func TestOpencodeProcessEventsPreservesV2Error(t *testing.T) {
 		{
 			name:      "provider quota message",
 			errorJSON: `{"type":"provider.free-limit","message":"Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.","status":429,"retryAfterMs":23364000}`,
-			want:      "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+			want:      "provider.free-limit: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
 		},
 		{
 			name:      "type without message",
