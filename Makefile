@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon task-worker-image task-worker-image-ca cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon task-worker-image cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -319,21 +319,8 @@ task-worker-image: ## Build Docker task worker; tag local name and daemon defaul
 	docker build -f docker/task-worker/Dockerfile \
 		-t multica/task-worker:local \
 		--build-arg VERSION=dev --build-arg COMMIT=$(COMMIT) \
-		--build-arg EXTRA_CA_FINGERPRINT=no-extra-ca \
 		.
 	docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
-
-CA_CERT ?=
-task-worker-image-ca: ## Build Docker task worker with an extra CA baked in; pass CA_CERT=/path
-	test -n "$(CA_CERT)" || (echo "set CA_CERT=/path/to/ca.crt"; exit 1)
-	fp=$$(sha256sum "$(CA_CERT)" | cut -d' ' -f1); \
-	DOCKER_BUILDKIT=1 docker build -f docker/task-worker/Dockerfile \
-		--secret id=extra_ca,src="$(CA_CERT)" \
-		--build-arg EXTRA_CA_FINGERPRINT=$$fp \
-		-t multica/task-worker:ca \
-		-t ghcr.io/ba0f3/multica-task-worker:ca \
-		--build-arg VERSION=dev --build-arg COMMIT=$(COMMIT) \
-		.
 
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"
