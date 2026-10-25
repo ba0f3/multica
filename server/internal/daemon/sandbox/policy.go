@@ -106,6 +106,16 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	// Links are created while HOME is still private. Creating them after a
 	// shared profile bind could write into the host's installation or profile.
 	for _, link := range links {
+		inherited := false
+		for _, root := range policy.RuntimeRoots {
+			if isUnder(link.Path, root) {
+				inherited = true
+				break
+			}
+		}
+		if inherited {
+			continue
+		}
 		if err := nativeAbsolutePath(link.Path); err != nil || link.Target == "" {
 			return nil, fmt.Errorf("sandbox: invalid native installation link %q", link.Path)
 		}

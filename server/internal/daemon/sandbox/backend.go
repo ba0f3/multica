@@ -51,6 +51,9 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	if b == nil || b.Launch == nil {
 		return nil, errors.New("sandbox: no worker launcher is configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	spec := ConvertExecOptions(opts)
 	spec.Cwd = CheckoutPath
 	if b.WorkerCwd != "" {

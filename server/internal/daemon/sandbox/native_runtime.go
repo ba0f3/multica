@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -72,23 +73,12 @@ var nativeProfileEnvKeys = []string{
 }
 
 func (r *NativeRuntimeResolver) Resolve(ctx context.Context, request NativeRuntimeRequest) (NativeRuntime, error) {
-	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
-	if !ProviderSupportsNativeHost(request.Provider) {
-		return NativeRuntime{}, fmt.Errorf("native sandbox: provider %q is not supported", request.Provider)
+	var err error
+	request, err = normalizeNativeRuntimeRequest(request)
+	if err != nil {
+		return NativeRuntime{}, err
 	}
-	if err := nativeAbsolutePath(request.Home); err != nil {
-		return NativeRuntime{}, fmt.Errorf("native sandbox home: %w", err)
-	}
-	if err := nativeAbsolutePath(request.Executable); err != nil {
-		return NativeRuntime{}, fmt.Errorf("native sandbox executable: %w", err)
-	}
-	selectors := make(map[string]string)
-	for _, key := range nativeProfileEnvKeys {
-		if value := request.Env[key]; value != "" {
-			selectors[key] = value
-		}
-	}
-	request.Env = selectors
+
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return NativeRuntime{}, err
@@ -100,52 +90,11 @@ func (r *NativeRuntimeResolver) Resolve(ctx context.Context, request NativeRunti
 		return cloneNativeRuntime(entry.runtime), nil
 	}
 
-	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, Home: request.Home, Env: make(map[string]string)}
-	var watch []nativeWatch
-	profilePaths, err := nativeProfilePaths(request, &result)
+	result, watch, err := resolveNativeRuntimeLayout(request)
 	if err != nil {
 		return NativeRuntime{}, err
 	}
-	for _, path := range profilePaths {
-		if err := validateNativeGrant(request, path); err != nil {
-			return NativeRuntime{}, fmt.Errorf("native sandbox profile: %w", err)
-		}
-		if err := os.MkdirAll(path, 0700); err != nil {
-			return NativeRuntime{}, fmt.Errorf("native sandbox profile directory: %w", err)
-		}
-		resolved, links, err := nativeResolveLinks(path)
-		if err != nil {
-			return NativeRuntime{}, err
-		}
-		result.Links = appendNativeLinks(result.Links, links...)
-		result.Writable = append(result.Writable, Mount{Source: resolved, Target: resolved})
-		if err := watchNativePath(&watch, path); err != nil {
-			return NativeRuntime{}, err
-		}
-	}
-	if err := validateNativeGrant(request, request.Executable); err != nil {
-		return NativeRuntime{}, err
-	}
-	resolved, links, err := nativeResolveLinks(request.Executable)
-	if err != nil {
-		return NativeRuntime{}, fmt.Errorf("native sandbox executable: %w", err)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
-		return NativeRuntime{}, fmt.Errorf("native sandbox executable must be an executable regular file: %s", request.Executable)
-	}
-	result.Links = appendNativeLinks(links, result.Links...)
-	if err := watchNativePath(&watch, request.Executable); err != nil {
-		return NativeRuntime{}, err
-	}
-	if err := resolveNativeInstallation(request, resolved, &result, &watch); err != nil {
-		return NativeRuntime{}, err
-	}
-	for _, link := range result.Links {
-		if err := watchNativePath(&watch, link.Path); err != nil {
-			return NativeRuntime{}, err
-		}
-	}
+
 	if r.detect == nil {
 		return NativeRuntime{}, fmt.Errorf("native sandbox: no trusted version detector")
 	}
@@ -156,15 +105,129 @@ func (r *NativeRuntimeResolver) Resolve(ctx context.Context, request NativeRunti
 	if strings.TrimSpace(result.Version) == "" {
 		return NativeRuntime{}, fmt.Errorf("native sandbox: %s did not report a version", request.Provider)
 	}
-	primary, err := filepath.EvalSymlinks(profilePaths[0])
+	if err := validateNativeRuntimeVersion(request.Provider, result.Version); err != nil {
+		return NativeRuntime{}, err
+	}
+
+	r.entries[key] = nativeRuntimeEntry{runtime: cloneNativeRuntime(result), watch: watch}
+	return result, nil
+}
+
+func normalizeNativeRuntimeRequest(request NativeRuntimeRequest) (NativeRuntimeRequest, error) {
+	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	if !ProviderSupportsNativeHost(request.Provider) {
+		return request, fmt.Errorf("native sandbox: provider %q is not supported", request.Provider)
+	}
+	if err := nativeAbsolutePath(request.Home); err != nil {
+		return request, fmt.Errorf("native sandbox home: %w", err)
+	}
+	if err := nativeAbsolutePath(request.Executable); err != nil {
+		return request, fmt.Errorf("native sandbox executable: %w", err)
+	}
+	selectors := make(map[string]string)
+	for _, key := range nativeProfileEnvKeys {
+		if value := request.Env[key]; value != "" {
+			selectors[key] = value
+		}
+	}
+	request.Env = selectors
+	return request, nil
+}
+
+// ResolveNativeInstallation resolves original code and profile paths without
+// executing code or asserting a CLI version. Only the isolated version probe
+// uses this layout; task launches require NativeRuntimeResolver.Resolve.
+func ResolveNativeInstallation(request NativeRuntimeRequest) (NativeRuntime, error) {
+	normalized, err := normalizeNativeRuntimeRequest(request)
 	if err != nil {
 		return NativeRuntime{}, err
+	}
+	result, _, err := resolveNativeRuntimeLayout(normalized)
+	return result, err
+}
+
+func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []nativeWatch, error) {
+	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, Home: request.Home, Env: make(map[string]string)}
+	var watch []nativeWatch
+	profilePaths, err := nativeProfilePaths(request, &result)
+	if err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	for _, path := range profilePaths {
+		if err := validateNativeGrant(request, path); err != nil {
+			return NativeRuntime{}, nil, fmt.Errorf("native sandbox profile: %w", err)
+		}
+		if err := os.MkdirAll(path, 0700); err != nil {
+			return NativeRuntime{}, nil, fmt.Errorf("native sandbox profile directory: %w", err)
+		}
+		resolved, links, err := nativeResolveLinks(path)
+		if err != nil {
+			return NativeRuntime{}, nil, err
+		}
+		result.Links = appendNativeLinks(result.Links, links...)
+		result.Writable = append(result.Writable, Mount{Source: resolved, Target: resolved})
+		if err := watchNativePath(&watch, path); err != nil {
+			return NativeRuntime{}, nil, err
+		}
+	}
+	if err := validateNativeGrant(request, request.Executable); err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	resolved, links, err := nativeResolveLinks(request.Executable)
+	if err != nil {
+		return NativeRuntime{}, nil, fmt.Errorf("native sandbox executable: %w", err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		return NativeRuntime{}, nil, fmt.Errorf("native sandbox executable must be an executable regular file: %s", request.Executable)
+	}
+	result.Links = appendNativeLinks(links, result.Links...)
+	if err := watchNativePath(&watch, request.Executable); err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	if err := resolveNativeInstallation(request, resolved, &result, &watch); err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	for _, link := range result.Links {
+		if err := watchNativePath(&watch, link.Path); err != nil {
+			return NativeRuntime{}, nil, err
+		}
+	}
+	primary, err := filepath.EvalSymlinks(profilePaths[0])
+	if err != nil {
+		return NativeRuntime{}, nil, err
 	}
 	// HOME aliases must not create independent leases for the same native store.
 	digest := sha256.Sum256([]byte(request.Provider + "\x00" + primary))
 	result.ProfileKey = hex.EncodeToString(digest[:])
-	r.entries[key] = nativeRuntimeEntry{runtime: cloneNativeRuntime(result), watch: watch}
-	return result, nil
+	return result, watch, nil
+}
+
+var nativeMcodeVersionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+].*)?$`)
+
+func validateNativeRuntimeVersion(provider, version string) error {
+	if provider != "mcode" {
+		return nil
+	}
+	match := nativeMcodeVersionPattern.FindStringSubmatch(version)
+	if len(match) != 4 {
+		return fmt.Errorf("native MCode requires a recognized CLI version, got %q", version)
+	}
+	parts := [3]int{}
+	for i := range parts {
+		number, err := strconv.Atoi(match[i+1])
+		if err != nil {
+			return fmt.Errorf("native MCode version is invalid")
+		}
+		parts[i] = number
+	}
+	if parts[0] == 0 && (parts[1] < 6 || parts[1] == 6 && parts[2] < 13) {
+		return fmt.Errorf("native MCode requires 0.6.13 or newer: %s creates its migration lock beside the profile, outside the permitted write paths; upgrade MCode with its updater or explicitly select the docker backend", version)
+	}
+	if parts == [3]int{0, 6, 13} {
+		return fmt.Errorf("native MCode %s is unavailable: its PID-based recovery can release a live host session lease from a private PID namespace; explicitly select the docker backend until a namespace-safe MCode release is verified", version)
+	}
+	return nil
 }
 
 func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]string, error) {
@@ -352,6 +415,9 @@ func resolveNativeInstallation(request NativeRuntimeRequest, executable string, 
 			return fmt.Errorf("native sandbox: MCode Node runtime: %w", err)
 		}
 		result.Links = appendNativeLinks(result.Links, links...)
+		if err := resolveNativeELF(request, nodeExecutable, result, watch); err != nil {
+			return err
+		}
 		nodeRoot := filepath.Dir(nodeExecutable)
 		if filepath.Base(nodeRoot) == "bin" {
 			nodeRoot = filepath.Dir(nodeRoot)
@@ -371,7 +437,19 @@ func resolveNativeInstallation(request NativeRuntimeRequest, executable string, 
 		return fmt.Errorf("native sandbox installation: %w", err)
 	}
 	result.ReadOnly = append(result.ReadOnly, Mount{Source: root, Target: root, ReadOnly: true})
-	return watchNativePath(watch, root)
+	if err := watchNativePath(watch, root); err != nil {
+		return err
+	}
+	if err := resolveNativeELF(request, executable, result, watch); err != nil {
+		return err
+	}
+	if request.Provider == "cursor" {
+		node := filepath.Join(root, "node")
+		if info, err := os.Stat(node); err == nil && info.Mode().IsRegular() {
+			return resolveNativeELF(request, node, result, watch)
+		}
+	}
+	return nil
 }
 
 func watchNativePath(watch *[]nativeWatch, path string) error {

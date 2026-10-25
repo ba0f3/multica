@@ -74,7 +74,7 @@ func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable s
 	if err != nil {
 		return "", err
 	}
-	layout, err := sandbox.NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "installation-only", nil }).Resolve(ctx, request)
+	layout, err := sandbox.ResolveNativeInstallation(request)
 	if err != nil {
 		return "", err
 	}
@@ -96,6 +96,11 @@ func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable s
 		}
 	}
 	extras := append([]sandbox.Mount{}, layout.ReadOnly...)
+	network, err := sandbox.RuntimeNetworkMounts()
+	if err != nil {
+		return "", err
+	}
+	extras = append(extras, network...)
 	for i, mount := range layout.Writable {
 		source := filepath.Join(root, fmt.Sprintf("profile-%d", i))
 		if err := os.Mkdir(source, 0700); err != nil {
@@ -114,7 +119,7 @@ func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable s
 	for key, value := range layout.Env {
 		probeEnv[key] = value
 	}
-	policy := sandbox.Policy{TaskRoot: root, HomeDir: filepath.Join(root, "home"), HostHome: layout.Home, TempDir: filepath.Join(root, "tmp"), CheckoutDir: filepath.Join(root, "cwd"), RuntimeRoots: sandboxRuntimeRoots(), ExtraMounts: extras, Links: layout.Links, AllowedRoots: []string{root}, AllowedExactPaths: extraMountSources(layout.ReadOnly), Env: probeEnv, Command: []string{executable, "--version"}}
+	policy := sandbox.Policy{TaskRoot: root, HomeDir: filepath.Join(root, "home"), HostHome: layout.Home, TempDir: filepath.Join(root, "tmp"), CheckoutDir: filepath.Join(root, "cwd"), RuntimeRoots: sandboxRuntimeRoots(), ExtraMounts: extras, Links: layout.Links, AllowedRoots: []string{root}, AllowedExactPaths: extraMountSources(extras), Env: probeEnv, Command: []string{executable, "--version"}}
 	args, err := sandbox.BuildArgs(policy, self)
 	if err != nil {
 		return "", err
@@ -148,6 +153,9 @@ type nativeAttemptBackend struct {
 }
 
 func (b *nativeAttemptBackend) Execute(ctx context.Context, prompt string, opts agent.ExecOptions) (*agent.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var lease *sandbox.NativeProfileLease
 	if b.profile.ProfileLimit == 1 {
 		root := os.Getenv("XDG_RUNTIME_DIR")
@@ -218,6 +226,11 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 		}
 	}
 	extras := append([]sandbox.Mount{}, runtime.Writable...)
+	network, err := sandbox.RuntimeNetworkMounts()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+	}
+	extras = append(extras, network...)
 	extras = append(extras, runtime.ReadOnly...)
 	if env.MulticaConfigRoot != "" {
 		extras = append(extras, sandbox.Mount{Source: env.MulticaConfigRoot, Target: env.MulticaConfigRoot})

@@ -335,3 +335,14 @@ func TestIPCBackendOriginalCwdAndCleanupFailure(t *testing.T) {
 		t.Fatalf("cwd=%s", manifest.Exec.Cwd)
 	}
 }
+
+func TestIPCBackendAlreadyCanceledDoesNotLaunch(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	launched := false
+	backend := &IPCBackend{Provider: "cursor", Launch: func() (*exec.Cmd, error) { launched = true; return exec.Command("/bin/true"), nil }}
+	_, err := backend.Execute(ctx, "canceled", agent.ExecOptions{})
+	if !errors.Is(err, context.Canceled) || launched {
+		t.Fatalf("canceled attempt reached launch: launched=%v error=%v", launched, err)
+	}
+}

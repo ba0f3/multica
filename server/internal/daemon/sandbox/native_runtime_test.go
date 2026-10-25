@@ -181,7 +181,7 @@ func TestNativeRuntimeRejectsUntrustedProfileEscape(t *testing.T) {
 
 func TestNativeRuntimeDeclaresMcodeLockScope(t *testing.T) {
 	fixture := newNativeInstallFixture(t, "mcode")
-	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.6.13", nil })
+	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.7.0", nil })
 	got, err := resolver.Resolve(t.Context(), fixture.request)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestNativeRuntimeInvalidatesRetargetedParentSymlink(t *testing.T) {
 
 func TestNativeRuntimeProfileLeaseIdentitySurvivesHomeAliases(t *testing.T) {
 	fixture := newNativeInstallFixture(t, "mcode")
-	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.6.13", nil })
+	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.7.0", nil })
 	first, err := resolver.Resolve(t.Context(), fixture.request)
 	if err != nil {
 		t.Fatal(err)
@@ -287,5 +287,35 @@ func TestNativeRuntimeProfileLeaseIdentitySurvivesHomeAliases(t *testing.T) {
 	}
 	if second.ProfileKey != first.ProfileKey {
 		t.Fatal("the same physical MCode profile could acquire two independent attempt leases")
+	}
+}
+
+func TestNativeRuntimeRejectsMcodeSiblingMigrationLockVersions(t *testing.T) {
+	fixture := newNativeInstallFixture(t, "mcode")
+	for _, version := range []string{"0.6.12", "0.6.13", "0.7.0", "1.0.0"} {
+		t.Run(version, func(t *testing.T) {
+			resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return version, nil })
+			_, err := resolver.Resolve(t.Context(), fixture.request)
+			if version == "0.6.12" {
+				if err == nil || !strings.Contains(err.Error(), "0.6.13") || !strings.Contains(err.Error(), "migration lock") {
+					t.Fatalf("unsafe native MCode did not explain recovery: %v", err)
+				}
+			} else if version == "0.6.13" {
+				if err == nil || !strings.Contains(err.Error(), "live host") {
+					t.Fatalf("cross-namespace lease recovery was allowed: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestNativeRuntimeRejectsMcodeCrossNamespaceLeaseRecovery(t *testing.T) {
+	fixture := newNativeInstallFixture(t, "mcode")
+	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.6.13", nil })
+	_, err := resolver.Resolve(t.Context(), fixture.request)
+	if err == nil || !strings.Contains(err.Error(), "live host") || !strings.Contains(err.Error(), "docker") {
+		t.Fatalf("unsafe cross-namespace lease recovery was allowed: %v", err)
 	}
 }

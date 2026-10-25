@@ -1,3 +1,5 @@
+//go:build linux
+
 package daemon
 
 import (
@@ -391,5 +393,65 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"messa
 	}
 	if calls != 1 || cache.prepareCount() != 2 || len(cache.recordedDependents()) != 2 {
 		t.Fatalf("native warm/cache invariants: probes=%d prepares=%d dependents=%d", calls, cache.prepareCount(), len(cache.recordedDependents()))
+	}
+}
+
+func TestNativeMcodeLeaseBlocksTheSecondWorkerUntilCleanup(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	releaseFile := filepath.Join(t.TempDir(), "release")
+	t.Setenv("NATIVE_LEASE_RELEASE", releaseFile)
+	script := `read _
+printf '%s\n' '{"type":"worker_ready"}'
+while [ ! -f "$NATIVE_LEASE_RELEASE" ]; do sleep 0.01; done
+printf '%s\n' '{"type":"result","result":{"Status":"completed"}}'
+`
+	ready := make(chan struct{})
+	firstWorker := &sandbox.IPCBackend{Provider: "mcode", Launch: func() (*exec.Cmd, error) { return exec.Command("/bin/sh", "-c", script), nil }, OnWorkerReady: func() { close(ready) }}
+	secondWorker := &sandbox.IPCBackend{Provider: "mcode", Launch: func() (*exec.Cmd, error) { return exec.Command("/bin/sh", "-c", script), nil }}
+	profile := sandbox.NativeRuntime{ProfileLimit: 1, ProfileKey: strings.Repeat("e", 64)}
+	first, err := (&nativeAttemptBackend{worker: firstWorker, profile: profile}).Execute(t.Context(), "first", agent.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.WriteFile(releaseFile, []byte("release"), 0600)
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("first worker did not become ready")
+	}
+	type started struct {
+		session *agent.Session
+		err     error
+	}
+	second := make(chan started, 1)
+	go func() {
+		session, err := (&nativeAttemptBackend{worker: secondWorker, profile: profile}).Execute(t.Context(), "second", agent.ExecOptions{})
+		second <- started{session, err}
+	}()
+	select {
+	case result := <-second:
+		t.Fatalf("second worker bypassed native profile lease: %v", result.err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if err := os.WriteFile(releaseFile, []byte("release"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range first.Messages {
+	}
+	if result := <-first.Result; result.Status != "completed" {
+		t.Fatalf("first: %+v", result)
+	}
+	select {
+	case result := <-second:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		for range result.session.Messages {
+		}
+		if final := <-result.session.Result; final.Status != "completed" {
+			t.Fatalf("second: %+v", final)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("profile lease remained held after cleanup")
 	}
 }
