@@ -1688,10 +1688,9 @@ func newRepoReadyTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
 		workspaces:   make(map[string]*workspaceState),
 		runtimeIndex: make(map[string]Runtime),
 	}
-	// Drain background syncs (started by registerTaskRepos) before the
-	// t.TempDir cache root is cleaned up, otherwise an in-flight clone/fetch
-	// races against the deletion and the test fails with a misleading
-	// "directory not empty" cleanup error.
+	// Drain background repo syncs before the t.TempDir cache root is cleaned
+	// up, otherwise an in-flight clone/fetch races against the deletion and the
+	// test fails with a misleading "directory not empty" cleanup error.
 	t.Cleanup(d.waitBackgroundSyncs)
 	return d
 }
@@ -4924,17 +4923,11 @@ func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
 	// the only repo URL the agent should be able to check out.
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	d.registerTaskRepos("ws-1", "task-project-only", []RepoData{{URL: sourceRepo}})
+	toSync := d.registerTaskRepos("ws-1", "task-project-only", []RepoData{{URL: sourceRepo}})
+	// registerTaskRepos no longer syncs in the background (runTask owns that);
+	// sync synchronously so the cache is populated before the assertions below.
+	d.syncWorkspaceRepos("ws-1", toSync)
 
-	// The async clone goroutine in registerTaskRepos may not have finished;
-	// poll briefly until the cache is populated so the test isn't racy.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if d.repoCache.Lookup("ws-1", sourceRepo) != "" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
 		t.Fatalf("expected repo to be cached after registerTaskRepos, but Lookup returned empty")
 	}
@@ -4971,13 +4964,8 @@ func TestRegisterTaskReposSurvivesWorkspaceRefresh(t *testing.T) {
 		})
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-	d.registerTaskRepos("ws-1", "task-refresh", []RepoData{{URL: sourceRepo}})
-
-	// Wait for the registration to populate the cache.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && d.repoCache.Lookup("ws-1", sourceRepo) == "" {
-		time.Sleep(20 * time.Millisecond)
-	}
+	toSync := d.registerTaskRepos("ws-1", "task-refresh", []RepoData{{URL: sourceRepo}})
+	d.syncWorkspaceRepos("ws-1", toSync)
 
 	if _, err := d.refreshWorkspaceRepos(context.Background(), "ws-1"); err != nil {
 		t.Fatalf("refreshWorkspaceRepos: %v", err)

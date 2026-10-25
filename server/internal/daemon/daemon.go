@@ -30,6 +30,8 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
+	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 	"github.com/multica-ai/multica/server/internal/selfexec"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -429,6 +431,21 @@ type repoCacheBackend interface {
 	CreateWorktree(params repocache.WorktreeParams) (*repocache.WorktreeResult, error)
 }
 
+// repoCachePreparer is implemented by repocache.Cache. It is optional so test
+// doubles of repoCacheBackend do not have to implement it; prepareTaskRepoCaches
+// fails closed when the configured cache cannot prepare a repo for a task.
+type repoCachePreparer interface {
+	Prepare(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error)
+}
+
+// repoCacheDependentRecorder is implemented by repocache.Cache. It is optional
+// so test doubles of repoCacheBackend do not have to implement it;
+// recordRepoCacheDependents fails closed when the configured cache cannot
+// record a workdir's dependency on its caches.
+type repoCacheDependentRecorder interface {
+	RecordDependents(string, repocache.Dependent) error
+}
+
 // Daemon is the local agent runtime that polls for and executes tasks.
 type Daemon struct {
 	cfg        Config
@@ -707,11 +724,12 @@ type Daemon struct {
 	// waits. See MUL-2663.
 	localPathLocks *LocalPathLocker
 
-	// bgSyncs tracks background goroutines started by registerTaskRepos so
-	// callers (notably tests using t.TempDir-backed cache roots) can wait for
-	// them to drain before tearing the daemon down. Without this the bg
-	// goroutine can race against t.TempDir cleanup, leaving a partially
-	// deleted bare clone and an unrelated `not empty` cleanup failure.
+	// bgSyncs tracks background repo-sync goroutines started by runTask for
+	// non-Docker-cache tasks so callers (notably tests using t.TempDir-backed
+	// cache roots) can wait for them to drain before tearing the daemon down.
+	// Without this the bg goroutine can race against t.TempDir cleanup, leaving
+	// a partially deleted bare clone and an unrelated `not empty` cleanup
+	// failure.
 	bgSyncs sync.WaitGroup
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
@@ -2117,6 +2135,8 @@ func (d *Daemon) run(ctx context.Context, healthLn net.Listener) error {
 		"gc_enabled", d.cfg.GCEnabled,
 		"auto_update", d.cfg.AutoUpdateEnabled,
 		"launched_by", d.cfg.LaunchedBy,
+		"docker_task_ca_bundle", d.cfg.DockerTaskCABundle,
+		"docker_task_ca_bundle_exists", dockerTaskCABundleExists(d.cfg.DockerTaskCABundle),
 	)
 
 	// Mark the daemon-owned workspaces tree before any task runs. A sandbox
@@ -3298,15 +3318,18 @@ func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 
 // registerTaskRepos merges task-scoped repos (e.g. project github_repo
 // resources lifted into resp.Repos by the claim handler) into the workspace's
-// allowlist and kicks off a cache sync for any URLs that aren't yet cached.
+// allowlist and returns the repos that still need a cache sync. The caller
+// decides when and how to sync them: a Docker-cache task prepares them
+// synchronously through prepareTaskRepoCaches instead, while every other task
+// keeps the historical background sync.
 //
 // It's safe to call with the workspace's own repos — duplicates are
 // idempotent. Called from runTask before the agent spawns so
 // `multica repo checkout` accepts project-only URLs without an extra round
 // trip back to GetWorkspaceRepos (which doesn't carry project resources).
-func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData) {
+func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData) []RepoData {
 	if len(repos) == 0 {
-		return
+		return nil
 	}
 
 	type repoCandidate struct {
@@ -3318,7 +3341,7 @@ func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData)
 	ws, ok := d.workspaces[workspaceID]
 	if !ok {
 		d.mu.Unlock()
-		return
+		return nil
 	}
 	if ws.taskRepoURLs == nil {
 		ws.taskRepoURLs = make(map[string]struct{}, len(repos))
@@ -3359,18 +3382,7 @@ func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData)
 		}
 		toSync = append(toSync, RepoData{URL: candidate.url})
 	}
-
-	if d.repoCache != nil && len(toSync) > 0 {
-		// Sync in the background — same shape used at workspace registration.
-		// `ensureRepoReady` reports a meaningful error if the cache isn't ready
-		// yet, so the agent's first checkout will surface a sync failure
-		// without silently treating it as a config bug.
-		d.bgSyncs.Add(1)
-		go func() {
-			defer d.bgSyncs.Done()
-			d.syncWorkspaceRepos(workspaceID, toSync)
-		}()
-	}
+	return toSync
 }
 
 func (d *Daemon) taskRepoDefaultRef(workspaceID, taskID, repoURL string) string {
@@ -3400,11 +3412,11 @@ func (d *Daemon) clearTaskRepoRefs(workspaceID, taskID string) {
 	}
 }
 
-// waitBackgroundSyncs blocks until every background sync started by
-// registerTaskRepos has finished. Intended for test teardown: tests that
-// hand the daemon a t.TempDir-backed repo cache must call this before
-// returning, otherwise an in-flight clone/fetch can race against TempDir
-// cleanup and surface as an unrelated "directory not empty" failure.
+// waitBackgroundSyncs blocks until every background sync started by runTask
+// has finished. Intended for test teardown: tests that hand the daemon a
+// t.TempDir-backed repo cache must call this before returning, otherwise an
+// in-flight clone/fetch can race against TempDir cleanup and surface as an
+// unrelated "directory not empty" failure.
 func (d *Daemon) waitBackgroundSyncs() {
 	d.bgSyncs.Wait()
 }
@@ -3433,6 +3445,199 @@ func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, workspaceID stri
 		d.logger.Warn("repo cache sync failed", "workspace_id", workspaceID, "error", err)
 	}
 	return err
+}
+
+// usesDockerRepoCache reports whether a task's repos should be prepared into
+// the workspace cache and bind-mounted read-only into a Docker worker. It is
+// true only when the sandbox is enabled with the docker backend and the
+// provider is one that runs inside the isolated tool boundary.
+func (d *Daemon) usesDockerRepoCache(provider string) bool {
+	return d.cfg.SandboxEnabled &&
+		d.cfg.TaskSandboxBackend == "docker" &&
+		sandbox.ProviderSupportsIsolatedTools(provider)
+}
+
+// workspaceRepoCacheRoot is the per-workspace directory under which the repo
+// cache stores bare clones. It mirrors the root repocache.New is handed.
+func (d *Daemon) workspaceRepoCacheRoot(workspaceID string) string {
+	return filepath.Join(d.cfg.WorkspacesRoot, ".repos", workspaceID)
+}
+
+// prepareTaskRepoCaches makes every task repo available in the workspace cache
+// and resolves the commit each should be checked out at, returning one entry
+// per prepared repo for the manifest and Docker mounts.
+//
+// Fetch/ref failures fail the task: unlike the tolerant background sync, a
+// prepare failure means the task is about to receive code, so it must never
+// fall back to a stale snapshot. Each returned BarePath is validated to live
+// strictly inside the resolved workspace cache root before it is trusted.
+func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]workercheckout.Entry, error) {
+	if d.repoCache == nil {
+		return nil, errors.New("repo cache is not configured")
+	}
+	preparer, ok := d.repoCache.(repoCachePreparer)
+	if !ok {
+		return nil, errors.New("repo cache does not support Prepare")
+	}
+
+	// Dedupe task.Repos by URL (first Ref wins) and skip empty URLs.
+	seen := make(map[string]struct{}, len(task.Repos))
+	infos := make([]repocache.RepoInfo, 0, len(task.Repos))
+	for _, repo := range task.Repos {
+		url := strings.TrimSpace(repo.URL)
+		if url == "" {
+			continue
+		}
+		if _, dup := seen[url]; dup {
+			continue
+		}
+		seen[url] = struct{}{}
+		infos = append(infos, repocache.RepoInfo{URL: url, Ref: strings.TrimSpace(repo.Ref)})
+	}
+	if len(infos) == 0 {
+		return nil, nil
+	}
+
+	prepared, err := preparer.Prepare(ctx, task.WorkspaceID, infos)
+	if err != nil {
+		return nil, err
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(d.workspaceRepoCacheRoot(task.WorkspaceID))
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace cache root: %w", err)
+	}
+
+	entries := make([]workercheckout.Entry, 0, len(prepared))
+	seenPaths := make(map[string]struct{}, len(prepared))
+	for _, repo := range prepared {
+		resolved, err := resolvePreparedRepoCachePath(repo.BarePath, resolvedRoot)
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := seenPaths[resolved]; dup {
+			return nil, fmt.Errorf("duplicate cache path %q", repo.BarePath)
+		}
+		seenPaths[resolved] = struct{}{}
+		entries = append(entries, workercheckout.Entry{
+			URL:       repo.URL,
+			Ref:       repo.Ref,
+			CommitSHA: repo.CommitSHA,
+			CachePath: repo.BarePath,
+		})
+	}
+	return entries, nil
+}
+
+// resolvePreparedRepoCachePath validates barePath — absolute, cleaned, and
+// resolving strictly inside the already-resolved workspace cache root — and
+// returns its resolved form. It is the boundary that keeps a tampered or
+// misbehaving Prepare from handing the worker an arbitrary host path to mount.
+func resolvePreparedRepoCachePath(barePath, resolvedWorkspaceCacheRoot string) (string, error) {
+	if !filepath.IsAbs(barePath) {
+		return "", fmt.Errorf("bare path %q is not absolute", barePath)
+	}
+	if cleaned := filepath.Clean(barePath); cleaned != barePath {
+		return "", fmt.Errorf("bare path %q is not clean (want %q)", barePath, cleaned)
+	}
+	resolved, err := filepath.EvalSymlinks(barePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve bare path %q: %w", barePath, err)
+	}
+	if !isStrictChild(resolved, resolvedWorkspaceCacheRoot) {
+		return "", fmt.Errorf("bare path %q resolves outside the workspace cache root %q", barePath, resolvedWorkspaceCacheRoot)
+	}
+	return resolved, nil
+}
+
+// repoCachePathsForReusedWorkdir returns the cache paths a reused workdir's
+// checkouts already reference through Git alternates, restricted to paths that
+// still exist strictly under the resolved workspace cache root. These are
+// extra read-only mounts for a Docker worker so an old checkout keeps working
+// after a task's repo set changes; they are never listed in the manifest.
+func (d *Daemon) repoCachePathsForReusedWorkdir(workspaceID, workDir string) ([]string, error) {
+	if workDir == "" {
+		return nil, nil
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(d.workspaceRepoCacheRoot(workspaceID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve workspace cache root: %w", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(workDir, "*", ".git", "objects", "info", "alternates"))
+	if err != nil {
+		return nil, fmt.Errorf("glob workdir alternates: %w", err)
+	}
+
+	seen := make(map[string]struct{})
+	var paths []string
+	for _, alternates := range matches {
+		data, err := os.ReadFile(alternates)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || !filepath.IsAbs(line) {
+				continue
+			}
+			resolved, err := filepath.EvalSymlinks(line)
+			if err != nil {
+				continue // path no longer exists or is unreadable
+			}
+			if !isStrictChild(resolved, resolvedRoot) {
+				continue
+			}
+			// Keep the raw path the checkout actually references: the alternates
+			// file names the cache through whatever spelling the checkout was
+			// written with, and that is the path the worker must still see
+			// mounted when the cache root sits behind a symlink.
+			raw := filepath.Clean(line)
+			if _, dup := seen[raw]; dup {
+				continue
+			}
+			seen[raw] = struct{}{}
+			paths = append(paths, raw)
+		}
+	}
+	return paths, nil
+}
+
+// recordRepoCacheDependents records that env.WorkDir's checkouts depend on
+// cachePaths so the repo-cache GC retains them while the workdir exists. It
+// fails closed: if the cache cannot record the dependency, the task must not
+// launch and then lose its cache mid-run.
+func (d *Daemon) recordRepoCacheDependents(workspaceID string, env *execenv.Environment, taskID, attemptID string, cachePaths []string) error {
+	recorder, ok := d.repoCache.(repoCacheDependentRecorder)
+	if !ok {
+		return errors.New("record repo cache dependents: repo cache does not support RecordDependents")
+	}
+	if err := recorder.RecordDependents(workspaceID, repocache.Dependent{
+		WorkDir:    env.WorkDir,
+		CachePaths: cachePaths,
+		TaskID:     taskID,
+		AttemptID:  attemptID,
+	}); err != nil {
+		return fmt.Errorf("record repo cache dependents: %w", err)
+	}
+	return nil
+}
+
+// isStrictChild reports whether path lies strictly below root (not equal to it
+// and not a sibling). Both arguments are expected to already be resolved
+// (symlink-free) and cleaned.
+func isStrictChild(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." || rel == "" || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (d *Daemon) refreshWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
@@ -7738,8 +7943,29 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// in the per-workspace allowlist and the local cache, otherwise
 	// `multica repo checkout` would reject project-only URLs that aren't also
 	// bound at the workspace level.
-	d.registerTaskRepos(task.WorkspaceID, task.ID, task.Repos)
+	toSync := d.registerTaskRepos(task.WorkspaceID, task.ID, task.Repos)
 	defer d.clearTaskRepoRefs(task.WorkspaceID, task.ID)
+
+	// A Docker-cache task receives its code from the prepared bare caches, so
+	// it must fetch and resolve them before launch — strictly, with no fallback
+	// to a stale snapshot. Every other task keeps the historical background
+	// sync (and `multica repo checkout` still clones on demand inside the
+	// boundary).
+	dockerRepoCache := d.usesDockerRepoCache(provider)
+	var taskRepoCaches []workercheckout.Entry
+	if dockerRepoCache {
+		prepared, prepareErr := d.prepareTaskRepoCaches(prepareCtx, task)
+		if prepareErr != nil {
+			return TaskResult{}, fmt.Errorf("prepare task repo cache: %w", prepareErr)
+		}
+		taskRepoCaches = prepared
+	} else if len(toSync) > 0 {
+		d.bgSyncs.Add(1)
+		go func() {
+			defer d.bgSyncs.Done()
+			d.syncWorkspaceRepos(task.WorkspaceID, toSync)
+		}()
+	}
 
 	entry, ok := d.agents()[provider]
 	// A custom runtime profile (MUL-3284) overrides the executable path: the
@@ -8310,6 +8536,48 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		d.markActiveEnvRoot(env.RootDir)
 		defer d.unmarkActiveEnvRoot(env.RootDir)
 	}
+	// Task 6: before an isolated Docker launch, publish the repo-cache manifest
+	// and record the workdir's dependency on its caches, and collect the
+	// reused-workdir cache paths that must stay mounted for old checkouts. A
+	// failure to write or record fails the task: the cache lifecycle must not
+	// outlive the workdir's use of it.
+	var extraCachePaths []string
+	if dockerRepoCache {
+		reused, reusedErr := d.repoCachePathsForReusedWorkdir(task.WorkspaceID, env.WorkDir)
+		if reusedErr != nil {
+			return TaskResult{}, fmt.Errorf("resolve reused workdir repo cache paths: %w", reusedErr)
+		}
+		extraCachePaths = reused
+
+		if len(taskRepoCaches) > 0 {
+			manifestPath := filepath.Join(env.RootDir, workercheckout.ManifestFileName)
+			if err := workercheckout.WriteManifest(manifestPath, workercheckout.Manifest{Repos: taskRepoCaches}); err != nil {
+				return TaskResult{}, fmt.Errorf("write task repo cache manifest: %w", err)
+			}
+		}
+
+		cachePaths := make([]string, 0, len(taskRepoCaches)+len(reused))
+		seenCachePath := make(map[string]struct{}, len(taskRepoCaches)+len(reused))
+		for _, entry := range taskRepoCaches {
+			if _, dup := seenCachePath[entry.CachePath]; dup {
+				continue
+			}
+			seenCachePath[entry.CachePath] = struct{}{}
+			cachePaths = append(cachePaths, entry.CachePath)
+		}
+		for _, path := range reused {
+			if _, dup := seenCachePath[path]; dup {
+				continue
+			}
+			seenCachePath[path] = struct{}{}
+			cachePaths = append(cachePaths, path)
+		}
+		if len(cachePaths) > 0 {
+			if err := d.recordRepoCacheDependents(task.WorkspaceID, env, task.ID, attemptID, cachePaths); err != nil {
+				return TaskResult{}, err
+			}
+		}
+	}
 	// Finalize the worktree on EVERY exit path, success or failure: commit
 	// whatever the agent left uncommitted, then unregister the worktree from
 	// the user's repo. Deferred against the named return so a task that fails
@@ -8735,7 +9003,25 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// spawns run inside a bubblewrap boundary instead of on the host. A
 	// failure to build that boundary fails the run: a task configured to be
 	// isolated never executes outside it.
-	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID)
+	//
+	// The isolation markers are set before the backend is built so both
+	// docker and bwrap snapshot them; Task 6 passes the prepared repo cache
+	// entries and reused-workdir cache paths here.
+	if d.cfg.SandboxEnabled {
+		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
+		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
+	}
+	// Task 7: hand the Docker worker the CA bundle its git/curl/node/python
+	// must trust for private Git hosts. A configured-but-invalid extra bundle
+	// fails the task rather than silently dropping trust.
+	if dockerRepoCache {
+		bundlePath, bundleErr := d.writeWorkerCABundle(env.RootDir, d.cfg.DockerTaskCABundle)
+		if bundleErr != nil {
+			return TaskResult{}, fmt.Errorf("write worker CA bundle: %w", bundleErr)
+		}
+		env.WorkerCABundlePath = bundlePath
+	}
+	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID, taskRepoCaches, extraCachePaths)
 	if sandboxErr != nil {
 		taskLog.Error("sandbox: the attempt cannot be isolated; refusing to run on the host", "error", sandboxErr)
 		return TaskResult{}, sandboxErr
@@ -8901,8 +9187,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		HostRepoCheckoutDisabled: sandboxed != nil,
 	})
 	if sandboxed != nil {
-		agentEnv["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
-		agentEnv["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
 		if env != nil {
 			taskHome := filepath.Join(env.RootDir, "home")
 			agentEnv["HOME"] = taskHome
@@ -10276,7 +10560,7 @@ func mergeUsage(a, b map[string]agent.TokenUsage) map[string]agent.TokenUsage {
 func repoDataToInfo(repos []RepoData) []repocache.RepoInfo {
 	info := make([]repocache.RepoInfo, len(repos))
 	for i, r := range repos {
-		info[i] = repocache.RepoInfo{URL: r.URL}
+		info[i] = repocache.RepoInfo{URL: r.URL, Ref: r.Ref}
 	}
 	return info
 }

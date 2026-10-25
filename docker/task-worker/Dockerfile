@@ -17,6 +17,11 @@ FROM debian:bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git openssh-client bash \
   && rm -rf /var/lib/apt/lists/*
+# The internal CA is baked into every worker image so agents can reach
+# self-signed endpoints without per-daemon configuration. This is a fork
+# customization: remove this file for an upstream or public build.
+COPY docker/task-worker/ca/MUOI_TIEU_XANH.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 COPY --from=builder /out/multica /usr/local/bin/multica
 USER 65532:65532
 WORKDIR /workspace/repo

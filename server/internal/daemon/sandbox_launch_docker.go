@@ -10,6 +10,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
+	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -19,6 +20,8 @@ func (d *Daemon) dockerBackend(
 	env *execenv.Environment,
 	agentSocket string,
 	attemptID string,
+	repos []workercheckout.Entry,
+	extraCachePaths []string,
 ) (agent.Backend, error) {
 	if env == nil {
 		return nil, fmt.Errorf("%w: no execution environment", errSandboxUnavailable)
@@ -56,6 +59,27 @@ func (d *Daemon) dockerBackend(
 		env.HermesHome,
 	)...)
 
+	repoBinds, err := sandbox.DockerRepoCacheBinds(repos, extraCachePaths)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+	}
+	if err := repoCacheOverlapError(repos, extraCachePaths, env, homeDir, tempDir); err != nil {
+		return nil, err
+	}
+	binds = append(binds, repoBinds...)
+	if len(repos) > 0 {
+		if env.MulticaConfigRoot == "" {
+			return nil, fmt.Errorf("%w: repo cache requires a task config root", errSandboxUnavailable)
+		}
+		// Bind the manifest only after DockerConfigBinds so the .multica parent
+		// directory exists when docker creates the file mount.
+		binds = append(binds, sandbox.DockerBind(
+			filepath.Join(env.RootDir, workercheckout.ManifestFileName),
+			sandbox.RepoManifestPath,
+			"ro",
+		))
+	}
+
 	if agentSocket != "" {
 		socketDir := filepath.Dir(agentSocket)
 		if err := os.MkdirAll(socketDir, 0o700); err != nil {
@@ -77,6 +101,15 @@ func (d *Daemon) dockerBackend(
 	containerEnv := sandbox.ContainerEnv(agentConfig.Env)
 	if agentSocket != "" {
 		containerEnv["SSH_AUTH_SOCK"] = sandbox.AgentSocketPath
+	}
+	if env.WorkerCABundlePath != "" {
+		// Mount the bundle read-only after the config binds so the .multica
+		// parent exists, and point every TLS tool at it before the environment
+		// is written to the manifest and argv.
+		binds = append(binds, sandbox.DockerBind(env.WorkerCABundlePath, sandbox.RepoCABundlePath, "ro"))
+		for key, value := range sandbox.CAEnv(sandbox.RepoCABundlePath) {
+			containerEnv[key] = value
+		}
 	}
 
 	dockerUser := strings.TrimSpace(d.cfg.DockerTaskUser)
@@ -128,6 +161,37 @@ func (d *Daemon) dockerBackend(
 			return exec.Command(dockerPath, runArgs...), nil
 		},
 	}, nil
+}
+
+// repoCacheOverlapError rejects any cache path that equals or contains one of
+// the sandbox's own roots — the checkout, home, temp, or task config root —
+// and vice versa. Mounting a cache over one of those would hand the worker a
+// directory the boundary owns, or replace one outright.
+func repoCacheOverlapError(repos []workercheckout.Entry, extraCachePaths []string, env *execenv.Environment, homeDir, tempDir string) error {
+	roots := []string{env.WorkDir, homeDir, tempDir, env.MulticaConfigRoot}
+	check := func(path string) error {
+		path = filepath.Clean(path)
+		for _, root := range roots {
+			if root == "" {
+				continue
+			}
+			if isUnderPath(path, root) || isUnderPath(root, path) {
+				return fmt.Errorf("%w: repo cache path %q overlaps the sandbox root %q", errSandboxUnavailable, path, root)
+			}
+		}
+		return nil
+	}
+	for _, entry := range repos {
+		if err := check(entry.CachePath); err != nil {
+			return err
+		}
+	}
+	for _, path := range extraCachePaths {
+		if err := check(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func parseDockerMemoryBytes(raw string) (int64, error) {

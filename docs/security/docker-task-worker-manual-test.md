@@ -43,6 +43,35 @@ CLIs into the image for local dev.
 
 Record **image digest** in your test notes.
 
+### Internal CA baked into the worker image
+
+This fork bakes `docker/task-worker/ca/MUOI_TIEU_XANH.crt` into the worker image
+at build time, so every worker trusts the internal CA with no daemon
+configuration:
+
+```bash
+make task-worker-image
+# tags multica/task-worker:local and ghcr.io/ba0f3/multica-task-worker:latest
+```
+
+The default daemon image (`ghcr.io/ba0f3/multica-task-worker:latest`) already
+includes it; no `MULTICA_DOCKER_TASK_IMAGE` or `MULTICA_DOCKER_TASK_CA_BUNDLE`
+is needed for this CA. Release builds from this branch include it too.
+
+Verify the installed certificate and merged bundle in the image:
+
+```bash
+docker run --rm --entrypoint sh <image> -c 'test -f /usr/local/share/ca-certificates/MUOI_TIEU_XANH.crt && grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt'
+```
+
+`MULTICA_DOCKER_TASK_CA_BUNDLE` remains available for **additional** CAs at
+runtime. When it is set (or the server sends extra CAs), the daemon mounts a
+bundle and sets `GIT_SSL_CAINFO`/`SSL_CERT_FILE`, which *replace* the image's
+system store — so that bundle must include every CA the worker needs.
+
+This is a fork customization: remove `docker/task-worker/ca/` for an upstream
+or public build.
+
 ## Daemon environment
 
 ```bash
@@ -54,17 +83,61 @@ export MULTICA_TASK_PROTECTED=1
 export MULTICA_DOCKER_TASK_MEMORY=4294967296
 export MULTICA_DOCKER_TASK_PIDS_LIMIT=512
 export MULTICA_DOCKER_TASK_NETWORK=bridge
+# Optional: additional CA the worker must trust at runtime (public cert material).
+# The internal MUOI_TIEU_XANH CA is already baked into this fork's image.
+# export MULTICA_DOCKER_TASK_CA_BUNDLE=/path/to/extra-ca.crt
 ```
 
-Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=1` or `bwrap` still selects bubblewrap.
+Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=bwrap` still selects bubblewrap (the `1`/`true`/`on`/`yes` values select Docker). bwrap has no task repo manifest and no worker CA bundle, so the repo-cache and CA checks below apply only to the Docker backend.
+
+`MULTICA_DOCKER_TASK_CA_BUNDLE` is optional and names a host PEM file whose
+valid `CERTIFICATE` blocks the daemon appends to the worker's CA bundle (the
+machine trust the repo cache already hands over, plus the extra file). The
+internal CA is already in the image, so leave this unset for it. Set it only for
+an additional CA and restart the daemon; a configured path that is missing,
+unreadable, or holds no valid certificate fails the task at prepare rather than
+dropping trust.
+
+To make an additional CA permanent, add it to the daemon's systemd unit and
+reload:
+
+```ini
+# In the daemon's [Service] section:
+Environment="MULTICA_DOCKER_TASK_CA_BUNDLE=/path/to/extra-ca.crt"
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart <daemon-unit>
+```
+
+For a system service, use `systemctl daemon-reload` and
+`systemctl restart <daemon-unit>` instead.
+
+The daemon startup log reports the configured path and whether it exists.
 
 ## Smoke checklist
 
 1. **Launch** — start a task with a fake agent executable path first; confirm `docker ps` shows `multica-attempt-*` and container exits on cancel.
-2. **Paths** — inside container (debug entrypoint): `echo $HOME $SSH_AUTH_SOCK` → `/home/agent`, `/run/multica/ssh-agent.sock`.
-3. **Host checkout blocked** — with sandbox on, `multica repo checkout` from the task must fail with *host repo checkout is disabled*; native `git clone` in workdir should still work when signer is configured.
-4. **A/B** — two tasks same runtime: distinct attempt sockets and no shared `SSH_AUTH_SOCK` path.
-5. **Teardown** — cancel task: container removed, signing socket directory under `git-agent/<task>/<attempt>/` gone.
+2. **Baked CA** — `docker run --rm --entrypoint sh <image> -c 'test -f /usr/local/share/ca-certificates/MUOI_TIEU_XANH.crt && grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt'` reports 149 certificates (148 in a build without the fork CA).
+3. **Paths** — inside container (debug entrypoint): `echo $HOME $SSH_AUTH_SOCK` → `/home/agent`, `/run/multica/ssh-agent.sock`.
+4. **Repo cache mounts** — `docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}} {{.Mode}}{{"\n"}}{{end}}' <container>` must show:
+   - the task manifest mounted read-only: `<env-root>/repo-cache.json -> /home/agent/.multica/repo-cache.json ro`;
+   - one read-only bind per task repo, with the host cache path as both source and destination (`<workspaces-root>/.repos/<workspace-id>/<repo>.git -> ... ro`);
+   - no unrelated sibling repository or another task's workdir. A reused workdir may add read-only caches named by its own alternates, but only under the workspace cache root;
+   - the workspace checkout mounted read-write at `/workspace/repo` only.
+
+   `docker exec <container> cat /home/agent/.multica/repo-cache.json` lists exactly the task repo URLs. A write inside a mounted cache (for example `docker exec <container> touch <cache>/worker-write`) must fail with a read-only filesystem error.
+5. **In-worker checkout** — with the task container running, run `multica repo checkout <url>` from the task workdir (or `docker exec -w /workspace/repo <container> multica repo checkout <url>`). It must succeed without `MULTICA_DAEMON_PORT`/`MULTICA_TOKEN` and report the checkout path and branch. Then verify:
+   - `git -C <path> remote get-url origin` is the real repository URL, not the cache path;
+   - `cat <path>/.git/objects/info/alternates` names the mounted cache's `objects` directory;
+   - `git -C <path> branch --show-current` is the task branch, and `git status --short` is clean.
+6. **Host checkout blocked** — with the sandbox on, the host daemon `POST /repo/checkout` must still reject the task token with *host repo checkout is disabled*. The in-worker command above must not contact the host daemon.
+7. **A/B** — two tasks on the same runtime and repo: both manifests point at the same bare cache, but the containers have distinct workdirs and attempt sockets. A second task's manifest lists only its own `task.Repos`; neither container mounts the other's workdir, and `ls` in the second container cannot see the first task's files.
+8. **Reuse divergence** — reuse the first task's workdir, leave an uncommitted file and an unpushed commit, then run `repo checkout` again. The output must say the existing checkout was kept and report commits ahead/behind, uncommitted files, and unpushed commits; `git log` and `git status` must show the work untouched. Then run `repo checkout ... --fresh`: it resets to the new base and drops unpushed commits, uncommitted changes, and untracked and ignored files. Push anything you need first.
+9. **Cache retention** — after the task ends, the cache listed in the manifest still exists while the env root exists, and a daemon restart followed by another checkout still works. The env root's removal and the next GC cycle drop its dependents record; the cache then becomes evictable under the normal repo TTL. It must not disappear while a live workdir still references it.
+10. **CA bundle** — with `MULTICA_DOCKER_TASK_CA_BUNDLE` set, `docker inspect <container>` must show a read-only mount of the task's `ca-bundle.pem` at `/home/agent/.multica/ca-bundle.pem` and the CA env vars (`GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`) all pointing there.
+11. **Teardown** — cancel task: container removed, signing socket directory under `git-agent/<task>/<attempt>/` gone.
 
 ## Native agents (authorized only)
 

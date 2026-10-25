@@ -50,12 +50,12 @@ func TestBuildDockerRunArgsPinsSecurityAndResourceFlags(t *testing.T) {
 
 func TestContainerEnvRewritesManagedPaths(t *testing.T) {
 	env := ContainerEnv(map[string]string{
-		"SSH_AUTH_SOCK":        "/host/profile/git-agent/task/sock",
-		"MULTICA_CONFIG_ROOT":  "/host/config",
-		"CODEX_HOME":           "/host/codex",
-		"CURSOR_DATA_DIR":      "/host/cursor",
-		"PATH":                 "/home/user/.local/bin:/usr/bin",
-		"MULTICA_TOKEN":        "mat_test",
+		"SSH_AUTH_SOCK":       "/host/profile/git-agent/task/sock",
+		"MULTICA_CONFIG_ROOT": "/host/config",
+		"CODEX_HOME":          "/host/codex",
+		"CURSOR_DATA_DIR":     "/host/cursor",
+		"PATH":                "/home/user/.local/bin:/usr/bin",
+		"MULTICA_TOKEN":       "mat_test",
 	})
 	if env["HOME"] != HomePath || env["SSH_AUTH_SOCK"] != AgentSocketPath {
 		t.Fatalf("HOME/SSH_AUTH_SOCK not rewritten: %+v", env)

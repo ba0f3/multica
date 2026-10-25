@@ -1293,6 +1293,16 @@ func (d *Daemon) pruneRepoWorktrees(workspacesRoot string, stats *gcStats) {
 }
 
 func (d *Daemon) pruneRepoWorktreesContext(ctx context.Context, workspacesRoot string, stats *gcStats) {
+	// Resolve the retention set once for the whole cycle. Eviction and heavy
+	// maintenance are irreversible, so a cache that cannot say which workdirs
+	// still depend on it stops the entire repo-cache pass rather than letting
+	// the cycle fall back to "nothing is live".
+	liveDependents, err := d.repoCacheDependents()
+	if err != nil {
+		d.logger.Warn("gc: repo cache dependents scan failed; leaving repo caches untouched", "error", err)
+		return
+	}
+
 	reposRoot := filepath.Join(workspacesRoot, reposDirName)
 	wsEntries, err := os.ReadDir(reposRoot)
 	if err != nil {
@@ -1322,20 +1332,88 @@ func (d *Daemon) pruneRepoWorktreesContext(ctx context.Context, workspacesRoot s
 			if !isBareRepo(barePath) {
 				continue
 			}
-			d.maintainRepoCache(ctx, barePath, stats)
+			d.maintainRepoCache(ctx, barePath, stats, repoCachePinned(liveDependents, barePath))
 		}
-		// Drop the per-workspace directory once its last repo is gone.
-		if remaining, err := os.ReadDir(wsRepoDir); err == nil && len(remaining) == 0 {
-			os.Remove(wsRepoDir)
+		// Drop the per-workspace directory once its last repo is gone. The
+		// dependents records are bookkeeping for those repos, so they neither
+		// count as content nor outlive an empty cache.
+		if !repoCacheWorkspaceDirHasRepos(wsRepoDir) {
+			dependentsDir := filepath.Join(wsRepoDir, repocache.DependentsDirName)
+			if err := os.RemoveAll(dependentsDir); err != nil {
+				d.logger.Warn("gc: remove repo cache dependents failed", "dir", dependentsDir, "error", err)
+			}
+			if err := os.Remove(wsRepoDir); err != nil && !os.IsNotExist(err) {
+				d.logger.Warn("gc: remove empty repo cache workspace dir failed", "dir", wsRepoDir, "error", err)
+			}
 		}
 	}
 }
 
-func (d *Daemon) maintainRepoCache(ctx context.Context, barePath string, stats *gcStats) {
+// repoCacheDependentsScanner is implemented by repocache.Cache. It is optional
+// so test doubles of repoCacheBackend do not have to implement it; a cache that
+// cannot report dependents keeps the GC behavior that predates them.
+type repoCacheDependentsScanner interface {
+	LiveDependentCachePaths() (map[string]struct{}, error)
+}
+
+// repoCacheDependents reports the cache paths a live task workdir still
+// depends on. A backend without the optional scan reports no dependents; a
+// scan that fails reports an error, which callers must treat as "retain
+// everything this cycle".
+func (d *Daemon) repoCacheDependents() (map[string]struct{}, error) {
+	if d.repoCache == nil {
+		return nil, nil
+	}
+	scanner, ok := d.repoCache.(repoCacheDependentsScanner)
+	if !ok {
+		return nil, nil
+	}
+	return scanner.LiveDependentCachePaths()
+}
+
+// repoCachePinned reports whether a live dependent names this bare cache.
+//
+// A dependents record carries either the bare cache itself (a prepared Docker
+// task mounts the bare repo) or the cache's objects directory (a checkout's Git
+// alternates target). Both have to pin the whole cache: the dependent's objects
+// are not reachable from the bare repo's refs, so eviction — and especially
+// `gc --prune` — would break that checkout.
+//
+// Paths are compared exactly, like repoBarePathIsLive: RecordDependents stores
+// the cache's own absolute paths, so a cache and its records agree while they
+// share one configured root.
+func repoCachePinned(liveDependents map[string]struct{}, barePath string) bool {
+	if len(liveDependents) == 0 {
+		return false
+	}
+	if _, ok := liveDependents[barePath]; ok {
+		return true
+	}
+	_, ok := liveDependents[filepath.Join(barePath, "objects")]
+	return ok
+}
+
+// repoCacheWorkspaceDirHasRepos reports whether dir holds anything besides the
+// .dependents records directory. An unreadable directory counts as non-empty so
+// a transient error never removes a workspace cache.
+func repoCacheWorkspaceDirHasRepos(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	for _, entry := range entries {
+		if entry.Name() != repocache.DependentsDirName {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Daemon) maintainRepoCache(ctx context.Context, barePath string, stats *gcStats, pinned bool) {
 	d.withRepoMaintenance(ctx, barePath, func(maintenanceCtx context.Context) {
-		d.pruneWorktreeLocked(maintenanceCtx, barePath)
+		d.pruneWorktreeLocked(maintenanceCtx, barePath, pinned)
 		if maintenanceCtx.Err() == nil {
-			d.evictRepoCacheLocked(maintenanceCtx, barePath, stats)
+			d.evictRepoCacheLocked(maintenanceCtx, barePath, stats, pinned)
 		}
 	})
 }
@@ -1344,7 +1422,7 @@ func (d *Daemon) maintainRepoCache(ctx context.Context, barePath string, stats *
 // agent branches — without considering eviction.
 func (d *Daemon) pruneWorktree(barePath string) {
 	d.withRepoMaintenance(context.Background(), barePath, func(ctx context.Context) {
-		d.pruneWorktreeLocked(ctx, barePath)
+		d.pruneWorktreeLocked(ctx, barePath, false)
 	})
 }
 
@@ -1392,31 +1470,39 @@ func (d *Daemon) withRepoLock(barePath string, fn func()) {
 // The caller must hold the repo lock, so this cannot race a Sync or a
 // CreateWorktree on the same repo.
 //
-// All four conditions are required:
+// All five conditions are required:
 //
 //  1. GCRepoTTL > 0 — eviction is opt-out.
 //
-//  2. No watched workspace still claims the repo. This is a RETAIN predicate,
+//  2. No live workdir pins the repo through a dependents record — see
+//     repoCachePinned. A checkout that borrows this cache's objects cannot
+//     survive the cache's removal, even when no workspace claims the repo and
+//     no linked worktree is left.
+//
+//  3. No watched workspace still claims the repo. This is a RETAIN predicate,
 //     not a delete predicate, and the direction matters: Sync re-clones every
 //     listed repo that is missing whenever a workspace registers, which happens
 //     on every daemon start. Evicting a still-attached repo therefore just buys
 //     a full re-clone on the next restart — that is not reclaiming space, it is
 //     moving it. Because the set only ever *prevents* deletion, a stale or
 //     empty one cannot widen what we delete; it can only drop a layer of
-//     protection that conditions 3 and 4 still enforce.
+//     protection that conditions 4 and 5 still enforce.
 //
-//  3. No worktrees are left, checked after `git worktree prune` has dropped the
+//  4. No worktrees are left, checked after `git worktree prune` has dropped the
 //     entries whose task dirs the GC already removed. A live worktree's .git
 //     points into this directory, so removing it would break that checkout.
 //
-//  4. No task has created a worktree from it within GCRepoTTL. An unknown
+//  5. No task has created a worktree from it within GCRepoTTL. An unknown
 //     stamp is stamped and skipped, never treated as ancient — see
 //     repocache.LastUsed.
 //
 // Evicting wrongly costs time, not correctness: the next task that needs the
 // repo takes the cache-miss path in ensureRepoReady, which re-syncs and
 // re-clones on demand.
-func (d *Daemon) evictRepoCacheLocked(ctx context.Context, barePath string, stats *gcStats) {
+func (d *Daemon) evictRepoCacheLocked(ctx context.Context, barePath string, stats *gcStats, pinned bool) {
+	if pinned {
+		return
+	}
 	if d.cfg.GCRepoTTL <= 0 {
 		return
 	}
@@ -1523,7 +1609,7 @@ func linkedWorktreeCountContext(ctx context.Context, barePath string) (int, erro
 	return count, nil
 }
 
-func (d *Daemon) pruneWorktreeLocked(ctx context.Context, barePath string) {
+func (d *Daemon) pruneWorktreeLocked(ctx context.Context, barePath string, pinned bool) {
 	if out, err := runGitGCCommandContext(ctx, barePath, "worktree", "prune"); err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1583,6 +1669,16 @@ func (d *Daemon) pruneWorktreeLocked(ctx context.Context, barePath string) {
 		pending = true
 	}
 	if !pending {
+		return
+	}
+	// A live dependent's checkout borrows objects from this cache through Git
+	// alternates, and those objects are not reachable from this repo's refs.
+	// `gc --prune` would therefore delete them and break the checkout, so keep
+	// the pending marker and let a later cycle run maintenance once the
+	// dependent is gone. Deleting stale agent branches above is still safe: it
+	// only drops refs no live worktree uses.
+	if pinned {
+		d.logger.Debug("gc: heavy repo maintenance deferred while a dependent exists", "repo", barePath)
 		return
 	}
 	if !d.cfg.GCRepoMaintenanceEnabled {

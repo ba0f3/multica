@@ -16,6 +16,9 @@ This document describes how Multica constrains **Codex**, **Cursor**, and **Open
 | --- | --- |
 | Provider gate | Only `codex`, `cursor`, and `opencode` may run when the sandbox is enabled (`server/internal/daemon/sandbox/providers.go`). |
 | Worker boundary | Agent CLI runs inside Docker or bwrap; Session IPC and git signing stay on controlled mounts. |
+| Repo cache mounts (Docker only) | Before launch, the daemon strictly fetches each `task.Repos` repo into the workspace bare cache and binds only those caches read-only at their host paths (`<cache>:<cache>:ro`). A read-only `repo-cache.json` manifest lists the allowed URLs, refs, resolved SHAs, and cache paths. Unrelated sibling repositories and shared checkouts are not mounted; a reused workdir may add read-only caches named by its own alternates, still under the workspace cache root. |
+| In-worker repo checkout (Docker only) | `multica repo checkout` reads the task manifest instead of the host daemon, creates a private `.git` in the task workdir with `objects/info/alternates` pointing at the mounted cache, sets `origin` to the real URL, and copies the cache's remote refs. The cache is never written or hardlinked. bwrap has no task manifest, so this path does not apply there. |
+| Worker CA bundle (Docker only) | The daemon builds `/home/agent/.multica/ca-bundle.pem` from the repo cache's Git trust plus `MULTICA_DOCKER_TASK_CA_BUNDLE`, mounts it read-only, and exports `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `REQUESTS_CA_BUNDLE`. bwrap receives no worker CA bundle. |
 | Docker agent CLI | For codex/cursor/opencode, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
 | Provider prep | `IsolatedToolBoundary` on execenv prepare/reuse copies provider secrets into the task env and fixes container identity paths. |
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
@@ -55,6 +58,9 @@ go test ./server/internal/daemon/ -run TestTaskIsolationE2E_ -count=1
 pnpm exec playwright test e2e/task-isolation.spec.ts
 go test ./server/internal/daemon/sandbox/...
 go test ./server/pkg/agent/ -run EnforceOpenCode -count=1
+(cd server && go test ./internal/daemon/repocache/... ./internal/daemon/workercheckout/... -count=1)
+(cd server && go test ./internal/daemon -run 'TestRepoCache|TestRunTask.*RepoCache|TestDockerBackendMountsRepoCache' -count=1)
+(cd server && go test ./cmd/multica -run TestRunRepoCheckout -count=1)
 ```
 
 Optional real OpenCode (free tier) argv smoke:

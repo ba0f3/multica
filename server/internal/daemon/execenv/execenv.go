@@ -61,7 +61,7 @@ type PrepareParams struct {
 	// IsolatedToolBoundary prepares provider state for Docker/bwrap workers
 	// (private auth paths, container cwd identity for Cursor/OpenCode).
 	IsolatedToolBoundary bool
-	OpenclawBin  string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
+	OpenclawBin          string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
 	// McpConfig is the agent's saved `mcp_config` JSON, forwarded to the
 	// provider-specific config preparer when that provider materialises MCP
 	// via a per-task config file. Cursor, OpenClaw, and OMP consume it here;
@@ -286,6 +286,11 @@ type Environment struct {
 	// child CLI invocations. It prevents implicit discovery of the daemon
 	// owner's ~/.multica profile without changing the provider-facing HOME.
 	MulticaConfigRoot string
+	// WorkerCABundlePath is the host path of the CA bundle written for this
+	// task's Docker worker (<RootDir>/ca-bundle.pem). Empty when the host had
+	// no machine trust and no extra CA to hand over. Set by the daemon, not by
+	// execenv.
+	WorkerCABundlePath string
 	// LocalWorktree is set when the task runs in worktree mode against a
 	// local_directory resource. The daemon calls Finalize on it after the
 	// agent exits to commit leftovers, drop the worktree, and learn the
@@ -809,9 +814,9 @@ type ReuseParams struct {
 	// CodexCustomArgs mirrors PrepareParams.CodexCustomArgs on reuse so the
 	// Windows sandbox decision honors a `-c windows.sandbox=...` override here
 	// too (MUL-4957).
-	CodexCustomArgs []string
+	CodexCustomArgs      []string
 	IsolatedToolBoundary bool
-	Task            TaskContextForEnv // refreshed context files / skills
+	Task                 TaskContextForEnv // refreshed context files / skills
 }
 
 // Reuse wraps an existing workdir into an Environment and refreshes context files.

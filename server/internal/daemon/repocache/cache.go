@@ -21,8 +21,8 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/processtree"
 )
 
-// gitEnv returns an environment for git subprocesses that contact remotes.
-// It passes the full daemon environment so credential helpers (e.g. gh) can
+// GitEnv returns an environment for git subprocesses that contact remotes.
+// It passes the full process environment so credential helpers (e.g. gh) can
 // locate their config, and disables TTY prompting so auth failures produce
 // clear errors instead of blocking on a non-existent terminal.
 //
@@ -40,8 +40,9 @@ import (
 // directories regardless of ownership. The daemon manages its own bare
 // caches and worktrees, so the ownership check adds no security value
 // and breaks CI environments where the runner UID differs from the
-// directory owner.
-func gitEnv() []string {
+// directory owner. The worker checkout reuses this environment because the
+// bind-mounted cache is owned by the daemon, not the worker.
+func GitEnv() []string {
 	base := os.Environ()
 
 	// Find the existing GIT_CONFIG_COUNT so we append at the next index
@@ -65,6 +66,9 @@ func gitEnv() []string {
 		"GIT_CONFIG_VALUE_"+idx+"=*",
 	)
 }
+
+// gitEnv is the historical unexported name for GitEnv.
+func gitEnv() []string { return GitEnv() }
 
 var agentGitExcludePatterns = []string{
 	".agent_context",
@@ -166,6 +170,9 @@ func runGitWithTimeoutContext(parent context.Context, timeout time.Duration, arg
 // RepoInfo describes a repository to cache.
 type RepoInfo struct {
 	URL string
+	// Ref optionally selects the branch, tag, or commit to prepare. Empty
+	// means the remote's default branch.
+	Ref string
 }
 
 // CachedRepo describes a cached bare clone ready for worktree creation.
@@ -881,8 +888,10 @@ func (c *Cache) CreateWorktreeContext(ctx context.Context, params WorktreeParams
 		return nil, fmt.Errorf("cannot resolve default branch for %s: bare cache at %s has no usable refs (origin/* is empty or ambiguous and bare HEAD has no match). The cache may be corrupted; delete it and retry", params.RepoURL, barePath)
 	}
 
-	// Build branch name: agent/{sanitized-name}/{task-id}
-	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), taskKey(params.TaskID))
+	// Build branch name: agent/{sanitized-name}/{task-id}. The in-worker
+	// checkout (workercheckout) uses BranchName so the daemon and the worker
+	// always agree on the branch a task works on.
+	branchName := BranchName(params.AgentName, params.TaskID)
 
 	// Derive directory name from repo URL.
 	dirName := repoNameFromURL(params.RepoURL)
@@ -2269,6 +2278,13 @@ func repoNameFromURL(url string) string {
 	return name
 }
 
+// RepoDirName returns the directory name a repository checkout uses inside a
+// task workdir, derived from a git remote URL (e.g.
+// "https://github.com/org/my-repo.git" → "my-repo"). The worker checkout
+// (workercheckout.Checkout) uses the same name so the daemon and the worker
+// agree on where a repo lives.
+func RepoDirName(url string) string { return repoNameFromURL(url) }
+
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeName produces a git-branch-safe name from a human-readable string.
@@ -2302,6 +2318,13 @@ func taskKey(uuid string) string {
 		return s[len(s)-taskKeyLen:]
 	}
 	return s
+}
+
+// BranchName builds the git branch name for a task's checkout:
+// agent/{sanitized-name}/{last-12-hex}. The worker checkout uses the same
+// function so the daemon and the worker always produce identical branch names.
+func BranchName(agentName, taskID string) string {
+	return fmt.Sprintf("agent/%s/%s", sanitizeName(agentName), taskKey(taskID))
 }
 
 // shortID returns the first 8 characters of a UUID string (dashes stripped).

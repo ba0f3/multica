@@ -1,14 +1,23 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 )
 
 func newRepoRegistryTestCmd(serverURL string) *cobra.Command {
@@ -355,5 +364,242 @@ func TestRepoCheckoutRetryDelay(t *testing.T) {
 	}
 	if got := repoCheckoutRetryDelay("invalid", now); got != time.Second {
 		t.Fatalf("default delay = %s, want 1s", got)
+	}
+}
+
+const (
+	testRepoCheckoutAgentName = "Test Agent"
+	testRepoCheckoutTaskID    = "01a01ec0-e69d-7000-8000-000000000001"
+)
+
+// repoTestGit runs git in dir (or the process cwd when empty) with a fixed
+// author identity, returning trimmed combined output.
+func repoTestGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v (dir=%s): %s: %v", args, dir, out, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// repoCheckoutTestRemote creates a local repository with a single commit and
+// returns its path, which is used directly as the git remote URL.
+func repoCheckoutTestRemote(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "repo")
+	repoTestGit(t, "", "init", "-q", dir)
+	repoTestGit(t, dir, "commit", "--allow-empty", "-q", "-m", "initial")
+	return dir
+}
+
+// repoCheckoutTestCache prepares bare caches for a local remote through the
+// daemon's repocache package, so tests use the exact cache layout the worker
+// sees. Re-preparing after the remote advances returns a new CommitSHA at the
+// same CachePath.
+type repoCheckoutTestCache struct {
+	remote string
+	cache  *repocache.Cache
+}
+
+func newRepoCheckoutTestCache(t *testing.T, remote string) *repoCheckoutTestCache {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return &repoCheckoutTestCache{remote: remote, cache: repocache.New(t.TempDir(), logger)}
+}
+
+func (tc *repoCheckoutTestCache) entry(t *testing.T) workercheckout.Entry {
+	t.Helper()
+	prepared, err := tc.cache.Prepare(context.Background(), "ws-1", []repocache.RepoInfo{{URL: tc.remote}})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	p := prepared[0]
+	return workercheckout.Entry{URL: p.URL, Ref: p.Ref, CommitSHA: p.CommitSHA, CachePath: p.BarePath}
+}
+
+// setupRepoCheckoutIsolatedEnv marks the isolated tool boundary and points the
+// manifest at a fresh task config root, leaving MULTICA_TOKEN and
+// MULTICA_DAEMON_PORT unset so the isolated path cannot depend on them.
+func setupRepoCheckoutIsolatedEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("MULTICA_ISOLATED_TOOL_BOUNDARY", "1")
+	t.Setenv("MULTICA_TASK_CONFIG_ROOT", t.TempDir())
+	t.Setenv("MULTICA_AGENT_NAME", testRepoCheckoutAgentName)
+	t.Setenv("MULTICA_TASK_ID", testRepoCheckoutTaskID)
+	t.Setenv("MULTICA_TOKEN", "")
+	t.Setenv("MULTICA_DAEMON_PORT", "")
+}
+
+// writeRepoCheckoutManifest publishes entries at ManifestPath().
+func writeRepoCheckoutManifest(t *testing.T, entries ...workercheckout.Entry) {
+	t.Helper()
+	path, err := workercheckout.ManifestPath()
+	if err != nil {
+		t.Fatalf("ManifestPath: %v", err)
+	}
+	if err := workercheckout.WriteManifest(path, workercheckout.Manifest{Repos: entries}); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+}
+
+func TestRunRepoCheckoutIsolatedUsesManifest(t *testing.T) {
+	remote := repoCheckoutTestRemote(t)
+	tc := newRepoCheckoutTestCache(t, remote)
+	entry := tc.entry(t)
+
+	workDir := t.TempDir()
+	setupRepoCheckoutIsolatedEnv(t)
+	writeRepoCheckoutManifest(t, entry)
+	t.Chdir(workDir)
+
+	if err := runRepoCheckout(&cobra.Command{}, []string{entry.URL}); err != nil {
+		t.Fatalf("runRepoCheckout: %v", err)
+	}
+
+	target := filepath.Join(workDir, repocache.RepoDirName(entry.URL))
+	info, err := os.Stat(filepath.Join(target, ".git"))
+	if err != nil {
+		t.Fatalf("checkout .git missing: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("checkout .git is not a directory")
+	}
+	if got := repoTestGit(t, target, "remote", "get-url", "origin"); got != entry.URL {
+		t.Fatalf("origin = %q, want %q", got, entry.URL)
+	}
+}
+
+func TestRunRepoCheckoutIsolatedRejectsUnknownURL(t *testing.T) {
+	remote := repoCheckoutTestRemote(t)
+	tc := newRepoCheckoutTestCache(t, remote)
+	entry := tc.entry(t)
+
+	setupRepoCheckoutIsolatedEnv(t)
+	writeRepoCheckoutManifest(t, entry)
+	t.Chdir(t.TempDir())
+
+	unknown := filepath.Join(t.TempDir(), "unknown")
+	err := runRepoCheckout(&cobra.Command{}, []string{unknown})
+	if err == nil {
+		t.Fatal("runRepoCheckout unexpectedly succeeded for an unknown URL")
+	}
+	if !strings.Contains(err.Error(), "allowed URLs") || !strings.Contains(err.Error(), entry.URL) {
+		t.Fatalf("error = %q, want it to name the allowed URL %q", err, entry.URL)
+	}
+}
+
+func TestRunRepoCheckoutIsolatedKeepsDirtyCheckout(t *testing.T) {
+	remote := repoCheckoutTestRemote(t)
+	tc := newRepoCheckoutTestCache(t, remote)
+	first := tc.entry(t)
+
+	workDir := t.TempDir()
+	setupRepoCheckoutIsolatedEnv(t)
+	writeRepoCheckoutManifest(t, first)
+	t.Chdir(workDir)
+
+	if err := runRepoCheckout(&cobra.Command{}, []string{first.URL}); err != nil {
+		t.Fatalf("first runRepoCheckout: %v", err)
+	}
+	target := filepath.Join(workDir, repocache.RepoDirName(first.URL))
+
+	// A local commit and a dirty file that a kept checkout must preserve.
+	repoTestGit(t, target, "commit", "--allow-empty", "-q", "-m", "unpushed")
+	if err := os.WriteFile(filepath.Join(target, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	// Advance the remote so the manifest carries a new SHA.
+	repoTestGit(t, remote, "commit", "--allow-empty", "-q", "-m", "second")
+	second := tc.entry(t)
+	if second.CommitSHA == first.CommitSHA {
+		t.Fatal("setup: remote HEAD did not advance")
+	}
+	writeRepoCheckoutManifest(t, second)
+
+	stderr := captureStderr(t)
+	err := runRepoCheckout(&cobra.Command{}, []string{second.URL})
+	summary := stderr.read()
+	if err != nil {
+		t.Fatalf("second runRepoCheckout: %v", err)
+	}
+	for _, want := range []string{"ahead", "behind", "uncommitted", "unpushed", "nothing was reset"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+
+	// The local commit and dirty file survive; HEAD stays on the unpushed commit.
+	if got := repoTestGit(t, target, "rev-parse", "HEAD"); got == second.CommitSHA {
+		t.Fatalf("HEAD moved to %s, want it left on the unpushed commit", second.CommitSHA)
+	}
+	if got := repoTestGit(t, target, "rev-list", "--count", "HEAD", "--not", "--remotes"); got != "1" {
+		t.Fatalf("unpushed commits = %s, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(target, "dirty.txt")); err != nil {
+		t.Fatalf("dirty file missing after kept checkout: %v", err)
+	}
+}
+
+func TestRunRepoCheckoutHostStillRequiresDaemonPort(t *testing.T) {
+	t.Setenv("MULTICA_ISOLATED_TOOL_BOUNDARY", "")
+	t.Setenv("MULTICA_DAEMON_PORT", "")
+	t.Setenv("MULTICA_TOKEN", "")
+
+	err := runRepoCheckout(&cobra.Command{}, []string{"https://github.com/org/repo.git"})
+	if err == nil || !strings.Contains(err.Error(), "MULTICA_DAEMON_PORT not set") {
+		t.Fatalf("runRepoCheckout error = %v, want missing daemon port", err)
+	}
+}
+
+func TestRepoCheckoutIsolatedSummary(t *testing.T) {
+	t.Parallel()
+	const repoURL = "https://github.com/org/repo.git"
+	for _, tc := range []struct {
+		name   string
+		result workercheckout.Result
+		want   []string
+	}{
+		{
+			name:   "fresh",
+			result: workercheckout.Result{Path: "/work/repo", Branch: "agent/test/abc", BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			want:   []string{"Checked out " + repoURL + " → /work/repo (branch: agent/test/abc, base aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"},
+		},
+		{
+			name:   "kept with ahead/behind",
+			result: workercheckout.Result{Path: "/work/repo", Branch: "agent/test/abc", Kept: true, Ahead: 1, Behind: 1, Uncommitted: 2, Unpushed: 3},
+			want: []string{
+				"(branch: agent/test/abc; 1 commit ahead, 1 commit behind, 2 uncommitted files, 3 unpushed commits)",
+				"nothing was reset, cleaned, or switched",
+				"To discard local commits, uncommitted changes, and untracked and ignored files",
+				"push anything you still need first",
+			},
+		},
+		{
+			name:   "kept on detached HEAD",
+			result: workercheckout.Result{Path: "/work/repo", Kept: true, Behind: 4},
+			want:   []string{"(branch: detached HEAD; 0 commits ahead, 4 commits behind, 0 uncommitted files, 0 unpushed commits)"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := repoCheckoutIsolatedSummary(repoURL, tc.result)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("summary missing %q:\n%s", want, got)
+				}
+			}
+			if kept := strings.HasPrefix(got, "Kept "); kept != tc.result.Kept {
+				t.Fatalf("summary reads kept=%v for Kept=%v:\n%s", kept, tc.result.Kept, got)
+			}
+		})
 	}
 }

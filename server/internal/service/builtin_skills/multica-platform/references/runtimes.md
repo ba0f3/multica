@@ -20,7 +20,9 @@ The chain is:
 5. the server returns task context, repos, project resources, prior
    session/workdir hints, and a task token;
 6. the daemon prepares a workdir and launches the provider CLI;
-7. `multica repo checkout` talks to the local daemon, not directly to GitHub.
+7. `multica repo checkout` materializes the checkout from the local daemon,
+   or from the daemon-prepared task manifest inside a Docker worker; only an
+   explicit `--ref` fetches from the remote.
 
 ## CLI
 
@@ -61,28 +63,47 @@ clears the agent's runtime binding; an unbound agent cannot run until it is
 bound again (`multica agent update <id> --runtime-id <runtime-id>`), and every
 trigger path refuses it with `agent_runtime_required`.
 
-`repo checkout` creates a dedicated branch in the task working directory. Most
-runtimes use a linked worktree; Linux and Windows Codex use task-local Git
-metadata so a task can stage and commit without making the shared repository
-cache writable.
+`repo checkout` creates a dedicated branch in the task working directory from
+the local repository cache. Most runtimes use a linked worktree; Linux and
+Windows Codex use task-local Git metadata so a task can stage and commit
+without making the shared repository cache writable.
+
+In a Docker worker (`MULTICA_ISOLATED_TOOL_BOUNDARY=1` with the Docker backend),
+the command does not contact the host daemon. It reads the task's read-only
+`repo-cache.json` manifest, accepts only URLs in `task.Repos`, and creates a
+private `.git` in the workdir whose `objects/info/alternates` points at the
+mounted bare cache. It sets `origin` to the real repository URL and copies the
+cache's remote refs. The default checkout uses the commit the daemon already
+resolved, so it needs no network; `--ref` fetches that ref inside the worker. A
+URL outside the manifest is rejected, even when it exists in the workspace
+registry. A bwrap worker has no task repo manifest and no worker CA bundle, so
+this cache-backed checkout path does not apply there.
 
 Running `repo checkout` again where the repository is already checked out
 (the same task, a follow-up turn, or a reused workdir) never silently discards
-work:
+work.
+
+On the host path, it keeps existing local work and fetches only remote refs; a
+clean checkout with nothing unpushed on some other branch moves to a new branch
+from the latest default branch (or `--ref`):
 
 - a checkout with uncommitted changes, untracked files, or commits that no
   remote ref reaches is kept exactly as it is — no reset, clean, branch switch,
-  or branch deletion — and only its remote refs are fetched;
-- a checkout already on the current task's branch is treated as done, and only
-  its remote refs are fetched;
-- a clean checkout with nothing unpushed on some other branch still moves to a
-  new branch from the latest default branch (or `--ref`).
+  or branch deletion;
+- a checkout already on the current task's branch is treated as done.
 
-When a checkout is kept, the command says so and reports its branch and how
-many uncommitted files and unpushed commits it holds. `--fresh` discards the
-existing checkout's uncommitted changes and untracked files and starts over on
-a new branch from the latest default branch (or `--ref`). It deletes no branch
-holding unpushed commits, so those commits stay on the old branch:
+In a Docker worker, a repeated checkout makes no network call and copies no
+refs. It keeps HEAD, branch, index, and worktree exactly as they are, and
+reports the branch plus how many commits are ahead and behind the newly
+resolved base, uncommitted files, and unpushed commits. Only `--ref` fetches
+(inside the worker), and only `--fresh` re-points the branch.
+
+`--fresh` is the only path that discards local work: it resets the existing
+checkout, removes uncommitted changes and untracked files, and starts over from
+the latest default branch (or `--ref`).
+
+On the host path, it deletes no branch holding unpushed commits, so those
+commits stay on the old branch:
 
 - with task-local Git metadata, the old branch stays in the checkout, including
   when `--fresh` replaces a linked worktree left by an older daemon;
@@ -90,18 +111,20 @@ holding unpushed commits, so those commits stay on the old branch:
   repository cache, whose periodic cleanup drops `agent/*` branches that no
   checkout has checked out.
 
-Push any commits you still need before using `--fresh`. This needs a daemon
-that includes the change; older daemons always start over.
+In a Docker worker, `--fresh` also re-points the task branch and drops unpushed
+commits, so push anything you need first. Host checkout requires a daemon that
+includes the keep-work change; older daemons always start over.
 
-`repo checkout` requires both `MULTICA_DAEMON_PORT` and the injected task-scoped
+The host path requires both `MULTICA_DAEMON_PORT` and the injected task-scoped
 `MULTICA_TOKEN`; it is intended to run inside the active daemon task and from
 that task's workdir (or a descendant). The local daemon authenticates the token
 against its active-task registry, derives workspace/task/agent identity itself,
-and rejects a caller-supplied workdir outside that task. If either variable is
-absent, you are not in the normal agent checkout path. When a project
-`github_repo` resource has `resource_ref.ref`, `repo checkout <url>` uses that
-ref by default for the current task; an explicit
-`repo checkout <url> --ref <branch-or-sha>` overrides it.
+and rejects a caller-supplied workdir outside that task. The Docker worker path
+needs neither variable: it authenticates nothing over the network and accepts
+only manifest URLs. When a project `github_repo` resource has
+`resource_ref.ref`, `repo checkout <url>` uses that ref by default for the
+current task; an explicit `repo checkout <url> --ref <branch-or-sha>` overrides
+it.
 
 ## Task CLI boundary
 
@@ -116,6 +139,9 @@ context:
   missing task config root fails closed.
 - `auth status` may verify the task identity but omits all token material from
   its output.
+- In a Docker worker, `repo checkout` reads the task repo-cache manifest and
+  does not use `MULTICA_DAEMON_PORT` or `MULTICA_TOKEN`. A bwrap worker has no
+  task repo manifest, so cache-backed `repo checkout` is unavailable there.
 - `daemon status` and `daemon disk-usage` report on the runtime hosting this
   task: `status` probes the daemon-injected health port, and `disk-usage` scans
   the daemon-injected workspaces root. Both refuse `--profile`, `disk-usage`
@@ -160,7 +186,9 @@ Check in this order:
 
 The runtime brief lists repos available to this task. Treat that list as the
 authority for agent checkout unless the user explicitly asks to bind a new
-project resource.
+project resource. Inside a Docker worker, `repo checkout` accepts only the URLs
+in the prepared `task.Repos` manifest; a workspace registry entry outside that
+list is not available to the task. The bwrap backend has no task manifest.
 
 Workspace repos and project resources are not the same thing:
 
