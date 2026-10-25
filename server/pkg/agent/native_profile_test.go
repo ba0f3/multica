@@ -57,3 +57,57 @@ func TestNativeCodexSettingsUsePrivateRPCForFreshAndResume(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCodexSkillPolicyIsPrivatePerTurn(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.toml")
+	original := []byte("[[skills.config]]\npath = '/native/global/SKILL.md'\nenabled = false\n[[skills.config]]\npath = '/native/task-a/SKILL.md'\nenabled = true\n")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+	for _, method := range []string{"thread/start", "thread/resume"} {
+		for _, name := range []string{"task-a", "task-b"} {
+			t.Run(method+"/"+name, func(t *testing.T) {
+				params := map[string]any{}
+				disabled := "/native/" + name + "/SKILL.md"
+				opts := ExecOptions{NativeProfile: true, CodexDisabledSkillPaths: []string{disabled}}
+				if err := applyNativeCodexThreadConfig(params, opts, map[string]string{"CODEX_HOME": home}); err != nil {
+					t.Fatal(err)
+				}
+				data, _ := json.Marshal(params)
+				if !strings.Contains(string(data), disabled) || !strings.Contains(string(data), "/native/global/SKILL.md") || !strings.Contains(string(data), `"enabled":false`) {
+					t.Fatalf("native skill exclusions missing from private RPC: %s", data)
+				}
+				var decoded struct {
+					Config struct {
+						Skills struct {
+							Config []struct {
+								Path    string `json:"path"`
+								Enabled bool   `json:"enabled"`
+							} `json:"config"`
+						} `json:"skills"`
+					} `json:"config"`
+				}
+				_ = json.Unmarshal(data, &decoded)
+				for _, entry := range decoded.Config.Skills.Config {
+					if entry.Path == disabled && entry.Enabled {
+						t.Fatal("native enabled entry overrides the task exclusion")
+					}
+				}
+				other := "/native/task-a/SKILL.md"
+				if name == "task-a" {
+					other = "/native/task-b/SKILL.md"
+				}
+				if name == "task-a" && strings.Contains(string(data), other) {
+					t.Fatal("task inherited another task's skill policy")
+				}
+			})
+		}
+	}
+	data, _ := os.ReadFile(path)
+	after, _ := os.Stat(path)
+	if string(data) != string(original) || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("private task skill policy changed the shared profile")
+	}
+}

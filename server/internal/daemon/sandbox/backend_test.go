@@ -191,6 +191,14 @@ func TestIPCBackendRequiresALauncher(t *testing.T) {
 	}
 }
 
+func TestNativeSkillPolicySurvivesWorkerManifest(t *testing.T) {
+	opts := agent.ExecOptions{NativeProfile: true, CodexDisabledSkillPaths: []string{"/native/disabled/SKILL.md"}}
+	round := ConvertExecOptions(opts).ExecOptions()
+	if len(round.CodexDisabledSkillPaths) != 1 || round.CodexDisabledSkillPaths[0] != opts.CodexDisabledSkillPaths[0] {
+		t.Fatal("worker manifest dropped native task skill policy")
+	}
+}
+
 func TestRunWorkerRejectsAMalformedManifest(t *testing.T) {
 	if err := RunWorker(context.Background(), strings.NewReader("not a manifest\n"), &strings.Builder{}); err == nil {
 		t.Fatal("RunWorker accepted a malformed manifest")

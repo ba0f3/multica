@@ -29,6 +29,8 @@ type IPCBackend struct {
 	KeepStdinOpen bool
 	// StopAttempt stops the outer execution boundary (for example docker kill).
 	StopAttempt func() error
+	// AfterReap removes attempt-owned storage after all processes stop.
+	AfterReap func() error
 	// Start optionally pins native process ownership until cleanup and reap.
 	Start         func(*exec.Cmd) (release func(), err error)
 	OnWorkerReady func()
@@ -125,6 +127,9 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 			_ = cmd.Wait()
 			_ = stdin.Close()
 			_ = stdout.Close()
+			if b.AfterReap != nil {
+				cleanupErr = errors.Join(cleanupErr, b.AfterReap())
+			}
 			if release != nil {
 				release()
 			}

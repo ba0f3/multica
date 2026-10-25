@@ -29,6 +29,7 @@ func prepareNativeTask(env *Environment, selected *NativeProfile, provider strin
 	}
 	profile.Env["HOME"] = profile.Home
 	env.NativeProfile = profile
+	env.CodexDisabledSkillPaths = nil
 	switch provider {
 	case "codex":
 		env.CodexHome = profile.Env["CODEX_HOME"]
@@ -36,6 +37,22 @@ func prepareNativeTask(env *Environment, selected *NativeProfile, provider strin
 			env.CodexHome = filepath.Join(profile.Home, ".codex")
 		}
 		profile.Env["CODEX_HOME"] = env.CodexHome
+		for _, skill := range task.DisabledRuntimeSkills {
+			key, valid := cleanRuntimeSkillKey(skill.Key)
+			if !valid {
+				continue
+			}
+			var path string
+			switch skill.Root {
+			case "provider":
+				path = filepath.Join(env.CodexHome, "skills", filepath.FromSlash(key), "SKILL.md")
+			case "universal":
+				path = filepath.Join(profile.Home, ".agents", "skills", filepath.FromSlash(key), "SKILL.md")
+			default:
+				continue
+			}
+			env.CodexDisabledSkillPaths = append(env.CodexDisabledSkillPaths, path)
+		}
 		if len(task.AgentSkills) > 0 {
 			dir := filepath.Join(env.WorkDir, ".agents", "skills")
 			if err := recordMkdirAll(dir, 0755, manifest); err != nil {

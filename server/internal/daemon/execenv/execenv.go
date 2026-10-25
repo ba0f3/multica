@@ -268,7 +268,8 @@ type SkillFileContextForEnv struct {
 
 // Environment represents a prepared, isolated execution environment.
 type Environment struct {
-	NativeProfile *NativeProfile
+	CodexDisabledSkillPaths []string
+	NativeProfile           *NativeProfile
 	// RootDir is the top-level env directory ({workspacesRoot}/{task_id_short}/).
 	RootDir string
 	// WorkDir is the directory to pass as Cwd to the agent. Normally

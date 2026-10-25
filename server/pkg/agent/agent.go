@@ -24,6 +24,8 @@ type Backend interface {
 
 // ExecOptions configures a single execution.
 type ExecOptions struct {
+	// CodexDisabledSkillPaths applies native task exclusions through private RPC.
+	CodexDisabledSkillPaths []string
 	// NativeProfile keeps shared provider state at its original path.
 	NativeProfile bool
 	// OnCLIStarted runs once after a successful task CLI spawn, before its output.

@@ -32,13 +32,13 @@ Runtime and profile selection uses the daemon account's HOME and provider select
 
 ### Filesystem and shared profiles
 
-Native workers see a fresh empty home at the original HOME pathname, followed by explicit grants. The whole host home is never mounted. Original executables, launcher links, interpreters and ELF dependencies remain at their original paths and are read-only. The resolver does not rewrite provider launchers or substitute Node.
+Native workers see a fresh empty home at the original HOME pathname, followed by explicit grants. The whole host home is never mounted. Original executables, launcher links, interpreters and ELF dependencies remain at their original paths and are read-only. Standalone programs use individual file grants; recognized provider package trees supply required companions. Env shebangs resolve through the trusted daemon PATH, and unsupported layouts fail explicitly. The resolver does not rewrite provider launchers or substitute Node.
 
-Only selected profile directories are shared read-write. Task workdir, temporary files, output and task API configuration have their own mounts. Selected repository caches and the checkout manifest are read-only. Host SSH keys, Git credential stores, administrator tokens, other task directories, Docker sockets and keyring sockets are absent. Resolver and hosts files retain the host's DNS configuration, including systemd resolver symlinks.
+Only selected profile directories are shared read-write. Task workdir, temporary files, output and task API configuration have their own mounts. Private home, temporary and marker storage is removed after each attempt is reaped. Output and task-owned build caches remain under the environment root for reuse and normal environment GC. Default npm cache, GOCACHE and GOPATH locations use those task caches; host caches are not mounted. Recognized original Node and Go installations supply read-only toolchain code. Selected repository caches and the checkout manifest are read-only. Host SSH keys, Git credential stores, administrator tokens, other task directories, Docker sockets and keyring sockets are absent. Resolver and hosts files retain the host's DNS configuration, including systemd resolver symlinks.
 
 The selected profile is a shared account trust domain. An agent can read that profile's credentials and sessions. Principals without permission to use the account must not share its profile. This boundary does not promise credential isolation or prevention of data exfiltration.
 
-Codex receives task settings through thread RPC without rewriting shared `config.toml`. Cursor keeps its original data directory and uses project-local managed MCP configuration. Existing runtime-plus-agent MCP merging remains unchanged. MCode installer `.mcode-active` state is private to each sandbox. Profile leases serialize MCode workers across daemon profiles and release only after attempt cleanup; vendor auth and database locks remain beside the state they protect.
+Codex receives task settings and disabled-skill policies through thread RPC without rewriting shared `config.toml`. Existing native exclusions are preserved, and authorized universal skill inputs are read-only. Cursor keeps its original data directory and uses project-local managed MCP configuration. Existing runtime-plus-agent MCP merging remains unchanged. MCode installer `.mcode-active` state is private to each sandbox. Profile leases serialize MCode workers across daemon profiles and release only after attempt cleanup; vendor auth and database locks remain beside the state they protect.
 
 Each native attempt has private user, PID, IPC and UTS namespaces, no capabilities, and `no_new_privs`. A user-systemd scope owns all descendants. Completion, cancellation, timeout and daemon death stop the attempt before releasing its profile lease. The workdir and original session store remain available for resume.
 
@@ -65,8 +65,8 @@ Measured on 2026-10-26 with the production launcher and test-created worker scri
 
 | Host | Warm attempts | p50 | p95 | Maximum |
 | --- | --- | --- | --- | --- |
-| k7 | 100 | 52.5 ms | 67.1 ms | 86.8 ms |
-| garlic | 100 | 29.4 ms | 35.5 ms | 37.1 ms |
+| k7 | 100 | 70.9 ms | 81.9 ms | 91.3 ms |
+| garlic | 100 | 58.1 ms | 62.4 ms | 80.5 ms |
 
 Codex, Cursor and OpenCode passed fresh, worker resume, restart, provider change, and a new task after cancellation on both hosts. All three also passed a host plus two same-profile workers. OpenCode used the account-accessible `opencode-go/deepseek-v4.1-flash` model; these results do not establish availability of other model routes. MCode is not accepted for native rollout: 0.6.13 can invalidate a live host lease, and the selected garlic profile also requires host login.
 
@@ -78,7 +78,7 @@ Codex, Cursor and OpenCode passed fresh, worker resume, restart, provider change
 | Worker boundary | The worker, adapter, CLI, MCP servers, hooks and tools run inside the selected boundary before the CLI reads repository configuration. Session IPC and Git signing use task-scoped channels. |
 | Repo cache mounts | Before launch, the daemon strictly fetches each `task.Repos` repo into the workspace bare cache and binds only those caches read-only at their host paths (`<cache>:<cache>:ro`). A read-only `repo-cache.json` manifest lists the allowed URLs, refs, resolved SHAs, and cache paths. Unrelated sibling repositories and shared checkouts are not mounted; a reused workdir may add read-only caches named by its own alternates, still under the workspace cache root. |
 | In-worker repo checkout | `multica repo checkout` reads the task manifest instead of the host daemon, creates a private `.git` in the task workdir with `objects/info/alternates` pointing at the mounted cache, sets `origin` to the real URL, and copies the cache's remote refs. The cache is never written or hardlinked. Both backends use this manifest and checkout path; cache fetch semantics are unchanged. |
-| Worker CA bundle (Docker only) | The daemon builds `/home/agent/.multica/ca-bundle.pem` from the repo cache's Git trust plus `MULTICA_DOCKER_TASK_CA_BUNDLE`, mounts it read-only, and exports `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `REQUESTS_CA_BUNDLE`. bwrap receives no worker CA bundle. |
+| Worker CA bundle | The daemon builds `/home/agent/.multica/ca-bundle.pem` from the repo cache's Git trust plus `MULTICA_DOCKER_TASK_CA_BUNDLE`, mounts it read-only, and exports `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `REQUESTS_CA_BUNDLE`. Native workers bind the prepared bundle read-only at its original path and export the same trust variables. |
 | Docker agent CLI | For every supported provider, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
 | Provider prep | Docker prepares task-local provider state. Native mode uses selected original profiles without copying profiles, importing credentials or editing credential databases. |
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
@@ -172,7 +172,7 @@ MULTICA_BWRAP_SMOKE=1 bash scripts/go-test-with-agent-cli-guard.sh -- go -C serv
 
 `make test-agent-native-workers` explicitly uses the current user's real accounts. Tests require `agentintegration`, `MULTICA_RUN_REAL_AGENT_SMOKE=1`, an explicit `MULTICA_REAL_AGENT_HOME` and a built `MULTICA_NATIVE_SMOKE_WORKER`; the Make target supplies these. `MULTICA_SMOKE_MODEL_<PROVIDER>` selects an account-accessible model. `MULTICA_SMOKE_MCODE_REFRESH=1` adds concurrent vendor OAuth refresh and subsequent session resume. Incompatible MCode releases fail acceptance rather than silently skipping it.
 
-Fresh, resumed, restarted and provider-switched sessions must create exact tool artifacts. Resume also checks the same session ID and a remembered canary whose input file was removed. Host coexistence and two workers sharing a profile are separate cases. Run the matrix on both reference hosts before changing the default.
+Fresh, resumed, restarted and provider-switched sessions must create exact tool artifacts. Resume also checks the same session ID and a remembered canary whose input file was removed. Host coexistence and two workers sharing a profile are separate cases. A local HTTP tool barrier requires overlapping active tool requests; successful sequential tasks do not satisfy coexistence. Run the matrix on both reference hosts before changing the default.
 
 Automated:
 

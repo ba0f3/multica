@@ -4,9 +4,30 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestNativeCodexRetainsTaskSkillExclusions(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, ".codex")
+	task := TaskContextForEnv{AgentSkills: []SkillContextForEnv{{Name: "Off", Content: "workspace override"}}, DisabledRuntimeSkills: []RuntimeSkillRefForEnv{{Root: "provider", Key: "off"}, {Root: "universal", Key: "shared"}, {Root: "provider", Key: "../invalid"}}}
+	env, err := Prepare(PrepareParams{WorkspacesRoot: t.TempDir(), WorkspaceID: "native-policy", TaskID: "fresh", Provider: "codex", NativeProfile: &NativeProfile{Home: home, Env: map[string]string{"CODEX_HOME": profile}}, Task: task}, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.ReleaseLock()
+	want := []string{filepath.Join(profile, "skills", "off", "SKILL.md"), filepath.Join(home, ".agents", "skills", "shared", "SKILL.md")}
+	if !slices.Equal(env.CodexDisabledSkillPaths, want) {
+		t.Fatalf("native exclusions=%v want=%v", env.CodexDisabledSkillPaths, want)
+	}
+	task.DisabledRuntimeSkills = nil
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", NativeProfile: &NativeProfile{Home: home, Env: map[string]string{"CODEX_HOME": profile}}, Task: task}, discardLogger())
+	if reused == nil || len(reused.CodexDisabledSkillPaths) != 0 {
+		t.Fatal("reuse carried the previous task's exclusions")
+	}
+}
 
 func TestNativePrepareAndReusePreserveOriginalProfile(t *testing.T) {
 	for _, provider := range []string{"codex", "cursor", "opencode", "mcode"} {

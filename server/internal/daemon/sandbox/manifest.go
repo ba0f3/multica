@@ -50,6 +50,7 @@ type Config struct {
 
 // ExecSpec is the serializable part of agent.ExecOptions.
 type ExecSpec struct {
+	CodexDisabledSkillPaths    []string        `json:"codex_disabled_skill_paths,omitempty"`
 	NativeProfile              bool            `json:"native_profile,omitempty"`
 	EnableTaskSupplement       bool            `json:"enable_task_supplement,omitempty"`
 	Cwd                        string          `json:"cwd"`
@@ -117,6 +118,7 @@ func ReadManifest(r io.Reader) (Manifest, error) {
 // spec. Durations become seconds because JSON has no duration type.
 func ConvertExecOptions(opts agent.ExecOptions) ExecSpec {
 	return ExecSpec{
+		CodexDisabledSkillPaths:    opts.CodexDisabledSkillPaths,
 		NativeProfile:              opts.NativeProfile,
 		EnableTaskSupplement:       opts.EnableTaskSupplement,
 		Cwd:                        opts.Cwd,
@@ -150,6 +152,7 @@ func ConvertExecOptions(opts agent.ExecOptions) ExecSpec {
 // ExecOptions reverses ConvertExecOptions.
 func (s ExecSpec) ExecOptions() agent.ExecOptions {
 	return agent.ExecOptions{
+		CodexDisabledSkillPaths:    s.CodexDisabledSkillPaths,
 		NativeProfile:              s.NativeProfile,
 		EnableTaskSupplement:       s.EnableTaskSupplement,
 		Cwd:                        s.Cwd,

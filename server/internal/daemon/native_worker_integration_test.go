@@ -13,6 +13,8 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +48,117 @@ func realNativeSmokeInputs(t *testing.T) (string, string) {
 
 func newRealNativeSmokeDaemon(root, worker string) *Daemon {
 	return &Daemon{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), cfg: Config{SandboxEnabled: true, TaskSandboxBackend: "bwrap", WorkspacesRoot: root, SandboxSelfPath: worker, DockerMemoryBytes: 2 << 30, DockerPIDsLimit: 512, DockerNanoCPUs: 2e9}}
+}
+
+func TestNativeCoexistenceBarrierRequiresActiveTools(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	barrier := newNativeToolBarrier(ctx, false)
+	defer barrier.server.Close()
+	defer cancel()
+	results := make(chan int, 3)
+	request := func(name string) {
+		go func() {
+			response, err := http.Get(barrier.server.URL + "/" + name)
+			if err != nil {
+				results <- 0
+				return
+			}
+			_ = response.Body.Close()
+			results <- response.StatusCode
+		}()
+	}
+	request("worker-a")
+	request("worker-b")
+	deadline := time.Now().Add(3 * time.Second)
+	for barrier.activeCount() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("tool requests did not reach the barrier")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-results:
+		t.Fatal("barrier accepted sequential execution without the host")
+	case <-time.After(30 * time.Millisecond):
+	}
+	request("host")
+	for range 3 {
+		select {
+		case status := <-results:
+			if status != http.StatusOK {
+				t.Fatalf("overlap barrier status=%d", status)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("concurrent tools did not leave the barrier")
+		}
+	}
+	if !barrier.reached() {
+		t.Fatal("successful tool responses did not establish overlap")
+	}
+}
+
+type nativeToolBarrier struct {
+	server   *httptest.Server
+	mu       sync.Mutex
+	active   map[string]*http.Request
+	done     chan struct{}
+	complete bool
+}
+
+func newNativeToolBarrier(ctx context.Context, serialWorkers bool) *nativeToolBarrier {
+	b := &nativeToolBarrier{active: map[string]*http.Request{}, done: make(chan struct{})}
+	b.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name != "host" && name != "worker-a" && name != "worker-b" {
+			http.Error(w, "unknown participant", http.StatusBadRequest)
+			return
+		}
+		b.mu.Lock()
+		b.active[name] = r
+		host, workers := false, 0
+		for name, request := range b.active {
+			if request.Context().Err() != nil {
+				continue
+			}
+			if name == "host" {
+				host = true
+			} else {
+				workers++
+			}
+		}
+		if !b.complete && host && (workers == 2 || serialWorkers && workers >= 1) {
+			b.complete = true
+			close(b.done)
+		}
+		b.mu.Unlock()
+		defer func() {
+			b.mu.Lock()
+			if b.active[name] == r {
+				delete(b.active, name)
+			}
+			b.mu.Unlock()
+		}()
+		select {
+		case <-b.done:
+			_, _ = w.Write([]byte("overlap-proven"))
+		case <-r.Context().Done():
+		case <-ctx.Done():
+			http.Error(w, "overlap was not established", http.StatusRequestTimeout)
+		}
+	}))
+	return b
+}
+
+func (b *nativeToolBarrier) activeCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.active)
+}
+
+func (b *nativeToolBarrier) reached() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.complete
 }
 
 func TestRealNativeTaskAfterWorkerFailure(t *testing.T) {
@@ -231,7 +344,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 					if err := os.WriteFile(filepath.Join(env.WorkDir, "input.txt"), []byte(canary), 0600); err != nil {
 						t.Fatal(err)
 					}
-					prompt = "Use a shell tool to read input.txt and copy its exact bytes into " + name + " in the current workspace. Remember those bytes for a later turn. Do not call external services or Multica commands. Then say done."
+					prompt = "First use a shell tool to run cat input.txt so its literal text appears in the tool output. Then copy its exact bytes into " + name + " in the current workspace. Remember that literal text for a later turn. Do not call external services or Multica commands. Then say done."
 				}
 				backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: executable, TaskID: "native-smoke", Env: selected.Env, Logger: d.logger, BuiltinRuntime: true}, env, "", "", fmt.Sprintf("native-%s-%s-%d", provider, round, time.Now().UnixNano()), nil, nil)
 				if err != nil {
@@ -250,7 +363,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 				}
 				content, err := os.ReadFile(filepath.Join(env.WorkDir, name))
 				if err != nil || string(content) != canary {
-					t.Fatalf("%s: remembered tool artifact mismatch: %v", round, err)
+					t.Fatalf("%s: remembered tool artifact mismatch: read=%v got=%.120q want=%q", round, err, content, canary)
 				}
 				tools := 0
 				for _, message := range messages {
@@ -359,14 +472,17 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 				t.Fatal(err)
 			}
 			selected := &execenv.NativeProfile{Home: runtime.Home, Env: runtime.Env}
+			barrierCtx, stopBarrier := context.WithCancel(t.Context())
+			barrier := newNativeToolBarrier(barrierCtx, provider == "mcode")
+			defer barrier.server.Close()
+			defer stopBarrier()
 			type run struct {
-				name          string
-				env           *execenv.Environment
-				backend       agent.Backend
-				start, finish time.Time
-				result        agent.Result
-				tools         int
-				err           error
+				name    string
+				env     *execenv.Environment
+				backend agent.Backend
+				result  agent.Result
+				tools   int
+				err     error
 			}
 			runs := make([]run, 3)
 			for i, name := range []string{"worker-a", "worker-b", "host"} {
@@ -399,12 +515,12 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 					<-begin
 					ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
 					defer cancel()
+					prompt := "Use a shell tool to run synchronously: curl -fsS --max-time 150 '" + barrier.server.URL + "/" + r.name + "' && cp input.txt output.txt. Wait for the command to finish, then say done. This local endpoint is the test barrier; do not use other network services or Multica commands."
 					if provider == "mcode" && r.name == "host" {
-						r.result, r.tools, r.err = runRealNativeMcodeHostExec(ctx, executable, r.env.WorkDir, runtime.Env)
-						r.finish = time.Now()
+						r.result, r.tools, r.err = runRealNativeMcodeHostExec(ctx, executable, r.env.WorkDir, runtime.Env, prompt)
 						return
 					}
-					session, err := r.backend.Execute(ctx, "Use a shell tool to copy input.txt exactly to output.txt in this workspace. Do not call external services or Multica commands. Then say done.", agent.ExecOptions{NativeProfile: true, Cwd: r.env.WorkDir, Model: os.Getenv("MULTICA_SMOKE_MODEL_" + strings.ToUpper(provider)), Timeout: 220 * time.Second, IsolatedToolBoundary: true, OnCLIStarted: func() { r.start = time.Now() }})
+					session, err := r.backend.Execute(ctx, prompt, agent.ExecOptions{NativeProfile: true, Cwd: r.env.WorkDir, Model: os.Getenv("MULTICA_SMOKE_MODEL_" + strings.ToUpper(provider)), Timeout: 220 * time.Second, IsolatedToolBoundary: true})
 					if err != nil {
 						r.err = err
 						return
@@ -423,7 +539,6 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 								continue
 							}
 							r.result = result
-							r.finish = time.Now()
 							return
 						case <-ctx.Done():
 							r.err = ctx.Err()
@@ -434,6 +549,9 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 			}
 			close(begin)
 			wg.Wait()
+			if !barrier.reached() {
+				t.Error("host and workers never reached the tool barrier concurrently")
+			}
 			for _, r := range runs {
 				if r.err != nil || r.result.Status != "completed" {
 					t.Errorf("%s: status=%s error=%v provider_error=%s", r.name, r.result.Status, r.err, r.result.Error)
@@ -624,8 +742,7 @@ try {
 
 // The host counterpart uses MCode's normal headless CLI, rather than starting
 // another ACP client with Multica's application identity outside the sandbox.
-func runRealNativeMcodeHostExec(ctx context.Context, executable, cwd string, env map[string]string) (agent.Result, int, error) {
-	prompt := "Use a shell tool to copy input.txt exactly to output.txt in this workspace. Do not call external services or Multica commands. Then say done."
+func runRealNativeMcodeHostExec(ctx context.Context, executable, cwd string, env map[string]string, prompt string) (agent.Result, int, error) {
 	cmd := exec.CommandContext(ctx, executable, "exec", "--cwd", cwd, "--permission", "full", "--output-format", "stream-json", "--timeout", "220s", "--input", "-")
 	cmd.Dir = cwd
 	cmd.Stdin = strings.NewReader(prompt)

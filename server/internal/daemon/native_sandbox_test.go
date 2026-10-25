@@ -261,7 +261,9 @@ printf '%s\n' '{"type":"cli_started"}' '{"type":"result","result":{"Status":"com
 func TestNativeAgentEntryHealsWithoutUnboundedHostVersionProbe(t *testing.T) {
 	d := newSandboxTestDaemon(t, "bwrap")
 	exe := filepath.Join(t.TempDir(), "new-codex")
-	_ = os.WriteFile(exe, []byte("#!/missing/interpreter\n"), 0700)
+	marker := filepath.Join(t.TempDir(), "unbounded-probe")
+	t.Setenv("NATIVE_VERSION_HOST_PROBE", marker)
+	_ = os.WriteFile(exe, []byte("#!/bin/sh\nprintf called > \"$NATIVE_VERSION_HOST_PROBE\"\n"), 0700)
 	calls := 0
 	d.nativeResolver = sandbox.NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { calls++; return "0.163.0", nil })
 	entry := AgentEntry{Path: filepath.Join(t.TempDir(), "deleted-release"), Command: exe}
@@ -276,6 +278,9 @@ func TestNativeAgentEntryHealsWithoutUnboundedHostVersionProbe(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("warm native resolution re-probed version: %d", calls)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("native entry resolution executed a CLI outside its isolated detector")
 	}
 }
 

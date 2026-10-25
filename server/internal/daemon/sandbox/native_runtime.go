@@ -30,25 +30,28 @@ type NativeLink struct {
 }
 
 type NativeRuntime struct {
-	Provider     string
-	Executable   string
-	Home         string
-	ProfileKey   string
-	Version      string
-	ReadOnly     []Mount
-	Writable     []Mount
-	Links        []NativeLink
-	PrivatePaths []string
-	Env          map[string]string
-	ProfileLimit int
+	Provider       string
+	Executable     string
+	Home           string
+	ProfileKey     string
+	Version        string
+	ReadOnly       []Mount
+	ReadOnlyInputs []Mount
+	Writable       []Mount
+	Links          []NativeLink
+	PrivatePaths   []string
+	Env            map[string]string
+	ProfileLimit   int
+	BinDirs        []string
 }
 
 type NativeVersionDetector func(context.Context, string, string) (string, error)
 
 type nativeWatch struct {
-	path   string
-	follow bool
-	info   os.FileInfo
+	path     string
+	follow   bool
+	info     os.FileInfo
+	children bool
 }
 
 type nativeRuntimeEntry struct {
@@ -124,6 +127,7 @@ func normalizeNativeRuntimeRequest(request NativeRuntimeRequest) (NativeRuntimeR
 	if err := nativeAbsolutePath(request.Executable); err != nil {
 		return request, fmt.Errorf("native sandbox executable: %w", err)
 	}
+	requestPathEnv := request.Env["PATH"]
 	selectors := make(map[string]string)
 	for _, key := range nativeProfileEnvKeys {
 		if value := request.Env[key]; value != "" {
@@ -131,6 +135,9 @@ func normalizeNativeRuntimeRequest(request NativeRuntimeRequest) (NativeRuntimeR
 		}
 	}
 	request.Env = selectors
+	if path := requestPathEnv; path != "" {
+		request.Env["PATH"] = path
+	}
 	return request, nil
 }
 
@@ -186,6 +193,28 @@ func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []
 		return NativeRuntime{}, nil, err
 	}
 	if err := resolveNativeInstallation(request, resolved, &result, &watch); err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	if request.Provider == "codex" {
+		universal := filepath.Join(request.Home, ".agents", "skills")
+		if _, err := os.Stat(universal); err == nil {
+			start := len(result.ReadOnly)
+			watchStart := len(watch)
+			if _, err := grantNativeReadOnly(request, universal, &result, &watch); err != nil {
+				return NativeRuntime{}, nil, err
+			}
+			result.ReadOnlyInputs = append(result.ReadOnlyInputs, result.ReadOnly[start:]...)
+			result.ReadOnly = result.ReadOnly[:start]
+			for i := watchStart; i < len(watch); i++ {
+				watch[i].children = true
+			}
+		} else if !os.IsNotExist(err) {
+			return NativeRuntime{}, nil, err
+		} else {
+			watch = append(watch, nativeWatch{path: universal, follow: true})
+		}
+	}
+	if err := resolveNativeBuildTools(request, &result, &watch); err != nil {
 		return NativeRuntime{}, nil, err
 	}
 	for _, link := range result.Links {
@@ -375,14 +404,43 @@ var nativeReleaseName = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,99}$`)
 var nativeMcodeNode = regexp.MustCompile(`(?m)^node=['"]([^'"\r\n]+)['"]`)
 
 func resolveNativeInstallation(request NativeRuntimeRequest, executable string, result *NativeRuntime, watch *[]nativeWatch) error {
-	root := filepath.Dir(executable)
-	if filepath.Base(root) == "bin" {
-		root = filepath.Dir(root)
+	if err := grantNativeProgram(request, executable, result, watch, nil); err != nil {
+		return err
 	}
 	if request.Provider == "codex" {
-		packages := filepath.Join(request.Home, ".codex", "packages")
+		packages := filepath.Join(result.Env["CODEX_HOME"], "packages")
 		if isUnder(executable, packages) {
-			root = packages
+			if _, err := grantNativeReadOnly(request, packages, result, watch); err != nil {
+				return err
+			}
+		}
+		companion := filepath.Join(filepath.Dir(executable), "codex-code-mode-host")
+		if _, err := os.Stat(companion); err == nil {
+			if err := grantNativeProgram(request, companion, result, watch, nil); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if request.Provider == "cursor" {
+		root := filepath.Dir(executable)
+		index := filepath.Join(root, "index.js")
+		if _, err := os.Stat(index); err == nil {
+			if filepath.Base(filepath.Dir(root)) != "versions" || filepath.Base(filepath.Dir(filepath.Dir(root))) != "cursor-agent" {
+				return fmt.Errorf("native sandbox: unsupported Cursor companion layout; use the original versioned installer")
+			}
+			if _, err := grantNativeReadOnly(request, root, result, watch); err != nil {
+				return err
+			}
+			if err := watchNativePath(watch, index); err != nil {
+				return err
+			}
+			if err := grantNativeProgram(request, filepath.Join(root, "node"), result, watch, nil); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
 		}
 	}
 	if request.Provider == "mcode" {
@@ -396,7 +454,7 @@ func resolveNativeInstallation(request NativeRuntimeRequest, executable string, 
 		if !nativeReleaseName.MatchString(release) {
 			return fmt.Errorf("native sandbox: invalid MCode current release pointer")
 		}
-		root = filepath.Join(prefix, "releases", release)
+		root := filepath.Join(prefix, "releases", release)
 		launcher := filepath.Join(root, ".mcode-launcher")
 		text, err := os.ReadFile(launcher)
 		if err != nil {
@@ -407,49 +465,22 @@ func resolveNativeInstallation(request NativeRuntimeRequest, executable string, 
 			return fmt.Errorf("native sandbox: MCode launcher does not declare its Node runtime")
 		}
 		node := string(match[1])
-		if err := validateNativeGrant(request, node); err != nil {
+		if err := grantNativeProgram(request, node, result, watch, nil); err != nil {
 			return err
 		}
-		nodeExecutable, links, err := nativeResolveLinks(node)
-		if err != nil {
-			return fmt.Errorf("native sandbox: MCode Node runtime: %w", err)
-		}
-		result.Links = appendNativeLinks(result.Links, links...)
-		if err := resolveNativeELF(request, nodeExecutable, result, watch); err != nil {
+		result.BinDirs = appendNativeDir(result.BinDirs, filepath.Dir(node))
+		if _, err := grantNativeReadOnly(request, root, result, watch); err != nil {
 			return err
 		}
-		nodeRoot := filepath.Dir(nodeExecutable)
-		if filepath.Base(nodeRoot) == "bin" {
-			nodeRoot = filepath.Dir(nodeRoot)
+		if _, err := grantNativeReadOnly(request, pointer, result, watch); err != nil {
+			return err
 		}
-		result.ReadOnly = append(result.ReadOnly,
-			Mount{Source: executable, Target: executable, ReadOnly: true},
-			Mount{Source: pointer, Target: pointer, ReadOnly: true},
-			Mount{Source: nodeRoot, Target: nodeRoot, ReadOnly: true})
+		if err := watchNativePath(watch, launcher); err != nil {
+			return err
+		}
 		result.PrivatePaths = append(result.PrivatePaths, filepath.Join(prefix, ".mcode-active"))
-		for _, path := range []string{pointer, launcher, node} {
-			if err := watchNativePath(watch, path); err != nil {
-				return err
-			}
-		}
 	}
-	if err := validateNativeGrant(request, root); err != nil {
-		return fmt.Errorf("native sandbox installation: %w", err)
-	}
-	result.ReadOnly = append(result.ReadOnly, Mount{Source: root, Target: root, ReadOnly: true})
-	if err := watchNativePath(watch, root); err != nil {
-		return err
-	}
-	if err := resolveNativeELF(request, executable, result, watch); err != nil {
-		return err
-	}
-	if request.Provider == "cursor" {
-		node := filepath.Join(root, "node")
-		if info, err := os.Stat(node); err == nil && info.Mode().IsRegular() {
-			return resolveNativeELF(request, node, result, watch)
-		}
-	}
-	return nil
+	return resolveNativeNodePackage(request, executable, result, watch)
 }
 
 func watchNativePath(watch *[]nativeWatch, path string) error {
@@ -472,12 +503,18 @@ func nativeWatchesMatch(watch []nativeWatch) bool {
 		if item.follow {
 			info, err = os.Stat(item.path)
 		}
+		if item.info == nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return false
+		}
 		if err != nil || !os.SameFile(item.info, info) || info.Mode() != item.info.Mode() {
 			return false
 		}
 		// Directory children include tokens and sessions. Their changes must
 		// not turn every task into another installation/version probe.
-		if !info.IsDir() && (info.Size() != item.info.Size() || !info.ModTime().Equal(item.info.ModTime())) {
+		if (!info.IsDir() || item.children) && (info.Size() != item.info.Size() || !info.ModTime().Equal(item.info.ModTime())) {
 			return false
 		}
 	}
@@ -502,9 +539,11 @@ func appendNativeLinks(links []NativeLink, extra ...NativeLink) []NativeLink {
 
 func cloneNativeRuntime(value NativeRuntime) NativeRuntime {
 	value.ReadOnly = append([]Mount(nil), value.ReadOnly...)
+	value.ReadOnlyInputs = append([]Mount(nil), value.ReadOnlyInputs...)
 	value.Writable = append([]Mount(nil), value.Writable...)
 	value.Links = append([]NativeLink(nil), value.Links...)
 	value.PrivatePaths = append([]string(nil), value.PrivatePaths...)
+	value.BinDirs = append([]string(nil), value.BinDirs...)
 	env := make(map[string]string, len(value.Env))
 	for key, entry := range value.Env {
 		env[key] = entry

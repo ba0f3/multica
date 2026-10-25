@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,6 +65,7 @@ func (d *Daemon) nativeRuntimeRequest(provider, executable string) (sandbox.Nati
 			env[key] = value
 		}
 	}
+	env["PATH"] = os.Getenv("PATH")
 	return sandbox.NativeRuntimeRequest{Provider: provider, Executable: executable, Home: home, Env: env, ForbiddenRoots: []string{d.cfg.WorkspacesRoot}}, nil
 }
 
@@ -119,6 +121,7 @@ func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable s
 	for key, value := range layout.Env {
 		probeEnv[key] = value
 	}
+	probeEnv["PATH"] = strings.Join(append(append([]string{}, layout.BinDirs...), sandboxPath()), string(os.PathListSeparator))
 	policy := sandbox.Policy{TaskRoot: root, HomeDir: filepath.Join(root, "home"), HostHome: layout.Home, TempDir: filepath.Join(root, "tmp"), CheckoutDir: filepath.Join(root, "cwd"), RuntimeRoots: sandboxRuntimeRoots(), ExtraMounts: extras, Links: layout.Links, AllowedRoots: []string{root}, AllowedExactPaths: extraMountSources(extras), Env: probeEnv, Command: []string{executable, "--version"}}
 	args, err := sandbox.BuildArgs(policy, self)
 	if err != nil {
@@ -150,6 +153,7 @@ type nativeAttemptBackend struct {
 	worker  *sandbox.IPCBackend
 	profile sandbox.NativeRuntime
 	onSpawn func()
+	prepare func(*sandbox.IPCBackend) (func() error, error)
 }
 
 func (b *nativeAttemptBackend) Execute(ctx context.Context, prompt string, opts agent.ExecOptions) (*agent.Session, error) {
@@ -169,6 +173,15 @@ func (b *nativeAttemptBackend) Execute(ctx context.Context, prompt string, opts 
 		}
 	}
 	worker := *b.worker
+	var cleanupStorage func() error
+	if b.prepare != nil {
+		var err error
+		cleanupStorage, err = b.prepare(&worker)
+		if err != nil {
+			_ = lease.Close()
+			return nil, err
+		}
+	}
 	worker.Start = func(cmd *exec.Cmd) (func(), error) {
 		if b.onSpawn != nil {
 			b.onSpawn()
@@ -182,6 +195,9 @@ func (b *nativeAttemptBackend) Execute(ctx context.Context, prompt string, opts 
 	opts.NativeProfile = true
 	session, err := worker.Execute(ctx, prompt, opts)
 	if err != nil {
+		if cleanupStorage != nil {
+			err = errors.Join(err, cleanupStorage())
+		}
 		_ = lease.Close()
 	}
 	return session, err
@@ -212,19 +228,6 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 			return nil, err
 		}
 	}
-	// Reused Docker environments may still contain copied auth. Never mount that
-	// old HOME into a native attempt; each attempt gets a fresh empty mount source.
-	privateRoot, err := os.MkdirTemp(env.RootDir, "native-attempt-")
-	if err != nil {
-		return nil, err
-	}
-	dirs := map[string]string{}
-	for _, name := range []string{"home", "tmp", "output"} {
-		dirs[name] = filepath.Join(privateRoot, name)
-		if err := os.Mkdir(dirs[name], 0700); err != nil {
-			return nil, err
-		}
-	}
 	extras := append([]sandbox.Mount{}, runtime.Writable...)
 	network, err := sandbox.RuntimeNetworkMounts()
 	if err != nil {
@@ -232,10 +235,11 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	}
 	extras = append(extras, network...)
 	extras = append(extras, runtime.ReadOnly...)
+	extras = append(extras, runtime.ReadOnlyInputs...)
 	if env.MulticaConfigRoot != "" {
 		extras = append(extras, sandbox.Mount{Source: env.MulticaConfigRoot, Target: env.MulticaConfigRoot})
 	}
-	if err := repoCacheOverlapError(repos, extraCachePaths, env, dirs["home"], dirs["tmp"]); err != nil {
+	if err := repoCacheOverlapError(repos, extraCachePaths, env, "", ""); err != nil {
 		return nil, err
 	}
 	for _, entry := range repos {
@@ -248,12 +252,13 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	if len(repos) > 0 {
 		extras = append(extras, sandbox.Mount{Source: manifest, Target: filepath.Join(env.MulticaConfigRoot, workercheckout.ManifestFileName), ReadOnly: true})
 	}
-	for i, target := range runtime.PrivatePaths {
-		source := filepath.Join(privateRoot, fmt.Sprintf("marker-%d", i))
-		if err := os.Mkdir(source, 0700); err != nil {
-			return nil, err
-		}
-		extras = append(extras, sandbox.Mount{Source: source, Target: target})
+	cacheDir := filepath.Join(env.RootDir, "tool-cache")
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		return nil, err
+	}
+	extras = append(extras, sandbox.Mount{Source: cacheDir, Target: cacheDir})
+	if env.WorkerCABundlePath != "" {
+		extras = append(extras, sandbox.Mount{Source: env.WorkerCABundlePath, Target: env.WorkerCABundlePath, ReadOnly: true})
 	}
 	agentEnv := map[string]string{}
 	for key, value := range config.Env {
@@ -269,17 +274,24 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		agentEnv[key] = sandbox.TempPath
 	}
-	agentEnv["PATH"] = "/run/multica" + string(os.PathListSeparator) + filepath.Dir(runtime.Executable) + string(os.PathListSeparator) + sandboxPath()
+	binDirs := append([]string{"/run/multica"}, runtime.BinDirs...)
+	binDirs = append(binDirs, filepath.Dir(runtime.Executable), sandboxPath())
+	agentEnv["PATH"] = strings.Join(binDirs, string(os.PathListSeparator))
 	if agentSocket != "" {
 		agentEnv["SSH_AUTH_SOCK"] = sandbox.AgentSocketPath
 	}
 	if env.MulticaConfigRoot != "" {
 		agentEnv["MULTICA_TASK_CONFIG_ROOT"] = env.MulticaConfigRoot
 	}
-	policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: runtime.Home, TempDir: dirs["tmp"], OutputDir: dirs["output"], CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, RuntimeRoots: sandboxRuntimeRoots(), ExtraMounts: extras, Links: append(runtime.Links, sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: append(sandboxForbiddenRoots(d.cfg.WorkspacesRoot, profileDir), sandboxCredentialRoots(runtime.Home, profileDir)...), AllowedExactPaths: append([]string{agentSocket}, extraMountSources(extras)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
-	args, err := sandbox.BuildArgs(policy, self)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+	for key, value := range map[string]string{"GOCACHE": filepath.Join(cacheDir, "go-build"), "GOPATH": filepath.Join(cacheDir, "go"), "NPM_CONFIG_CACHE": filepath.Join(cacheDir, "npm")} {
+		if agentEnv[key] == "" && !(key == "NPM_CONFIG_CACHE" && agentEnv["npm_config_cache"] != "") {
+			agentEnv[key] = value
+		}
+	}
+	if env.WorkerCABundlePath != "" {
+		for key, value := range sandbox.CAEnv(env.WorkerCABundlePath) {
+			agentEnv[key] = value
+		}
 	}
 	config.Env = agentEnv
 	config.CLIVersion = runtime.Version
@@ -289,12 +301,53 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	cfg := sandbox.ConfigFromAgent(config)
 	cfg.AttemptID = attemptID
 	unit := "multica-" + strings.TrimPrefix(sandbox.SanitizeContainerName(attemptID), "multica-") + ".scope"
-	worker := &sandbox.IPCBackend{Provider: provider, Config: cfg, KeepStdinOpen: true, WorkerCwd: env.WorkDir, Launch: func() (*exec.Cmd, error) { return scope.Command(unit, append([]string{bwrap}, args...)) }, StopAttempt: func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		return scope.Stop(ctx, unit)
-	}}
-	return &nativeAttemptBackend{worker: worker, profile: runtime}, nil
+	worker := &sandbox.IPCBackend{Provider: provider, Config: cfg, KeepStdinOpen: true, WorkerCwd: env.WorkDir}
+	prepare := func(worker *sandbox.IPCBackend) (cleanup func() error, retErr error) {
+		privateRoot, err := os.MkdirTemp(env.RootDir, "native-attempt-")
+		if err != nil {
+			return nil, err
+		}
+		removeStorage := func() error { return os.RemoveAll(privateRoot) }
+		cleanup = removeStorage
+		output := filepath.Join(env.RootDir, "outputs", filepath.Base(privateRoot))
+		defer func() {
+			if retErr != nil {
+				retErr = errors.Join(retErr, removeStorage(), os.RemoveAll(output))
+			}
+		}()
+		dirs := map[string]string{}
+		for _, name := range []string{"home", "tmp"} {
+			dirs[name] = filepath.Join(privateRoot, name)
+			if err := os.Mkdir(dirs[name], 0700); err != nil {
+				return nil, err
+			}
+		}
+		if err := os.MkdirAll(output, 0700); err != nil {
+			return nil, err
+		}
+		mounts := append([]sandbox.Mount(nil), extras...)
+		for i, target := range runtime.PrivatePaths {
+			source := filepath.Join(privateRoot, fmt.Sprintf("marker-%d", i))
+			if err := os.Mkdir(source, 0700); err != nil {
+				return nil, err
+			}
+			mounts = append(mounts, sandbox.Mount{Source: source, Target: target})
+		}
+		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: runtime.Home, TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, RuntimeRoots: sandboxRuntimeRoots(), ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: append(sandboxForbiddenRoots(d.cfg.WorkspacesRoot, profileDir), sandboxCredentialRoots(runtime.Home, profileDir)...), AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
+		args, err := sandbox.BuildArgs(policy, self)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+		}
+		worker.Launch = func() (*exec.Cmd, error) { return scope.Command(unit, append([]string{bwrap}, args...)) }
+		worker.StopAttempt = func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			return scope.Stop(ctx, unit)
+		}
+		worker.AfterReap = cleanup
+		return cleanup, nil
+	}
+	return &nativeAttemptBackend{worker: worker, profile: runtime, prepare: prepare}, nil
 }
 
 func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, entry AgentEntry) (AgentEntry, string, *execenv.NativeProfile, error) {
