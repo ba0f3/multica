@@ -37,9 +37,9 @@ docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
 `make task-worker-image` builds and applies both tags.
 
 The image ships the `multica` worker binary only (Debian/glibc base). For isolated
-**codex**, **cursor**, and **opencode** tasks, the daemon bind-mounts the host CLI
-into `/usr/local/bin/<basename>` read-only at launch time — you do not bake agent
-CLIs into the image for local dev.
+**codex**, **cursor**, **opencode**, **claude**, and **antigravity** tasks, the
+daemon bind-mounts the host CLI into `/usr/local/bin/<basename>` read-only at
+launch time — you do not bake agent CLIs into the image for local dev.
 
 Record **image digest** in your test notes.
 
@@ -138,6 +138,10 @@ The daemon startup log reports the configured path and whether it exists.
 9. **Cache retention** — after the task ends, the cache listed in the manifest still exists while the env root exists, and a daemon restart followed by another checkout still works. The env root's removal and the next GC cycle drop its dependents record; the cache then becomes evictable under the normal repo TTL. It must not disappear while a live workdir still references it.
 10. **CA bundle** — with `MULTICA_DOCKER_TASK_CA_BUNDLE` set, `docker inspect <container>` must show a read-only mount of the task's `ca-bundle.pem` at `/home/agent/.multica/ca-bundle.pem` and the CA env vars (`GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`) all pointing there.
 11. **Teardown** — cancel task: container removed, signing socket directory under `git-agent/<task>/<attempt>/` gone.
+12. **Claude/Antigravity binaries** — for a `claude` and an `antigravity` task, `docker inspect` must show the host CLI mounted read-only at `/usr/local/bin/claude` and `/usr/local/bin/agy`. Inside the worker (`docker exec`), `claude --version` and `agy --version` must report the bound binaries' versions.
+13. **Claude/Antigravity task home** — inside the worker, `ls -la /home/agent` must show `.claude/` and `.claude.json` (for `claude`) and `.gemini/` (for `antigravity`) copied from the host, owned by the daemon uid/gid (not root). `~/.claude/projects`, `~/.claude/logs`, and `~/.gemini/antigravity-cli/cache` must be absent. The host home and host config dir are never mounted: `docker inspect` must not show a bind whose source is the host `~/.claude` or `~/.gemini`.
+14. **Claude settings file** — for a `claude` task with disabled runtime skills, the task-local `--settings` file must appear at `/home/agent/.multica/claude-settings.json` (read-only), and the worker must pass `--settings /home/agent/.multica/claude-settings.json` (not the host path).
+15. **Native binaries only** — only native CLI binaries are supported: a Node/npm shim whose resolved file is a script needs its interpreter, which the image does not provide, so such an install cannot run in the worker. Credentials that exist only in a system keyring and are not stored under `~/.claude`/`~/.gemini` will not work inside the boundary.
 
 ## Native agents (authorized only)
 
@@ -147,7 +151,7 @@ Per AGENTS.md:
 (cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 go test -tags=agentintegration ./pkg/agent -run '<TestName>' -count=1 -v)
 ```
 
-Pin Codex/Cursor/OpenCode versions in the image before claiming compatibility.
+Pin Codex/Cursor/OpenCode/Claude/Antigravity versions in the image before claiming compatibility.
 
 ## Evidence to record
 
