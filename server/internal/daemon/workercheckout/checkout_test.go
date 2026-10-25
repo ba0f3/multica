@@ -384,6 +384,46 @@ func TestCheckoutRefOverrideFetches(t *testing.T) {
 	}
 }
 
+func TestCheckoutRefResolvesFetchedTagAndSHA(t *testing.T) {
+	remote := testRemote(t)
+	tc := newTestCache(t, remote)
+	entry := tc.entry(t) // the cache holds only the initial commit
+
+	// A tag on a commit the cache has never seen, so neither the commit nor the
+	// tag object is already cached. The tag is reachable, so a raw-SHA fetch
+	// must be allowed for the second case below.
+	mustGit(t, remote, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	mustGit(t, remote, "checkout", "-q", "-b", "release")
+	addCommit(t, remote, "release commit")
+	tagSHA := mustGit(t, remote, "rev-parse", "HEAD")
+	mustGit(t, remote, "tag", "v1.0")
+
+	// --ref <tag>: the fetched tag object lands in FETCH_HEAD without creating
+	// refs/remotes/origin/v1.0, so resolution must fall back to FETCH_HEAD.
+	tagResult, err := Checkout(context.Background(), t.TempDir(), entry, Options{Ref: "v1.0", AgentName: testAgentName, TaskID: testTaskID})
+	if err != nil {
+		t.Fatalf("Checkout with tag ref: %v", err)
+	}
+	if got := mustGit(t, tagResult.Path, "rev-parse", "HEAD"); got != tagSHA {
+		t.Errorf("tag checkout HEAD = %s, want %s", got, tagSHA)
+	}
+	if tagResult.BaseSHA != tagSHA {
+		t.Errorf("tag checkout BaseSHA = %s, want %s", tagResult.BaseSHA, tagSHA)
+	}
+
+	// --ref <sha>: a raw commit SHA also resolves through FETCH_HEAD.
+	shaResult, err := Checkout(context.Background(), t.TempDir(), entry, Options{Ref: tagSHA, AgentName: testAgentName, TaskID: testTaskID})
+	if err != nil {
+		t.Fatalf("Checkout with sha ref: %v", err)
+	}
+	if got := mustGit(t, shaResult.Path, "rev-parse", "HEAD"); got != tagSHA {
+		t.Errorf("sha checkout HEAD = %s, want %s", got, tagSHA)
+	}
+	if shaResult.BaseSHA != tagSHA {
+		t.Errorf("sha checkout BaseSHA = %s, want %s", shaResult.BaseSHA, tagSHA)
+	}
+}
+
 func TestCheckoutRejectsForeignOrigin(t *testing.T) {
 	// Two remotes whose URLs share a basename so they map to the same checkout
 	// directory, but whose origins differ.

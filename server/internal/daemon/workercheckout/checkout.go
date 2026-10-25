@@ -175,6 +175,11 @@ func resolveSHA(ctx context.Context, target string, entry Entry, ref string) (st
 	if sha, err := resolveCommit(ctx, target, "refs/remotes/origin/"+ref); err == nil {
 		return sha, nil
 	}
+	// A branch ref lands in refs/remotes/origin/<ref>, but a tag or raw SHA is
+	// stored only in FETCH_HEAD, so fall back to that before giving up.
+	if sha, err := resolveCommit(ctx, target, "FETCH_HEAD"); err == nil {
+		return sha, nil
+	}
 	return resolveCommit(ctx, target, ref)
 }
 
