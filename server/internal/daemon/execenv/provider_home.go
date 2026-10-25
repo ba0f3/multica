@@ -113,9 +113,16 @@ func dirSet(names ...string) map[string]bool {
 	return set
 }
 
-// claudeSourceHome returns the daemon user's ~/.claude source directory for the
-// isolated task-home copy.
+// claudeSourceHome returns the daemon user's Claude Code config source for the
+// isolated task-home copy. CLAUDE_CONFIG_DIR wins when set, matching the CLI's
+// own override; otherwise the default is ~/.claude.
 func claudeSourceHome() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", fmt.Errorf("CLAUDE_CONFIG_DIR must be an absolute path")
+		}
+		return filepath.Clean(dir), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user home: %w", err)

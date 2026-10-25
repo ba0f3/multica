@@ -144,3 +144,23 @@ func TestPrepareAntigravityIsolatedHomeMissingSourceIsNonFatal(t *testing.T) {
 		t.Fatalf("prepareAntigravityIsolatedHome with missing source: %v", err)
 	}
 }
+
+func TestPrepareClaudeIsolatedHomeHonorsConfigDir(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(t.TempDir(), "custom-claude")
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte(`{"token":"x"}`), 0o600); err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+	taskHome := t.TempDir()
+	if err := prepareClaudeIsolatedHome(taskHome, nil); err != nil {
+		t.Fatalf("prepareClaudeIsolatedHome: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(taskHome, ".claude", ".credentials.json")); err != nil {
+		t.Fatalf("credentials from CLAUDE_CONFIG_DIR not copied: %v", err)
+	}
+}

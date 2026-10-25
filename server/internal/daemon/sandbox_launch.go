@@ -73,6 +73,12 @@ func (d *Daemon) sandboxedBackend(
 	if backend == "" {
 		backend = "bwrap"
 	}
+	if backend == "bwrap" && sandbox.ProviderRequiresDockerBackend(provider) {
+		// Claude Code and Antigravity are seeded into the per-task home, which
+		// only the Docker backend mounts as HOME. Refuse them on bwrap instead
+		// of launching without auth under the host-home policy.
+		return nil, fmt.Errorf("%w: provider %q requires the docker backend", errSandboxUnavailable, provider)
+	}
 	switch backend {
 	case "docker":
 		return d.dockerBackend(provider, config, env, agentSocket, attemptID, repos, extraCachePaths)

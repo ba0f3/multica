@@ -14,3 +14,16 @@ func TestProviderSupportsIsolatedTools(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderRequiresDockerBackend(t *testing.T) {
+	for _, provider := range []string{"claude", "antigravity", "CLAUDE"} {
+		if !ProviderRequiresDockerBackend(provider) {
+			t.Fatalf("expected %q to require docker", provider)
+		}
+	}
+	for _, provider := range []string{"codex", "cursor", "opencode", ""} {
+		if ProviderRequiresDockerBackend(provider) {
+			t.Fatalf("expected %q not to require docker", provider)
+		}
+	}
+}

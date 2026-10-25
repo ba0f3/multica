@@ -352,3 +352,18 @@ func TestSandboxHiddenHomePathsHonourOperatorAdditions(t *testing.T) {
 		t.Error("an operator addition with surrounding spaces was ignored")
 	}
 }
+
+func TestSandboxedBackendRejectsClaudeOnBwrap(t *testing.T) {
+	daemon := newSandboxTestDaemon(t, "bwrap")
+	daemon.cfg.TaskSandboxBackend = "bwrap"
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	if err == nil {
+		t.Fatal("expected claude to be refused on the bwrap backend")
+	}
+	if backend != nil {
+		t.Fatal("backend should be nil")
+	}
+	if !strings.Contains(err.Error(), "requires the docker backend") {
+		t.Fatalf("error = %v, want a docker-backend requirement", err)
+	}
+}
