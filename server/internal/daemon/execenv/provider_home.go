@@ -65,6 +65,16 @@ func mirrorProviderTree(src, dst string, skipDirs map[string]bool, logger *slog.
 			}
 			return nil
 		}
+		if !entry.Type().IsRegular() {
+			// Provider homes can contain runtime sockets (for example MiniMax's
+			// .minimax/run/*.sock auth lease) and device/FIFO entries. Opening a
+			// socket copies nothing and fails with ENXIO, so skip everything that
+			// is not a regular file. Directories and symlinks were handled above.
+			if logger != nil {
+				logger.Debug("execenv: skip non-regular provider home entry", "path", path, "type", entry.Type().String())
+			}
+			return nil
+		}
 		// Copy files only if the target is missing so a reused task home keeps
 		// its refreshed credentials rather than being rolled back to the host
 		// snapshot from its first prepare.
