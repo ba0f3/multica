@@ -58,7 +58,7 @@ export MULTICA_DOCKER_TASK_NETWORK=bridge
 export MULTICA_DOCKER_TASK_CA_BUNDLE=/home/tui/Projects/multica/.orca/drops/MUOI_TIEU_XANH.crt
 ```
 
-Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=1` or `bwrap` still selects bubblewrap. bwrap has no task repo manifest and no worker CA bundle, so the repo-cache and CA checks below apply only to the Docker backend.
+Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=bwrap` still selects bubblewrap (the `1`/`true`/`on`/`yes` values select Docker). bwrap has no task repo manifest and no worker CA bundle, so the repo-cache and CA checks below apply only to the Docker backend.
 
 `MULTICA_DOCKER_TASK_CA_BUNDLE` names a host PEM file whose valid `CERTIFICATE`
 blocks the daemon appends to the worker's CA bundle (the machine trust the repo
@@ -100,7 +100,7 @@ The daemon startup log reports the configured path and whether it exists.
    - `git -C <path> branch --show-current` is the task branch, and `git status --short` is clean.
 5. **Host checkout blocked** — with the sandbox on, the host daemon `POST /repo/checkout` must still reject the task token with *host repo checkout is disabled*. The in-worker command above must not contact the host daemon.
 6. **A/B** — two tasks on the same runtime and repo: both manifests point at the same bare cache, but the containers have distinct workdirs and attempt sockets. A second task's manifest lists only its own `task.Repos`; neither container mounts the other's workdir, and `ls` in the second container cannot see the first task's files.
-7. **Reuse divergence** — reuse the first task's workdir, leave an uncommitted file and an unpushed commit, then run `repo checkout` again. The output must say the existing checkout was kept and report commits ahead/behind, uncommitted files, and unpushed commits; `git log` and `git status` must show the work untouched. Then run `repo checkout ... --fresh`: it resets to the new base and drops unpushed commits, uncommitted changes, and untracked files. Push anything you need first.
+7. **Reuse divergence** — reuse the first task's workdir, leave an uncommitted file and an unpushed commit, then run `repo checkout` again. The output must say the existing checkout was kept and report commits ahead/behind, uncommitted files, and unpushed commits; `git log` and `git status` must show the work untouched. Then run `repo checkout ... --fresh`: it resets to the new base and drops unpushed commits, uncommitted changes, and untracked and ignored files. Push anything you need first.
 8. **Cache retention** — after the task ends, the cache listed in the manifest still exists while the env root exists, and a daemon restart followed by another checkout still works. The env root's removal and the next GC cycle drop its dependents record; the cache then becomes evictable under the normal repo TTL. It must not disappear while a live workdir still references it.
 9. **CA bundle** — with `MULTICA_DOCKER_TASK_CA_BUNDLE` set, `docker inspect <container>` must show a read-only mount of the task's `ca-bundle.pem` at `/home/agent/.multica/ca-bundle.pem` and the CA env vars (`GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`) all pointing there.
 10. **Teardown** — cancel task: container removed, signing socket directory under `git-agent/<task>/<attempt>/` gone.
