@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -45,6 +46,10 @@ func RunWorker(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 }
 
 func runManifest(ctx context.Context, manifest Manifest, out io.Writer, logger *slog.Logger) error {
+	out = &workerFrameWriter{Writer: out}
+	if err := WriteFrame(out, Frame{Type: FrameWorkerReady}); err != nil {
+		return err
+	}
 	if err := importWorkerOpenCodeCredentials(ctx, manifest); err != nil {
 		return WriteFrame(out, Frame{Type: FrameError, Error: err.Error()})
 	}
@@ -64,7 +69,9 @@ func runManifest(ctx context.Context, manifest Manifest, out io.Writer, logger *
 		return WriteFrame(out, Frame{Type: FrameError, Error: "create agent backend: " + err.Error()})
 	}
 
-	session, err := backend.Execute(ctx, manifest.Prompt, manifest.Exec.ExecOptions())
+	opts := manifest.Exec.ExecOptions()
+	opts.OnCLIStarted = sync.OnceFunc(func() { _ = WriteFrame(out, Frame{Type: FrameCLIStarted}) })
+	session, err := backend.Execute(ctx, manifest.Prompt, opts)
 	if err != nil {
 		return WriteFrame(out, Frame{Type: FrameError, Error: err.Error()})
 	}
@@ -76,3 +83,14 @@ func runManifest(ctx context.Context, manifest Manifest, out io.Writer, logger *
 
 // errNoResult reports a worker that exited without reporting an outcome.
 var errNoResult = errors.New("sandbox: the worker exited without a result")
+
+type workerFrameWriter struct {
+	sync.Mutex
+	io.Writer
+}
+
+func (w *workerFrameWriter) Write(p []byte) (int, error) {
+	w.Lock()
+	defer w.Unlock()
+	return w.Writer.Write(p)
+}

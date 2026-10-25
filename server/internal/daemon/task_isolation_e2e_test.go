@@ -138,7 +138,12 @@ func TestTaskIsolationE2E_OpenCodeRejectsExternalServerInWorker(t *testing.T) {
 	if err := sandbox.RunWorker(context.Background(), manifestReader(manifest), &out); err != nil {
 		t.Fatalf("RunWorker: %v", err)
 	}
-	frame, err := sandbox.ReadFrame(bufio.NewReader(strings.NewReader(out.String())))
+	reader := bufio.NewReader(strings.NewReader(out.String()))
+	ready, err := sandbox.ReadFrame(reader)
+	if err != nil || ready.Type != sandbox.FrameWorkerReady {
+		t.Fatalf("worker readiness: %+v, %v", ready, err)
+	}
+	frame, err := sandbox.ReadFrame(reader)
 	if err != nil {
 		t.Fatalf("read worker frame: %v", err)
 	}

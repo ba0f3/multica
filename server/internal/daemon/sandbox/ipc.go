@@ -16,9 +16,11 @@ import (
 type FrameType string
 
 const (
-	FrameMessage FrameType = "message"
-	FrameResult  FrameType = "result"
-	FrameError   FrameType = "error"
+	FrameWorkerReady FrameType = "worker_ready"
+	FrameCLIStarted  FrameType = "cli_started"
+	FrameMessage     FrameType = "message"
+	FrameResult      FrameType = "result"
+	FrameError       FrameType = "error"
 
 	// Supervisor → worker control frames (bidirectional Session IPC).
 	FrameSupplementRequest        FrameType = "supplement_request"
@@ -34,10 +36,8 @@ const (
 
 // Frame is one supervisor/worker IPC record.
 //
-// The worker speaks first only in response to the manifest; after that every
-// frame is one of a transcript message, the final result, or an error. There
-// is no request/response channel in V1: a run-scoped supplement needs a
-// bidirectional transport, and a sandboxed attempt starts without one.
+// Readiness and successful CLI startup precede transcript and terminal frames.
+// Control frames carry bidirectional session operations after the manifest.
 type Frame struct {
 	Type    FrameType      `json:"type"`
 	Message *agent.Message `json:"message,omitempty"`
@@ -96,7 +96,7 @@ func ReadFrame(r *bufio.Reader) (Frame, error) {
 		if strings.TrimSpace(frame.Text) == "" {
 			return Frame{}, errors.New("sandbox: supplement_request requires text")
 		}
-	case FrameSupplementReadyQuery, FrameToolActivityQuery, FrameTerminalObservedQuery, FrameInterruptBackground:
+	case FrameWorkerReady, FrameCLIStarted, FrameSupplementReadyQuery, FrameToolActivityQuery, FrameTerminalObservedQuery, FrameInterruptBackground:
 		// empty payload
 	case FrameSupplementReadyResponse, FrameTerminalObservedResponse, FrameInterruptResult:
 		// bool payload

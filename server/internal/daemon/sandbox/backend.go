@@ -28,7 +28,12 @@ type IPCBackend struct {
 	// Session IPC. Unit tests that use shell fake workers leave this false.
 	KeepStdinOpen bool
 	// StopAttempt stops the outer execution boundary (for example docker kill).
-	StopAttempt func()
+	StopAttempt func() error
+	// Start optionally pins native process ownership until cleanup and reap.
+	Start         func(*exec.Cmd) (release func(), err error)
+	OnWorkerReady func()
+	OnCLIStarted  func()
+	WorkerCwd     string
 	// ClaudeSettingsPath is the in-container path of the task-local Claude
 	// --settings file, when the launcher bind-mounted it at a path that differs
 	// from the host path carried in ExecOptions.ClaudeSettingsPath. When set, it
@@ -48,6 +53,9 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	}
 	spec := ConvertExecOptions(opts)
 	spec.Cwd = CheckoutPath
+	if b.WorkerCwd != "" {
+		spec.Cwd = b.WorkerCwd
+	}
 	if b.ClaudeSettingsPath != "" {
 		// The launcher bound the host settings file at a fixed container path;
 		// the manifest must name that path, never the host path it was copied
@@ -85,34 +93,70 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	}
 	stderr := &boundedBuffer{limit: stderrLimit}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	start := b.Start
+	if start == nil {
+		start = func(cmd *exec.Cmd) (func(), error) { return func() {}, cmd.Start() }
+	}
+	release, err := start(cmd)
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		if b.StopAttempt != nil {
+			_ = b.StopAttempt()
+		}
 		return nil, fmt.Errorf("sandbox: start the worker: %w", err)
 	}
-
-	if err := WriteManifest(stdin, manifest); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, err
-	}
-	if !b.KeepStdinOpen {
-		if err := stdin.Close(); err != nil {
+	var cleanupOnce sync.Once
+	var cleanupErr error
+	cleanup := func() error {
+		cleanupOnce.Do(func() {
+			if b.StopAttempt != nil {
+				cleanupErr = b.StopAttempt()
+			}
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
+			_ = stdin.Close()
+			_ = stdout.Close()
+			if release != nil {
+				release()
+			}
+		})
+		return cleanupErr
+	}
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cleanup()
+		case <-stopped:
+		}
+	}()
+	if err := WriteManifest(stdin, manifest); err != nil {
+		_ = cleanup()
+		close(stopped)
+		return nil, err
+	}
+	controlStdin := stdin
+	if !b.KeepStdinOpen {
+		if err := stdin.Close(); err != nil {
+			_ = cleanup()
+			close(stopped)
 			return nil, fmt.Errorf("sandbox: close the worker stdin: %w", err)
 		}
-		stdin = nil
+		controlStdin = nil
 	}
 
 	messages := make(chan agent.Message, 64)
 	result := make(chan agent.Result, 1)
 	controlFrames := make(chan Frame, 8)
 	go func() {
-		b.drain(ctx, cmd, stdout, stderr, controlFrames, messages, result)
+		defer close(stopped)
+		b.drain(ctx, stdout, stderr, controlFrames, messages, result, cleanup, opts.OnCLIStarted)
 	}()
 
 	session := &agent.Session{Messages: messages, Result: result}
-	if stdin != nil {
-		attachSupervisorHooks(ctx, stdin, controlFrames, session, opts)
+	if controlStdin != nil {
+		attachSupervisorHooks(ctx, controlStdin, controlFrames, session, opts)
 	}
 	return session, nil
 }
@@ -186,31 +230,23 @@ func attachSupervisorHooks(
 
 func (b *IPCBackend) drain(
 	ctx context.Context,
-	cmd *exec.Cmd,
 	stdout io.Reader,
 	stderr *boundedBuffer,
 	controlFrames chan<- Frame,
 	messages chan<- agent.Message,
 	result chan<- agent.Result,
+	cleanup func() error,
+	onCLIStarted func(),
 ) {
 	defer close(messages)
 	defer close(result)
 	defer close(controlFrames)
 
-	stop := make(chan struct{})
-	defer close(stop)
-	go func() {
-		select {
-		case <-ctx.Done():
-			if b.StopAttempt != nil {
-				b.StopAttempt()
-			}
-			_ = cmd.Process.Kill()
-		case <-stop:
-		}
-	}()
-
 	finish := func(res agent.Result) {
+		if err := cleanup(); err != nil {
+			res.Status = "failed"
+			res.Error = fmt.Sprintf("%s; sandbox cleanup: %v", res.Error, err)
+		}
 		if res.Error == "" {
 			if tail := stderr.String(); tail != "" {
 				res.Error = tail
@@ -219,32 +255,45 @@ func (b *IPCBackend) drain(
 		result <- res
 	}
 
+	var readyOnce, cliOnce sync.Once
 	reader := bufio.NewReaderSize(stdout, 64<<10)
 	for {
 		frame, err := ReadFrame(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				_ = cmd.Wait()
 				finish(agent.Result{Status: "failed", Error: describeFailure(errNoResult, stderr)})
 				return
 			}
-			if b.StopAttempt != nil {
-				b.StopAttempt()
-			}
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
 			finish(agent.Result{Status: "failed", Error: describeFailure(err, stderr)})
 			return
 		}
 		switch frame.Type {
+		case FrameWorkerReady:
+			readyOnce.Do(func() {
+				if b.OnWorkerReady != nil {
+					b.OnWorkerReady()
+				}
+			})
+		case FrameCLIStarted:
+			cliOnce.Do(func() {
+				if b.OnCLIStarted != nil {
+					b.OnCLIStarted()
+				}
+				if onCLIStarted != nil {
+					onCLIStarted()
+				}
+			})
 		case FrameMessage:
-			messages <- *frame.Message
+			select {
+			case messages <- *frame.Message:
+			case <-ctx.Done():
+				finish(agent.Result{Status: "failed", Error: ctx.Err().Error()})
+				return
+			}
 		case FrameResult:
 			finish(*frame.Result)
-			_ = cmd.Wait()
 			return
 		case FrameError:
-			_ = cmd.Wait()
 			finish(agent.Result{Status: "failed", Error: describeFailure(errors.New(frame.Error), stderr)})
 			return
 		case FrameSupplementReadyResponse, FrameToolActivityResponse, FrameInterruptResult, FrameTerminalObservedResponse:

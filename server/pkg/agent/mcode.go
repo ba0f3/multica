@@ -125,6 +125,9 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		cancel()
 		return nil, fmt.Errorf("start mcode: %w", err)
 	}
+	if opts.OnCLIStarted != nil {
+		opts.OnCLIStarted()
+	}
 
 	b.cfg.Logger.Info("mcode acp started", "pid", cmd.Process.Pid, "cwd", opts.Cwd)
 	msgStream := newMcodeMessageStream(256)

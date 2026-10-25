@@ -951,6 +951,9 @@ func isCodexBareTomlKey(s string) bool {
 }
 
 func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	if opts.OnCLIStarted != nil {
+		opts.OnCLIStarted = sync.OnceFunc(opts.OnCLIStarted)
+	}
 	firstSession, err := b.executeOnce(ctx, prompt, opts, 1)
 	if err != nil {
 		return nil, err
@@ -1218,6 +1221,9 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 		cancel()
 		stopProcess()
 		return nil, fmt.Errorf("start codex: %w", err)
+	}
+	if opts.OnCLIStarted != nil {
+		opts.OnCLIStarted()
 	}
 	activeLaunches := activeCodexLaunches.Add(1)
 	for {

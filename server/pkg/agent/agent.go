@@ -24,6 +24,8 @@ type Backend interface {
 
 // ExecOptions configures a single execution.
 type ExecOptions struct {
+	// OnCLIStarted runs once after a successful task CLI spawn, before its output.
+	OnCLIStarted func()
 	// EnableTaskSupplement installs provider hooks only for runs whose daemon/server
 	// capability handshake enabled additional messages.
 	EnableTaskSupplement bool
@@ -328,10 +330,10 @@ type Config struct {
 	// AttemptID identifies one execution attempt of the task inside an
 	// isolated worker boundary. It is distinct from TaskID so retries and
 	// concurrent attempts receive separate signing sockets and leases.
-	AttemptID      string
-	RuntimeID      string
-	DaemonVersion  string
-	CodexVersion   string
+	AttemptID     string
+	RuntimeID     string
+	DaemonVersion string
+	CodexVersion  string
 	// BuiltinRuntime reports that ExecutablePath is the provider's own
 	// discovered binary rather than a custom runtime profile's command. A
 	// custom profile keeps its protocol family as the provider, so the

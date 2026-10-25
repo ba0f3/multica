@@ -277,6 +277,9 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		cancel()
 		return nil, fmt.Errorf("start opencode: %w", err)
 	}
+	if opts.OnCLIStarted != nil {
+		opts.OnCLIStarted()
+	}
 
 	b.cfg.Logger.Info("opencode started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 

@@ -279,7 +279,7 @@ func newDockerTaskDaemon(t *testing.T, cache repoCacheBackend) (*Daemon, string,
 
 	argvRecord := filepath.Join(t.TempDir(), "docker-argv")
 	dockerBin := filepath.Join(t.TempDir(), "docker")
-	dockerScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argvRecord + "\"\nwhile [ $# -gt 0 ]; do case \"$1\" in multica/task-worker:test) shift; break;; *) shift;; esac; done\nread _\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
+	dockerScript := "#!/bin/sh\nif [ \"$1\" != run ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > \"" + argvRecord + "\"\nwhile [ $# -gt 0 ]; do case \"$1\" in multica/task-worker:test) shift; break;; *) shift;; esac; done\nread _\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
 	writeTestExecutable(t, dockerBin, []byte(dockerScript))
 
 	codexBin := filepath.Join(t.TempDir(), "codex")

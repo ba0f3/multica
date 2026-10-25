@@ -79,6 +79,9 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		cancel()
 		return nil, fmt.Errorf("start cursor-agent: %w", err)
 	}
+	if opts.OnCLIStarted != nil {
+		opts.OnCLIStarted()
+	}
 
 	b.cfg.Logger.Info("cursor-agent started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 

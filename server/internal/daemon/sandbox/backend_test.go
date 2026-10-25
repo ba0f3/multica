@@ -1,12 +1,18 @@
 package sandbox
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -227,5 +233,105 @@ func TestIPCBackendRepointsTheHookRelayAtTheSandboxWorker(t *testing.T) {
 	}
 	if manifest.Exec.CursorHookCommand[1] != "__cursor_hook" {
 		t.Fatalf("hook argument = %q, want it preserved", manifest.Exec.CursorHookCommand[1])
+	}
+}
+
+func TestIPCNativeAttemptEventsAndCleanupPrecedeResult(t *testing.T) {
+	for _, terminal := range []string{`{"type":"result","result":{"Status":"completed"}}`, `{"type":"error","error":"failed"}`, `invalid`, ``} {
+		t.Run(terminal, func(t *testing.T) {
+			var events []string
+			var mu sync.Mutex
+			add := func(s string) { mu.Lock(); defer mu.Unlock(); events = append(events, s) }
+			backend := newTestBackend(t, `read _
+printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"cli_started"}'
+printf '%s\n' '`+terminal+`'`)
+			backend.OnWorkerReady = func() { add("ready") }
+			backend.OnCLIStarted = func() { add("cli") }
+			backend.Start = func(cmd *exec.Cmd) (func(), error) {
+				if err := cmd.Start(); err != nil {
+					return nil, err
+				}
+				return func() { add("released") }, nil
+			}
+			backend.StopAttempt = func() error { add("stopped"); return nil }
+			session, err := backend.Execute(t.Context(), "hello", agent.ExecOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = collect(t, session)
+			mu.Lock()
+			defer mu.Unlock()
+			if got := strings.Join(events, ","); got != "ready,cli,stopped,released" {
+				t.Fatalf("lifecycle=%s", got)
+			}
+		})
+	}
+}
+
+func TestIPCNativeAttemptCancellationCleansBeforeResult(t *testing.T) {
+	backend := newTestBackend(t, `read _; exec sleep 30`)
+	var stopped atomic.Bool
+	backend.StopAttempt = func() error { stopped.Store(true); return nil }
+	ctx, cancel := context.WithCancel(t.Context())
+	session, err := backend.Execute(ctx, "hello", agent.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	_, _ = collect(t, session)
+	if !stopped.Load() {
+		t.Fatal("result delivered before cleanup")
+	}
+}
+
+func TestWorkerReadyPrecedesFailedCLISpawn(t *testing.T) {
+	var out bytes.Buffer
+	manifest := Manifest{TaskID: "task", AttemptID: "attempt", Provider: "cursor", Prompt: "hello", Config: Config{ExecutablePath: filepath.Join(t.TempDir(), "absent")}}
+	if err := runManifest(t.Context(), manifest, &out, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(&out)
+	first, err := ReadFrame(reader)
+	if err != nil || first.Type != FrameWorkerReady {
+		t.Fatalf("first=%+v, %v", first, err)
+	}
+	second, err := ReadFrame(reader)
+	if err != nil || second.Type != FrameError {
+		t.Fatalf("failed spawn=%+v, %v", second, err)
+	}
+}
+
+func TestIPCBackendOriginalCwdAndCleanupFailure(t *testing.T) {
+	cwd := t.TempDir()
+	manifestPath := filepath.Join(cwd, "manifest")
+	backend := newTestBackend(t, `read line; printf '%s' "$line" > "$MANIFEST_PATH"; printf '%s\n' '{"type":"result","result":{"Status":"completed"}}'`)
+	launch := backend.Launch
+	backend.Launch = func() (*exec.Cmd, error) {
+		cmd, err := launch()
+		if err == nil {
+			cmd.Env = append(os.Environ(), "MANIFEST_PATH="+manifestPath)
+		}
+		return cmd, err
+	}
+	backend.WorkerCwd = cwd
+	backend.StopAttempt = func() error { return errors.New("controller unavailable") }
+	session, err := backend.Execute(t.Context(), "hello", agent.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, result := collect(t, session)
+	if result.Status != "failed" || !strings.Contains(result.Error, "controller unavailable") {
+		t.Fatalf("cleanup failure lost: %+v", result)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(bytes.NewReader(append(data, '\n')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Exec.Cwd != cwd {
+		t.Fatalf("cwd=%s", manifest.Exec.Cwd)
 	}
 }

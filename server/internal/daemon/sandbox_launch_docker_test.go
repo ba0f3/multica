@@ -57,7 +57,7 @@ func TestDockerBackendBindsClaudeAndAntigravity(t *testing.T) {
 			argvRecord := filepath.Join(t.TempDir(), "argv")
 			manifestRecord := filepath.Join(t.TempDir(), "manifest")
 			fakeDocker := filepath.Join(t.TempDir(), "docker")
-			dockerScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvRecord + "\nhead -n1 > " + manifestRecord + "\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
+			dockerScript := "#!/bin/sh\nif [ \"$1\" != run ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > " + argvRecord + "\nhead -n1 > " + manifestRecord + "\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
 			if err := os.WriteFile(fakeDocker, []byte(dockerScript), 0o755); err != nil {
 				t.Fatalf("write fake docker: %v", err)
 			}
@@ -175,7 +175,7 @@ func dockerBackendArgv(t *testing.T, repos []workercheckout.Entry, extraCachePat
 	t.Helper()
 	record := filepath.Join(t.TempDir(), "argv")
 	fakeDocker := filepath.Join(t.TempDir(), "docker")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\nwhile [ $# -gt 0 ]; do case \"$1\" in multica/task-worker:test) shift; break;; *) shift;; esac; done\nread _\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
+	script := "#!/bin/sh\nif [ \"$1\" != run ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > " + record + "\nwhile [ $# -gt 0 ]; do case \"$1\" in multica/task-worker:test) shift; break;; *) shift;; esac; done\nread _\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker: %v", err)
 	}
@@ -522,7 +522,7 @@ func dockerBackendArgvForProvider(t *testing.T, provider string, config agent.Co
 	t.Helper()
 	record := filepath.Join(t.TempDir(), "argv")
 	fakeDocker := filepath.Join(t.TempDir(), "docker")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\nhead -n1 > /dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
+	script := "#!/bin/sh\nif [ \"$1\" != run ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > " + record + "\nhead -n1 > /dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker: %v", err)
 	}

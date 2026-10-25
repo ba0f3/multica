@@ -227,9 +227,10 @@ func (d *Daemon) dockerBackend(
 	sandboxConfig.Env = containerEnv
 
 	containerName := spec.ContainerName
-	stopContainer := func() {
+	stopContainer := func() error {
 		stop := exec.Command(dockerPath, "kill", containerName)
 		_ = stop.Run()
+		return nil
 	}
 
 	return &sandbox.IPCBackend{
