@@ -80,7 +80,7 @@ func rewriteIfSet(env map[string]string, key, target string) {
 }
 
 func containerPath() string {
-	return "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/home/agent/go/bin:/home/agent/.local/bin"
 }
 
 // DockerBind returns a docker volume bind hostPath:containerPath:mode.

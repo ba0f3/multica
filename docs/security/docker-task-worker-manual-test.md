@@ -116,6 +116,27 @@ For a system service, use `systemctl daemon-reload` and
 
 The daemon startup log reports the configured path and whether it exists.
 
+## Toolchains
+
+The worker image is also the build environment: it ships Go 1.27.3, Python 3.11
+(pip/venv/dev headers), Node 22 with npm/pnpm/yarn, PHP 8.2 with Composer,
+`build-essential`, CMake/Autotools, SQLite, the PostgreSQL client, ripgrep, and
+the usual archive/network tools. `PATH` in a task includes `/usr/local/go/bin`,
+`/home/agent/go/bin`, and `/home/agent/.local/bin`, so `go install` and `pip
+--user` binaries are runnable.
+
+Check the image directly:
+
+```bash
+docker run --rm --entrypoint sh -e HOME=/tmp -w /tmp <image> -c '
+  go version && python3 --version && node --version && php --version &&
+  composer --version && make --version && gcc --version
+'
+```
+
+Caches (`GOCACHE`, `GOMODCACHE`, npm, Composer) live under `/home/agent`, which
+is the writable per-task home.
+
 ## Smoke checklist
 
 1. **Launch** — start a task with a fake agent executable path first; confirm `docker ps` shows `multica-attempt-*` and container exits on cancel.

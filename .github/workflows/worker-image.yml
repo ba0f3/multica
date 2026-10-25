@@ -103,6 +103,24 @@ jobs:
           WORKER_DIGEST: ${{ steps.build.outputs.digest }}
         run: docker run --rm "$WORKER_IMAGE@$WORKER_DIGEST" multica --version
 
+      - name: Smoke-test worker toolchains
+        env:
+          WORKER_IMAGE: ghcr.io/${{ github.repository_owner }}/multica-task-worker
+          WORKER_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint sh -e HOME=/tmp -w /tmp "$WORKER_IMAGE@$WORKER_DIGEST" -c '
+            set -e
+            go version
+            python3 --version
+            node --version
+            npm --version
+            pnpm --version
+            php --version
+            composer --version
+            make --version
+            gcc --version
+          '
+
       - name: Export digest
         run: |
           mkdir -p /tmp/digests

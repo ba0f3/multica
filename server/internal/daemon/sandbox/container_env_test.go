@@ -71,3 +71,18 @@ func TestDockerRepoCacheBindsRejectsRelativeAndDotDotPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestContainerEnvIncludesToolchainPath(t *testing.T) {
+	env := ContainerEnv(nil)
+	path := env["PATH"]
+	for _, want := range []string{
+		"/usr/local/go/bin",
+		"/usr/local/bin",
+		HomePath + "/go/bin",
+		HomePath + "/.local/bin",
+	} {
+		if !strings.Contains(path, want) {
+			t.Errorf("PATH %q missing %q", path, want)
+		}
+	}
+}

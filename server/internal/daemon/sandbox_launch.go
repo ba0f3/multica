@@ -356,5 +356,5 @@ func sandboxBinaryRoots(executablePath string) []string {
 // daemon's PATH points into the user's home (nvm, asdf, local bins), which the
 // sandbox deliberately does not mount.
 func sandboxPath() string {
-	return "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/home/agent/go/bin:/home/agent/.local/bin"
 }
