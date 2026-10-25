@@ -1,8 +1,10 @@
 package execenv
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -238,5 +240,37 @@ func TestPrepareGenericProviderHomeDoesNotOverwriteOnSecondPrepare(t *testing.T)
 	}
 	if string(got) != `{"token":"task-refreshed"}` {
 		t.Fatalf("second prepare overwrote the task credential: %q", string(got))
+	}
+}
+
+func TestPrepareGenericProviderHomeSkipsSockets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets are not available on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	minimax := filepath.Join(home, ".minimax")
+	runDir := filepath.Join(minimax, "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatalf("mkdir minimax run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(minimax, "config.json"), []byte(`{"region":"cn"}`), 0o600); err != nil {
+		t.Fatalf("write minimax config: %v", err)
+	}
+	lease, err := net.Listen("unix", filepath.Join(runDir, "mcode-auth-lease-v1.sock"))
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	defer lease.Close()
+
+	taskHome := t.TempDir()
+	if err := prepareGenericProviderHome("mcode", taskHome, nil); err != nil {
+		t.Fatalf("prepareGenericProviderHome: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(taskHome, ".minimax", "config.json")); err != nil {
+		t.Fatalf("regular config not copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(taskHome, ".minimax", "run", "mcode-auth-lease-v1.sock")); !os.IsNotExist(err) {
+		t.Fatalf("socket should not be copied, stat err = %v", err)
 	}
 }

@@ -109,6 +109,11 @@ func shouldSkipOpenCodeDir(rel string) bool {
 }
 
 func copyRegularFile(src, dst string, entry fs.DirEntry) error {
+	if entry != nil && !entry.Type().IsRegular() {
+		// Sockets/FIFOs/devices cannot be copied and are runtime state, not
+		// provider config. Callers walk provider homes, which may contain them.
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
