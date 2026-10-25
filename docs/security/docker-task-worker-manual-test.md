@@ -37,9 +37,12 @@ docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
 `make task-worker-image` builds and applies both tags.
 
 The image ships the `multica` worker binary only (Debian/glibc base). For isolated
-**codex**, **cursor**, **opencode**, **claude**, and **antigravity** tasks, the
-daemon bind-mounts the host CLI into `/usr/local/bin/<basename>` read-only at
-launch time — you do not bake agent CLIs into the image for local dev.
+tasks, the daemon bind-mounts the host CLI into `/usr/local/bin/<basename>`
+read-only at launch time — you do not bake agent CLIs into the image for local
+dev. This applies to every supported provider (Claude Code, CodeBuddy, Codex,
+Copilot, OpenCode, CodeArts, DevEco, OpenClaw, Hermes, Pi, Cursor, Kimi,
+Reasonix, DSH, Kiro, Antigravity, Qoder, Trae, Grok, Qwen, QwenPaw, MiniMax
+Code (`mcode`), Muse, Dim, ZeroClaw, and `omp`).
 
 Record **image digest** in your test notes.
 
@@ -88,7 +91,7 @@ export MULTICA_DOCKER_TASK_NETWORK=bridge
 # export MULTICA_DOCKER_TASK_CA_BUNDLE=/path/to/extra-ca.crt
 ```
 
-Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=bwrap` still selects bubblewrap (the `1`/`true`/`on`/`yes` values select Docker). bwrap has no task repo manifest and no worker CA bundle, so the repo-cache and CA checks below apply only to the Docker backend.
+Legacy bwrap-only hosts: `MULTICA_TASK_SANDBOX=bwrap` still selects bubblewrap (the `1`/`true`/`on`/`yes` values select Docker). bwrap has no task repo manifest and no worker CA bundle, so the repo-cache and CA checks below apply only to the Docker backend. Only **codex**, **cursor**, and **opencode** still run under bwrap; every other provider requires Docker.
 
 `MULTICA_DOCKER_TASK_CA_BUNDLE` is optional and names a host PEM file whose
 valid `CERTIFICATE` blocks the daemon appends to the worker's CA bundle (the
@@ -159,10 +162,11 @@ is the writable per-task home.
 9. **Cache retention** — after the task ends, the cache listed in the manifest still exists while the env root exists, and a daemon restart followed by another checkout still works. The env root's removal and the next GC cycle drop its dependents record; the cache then becomes evictable under the normal repo TTL. It must not disappear while a live workdir still references it.
 10. **CA bundle** — with `MULTICA_DOCKER_TASK_CA_BUNDLE` set, `docker inspect <container>` must show a read-only mount of the task's `ca-bundle.pem` at `/home/agent/.multica/ca-bundle.pem` and the CA env vars (`GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`) all pointing there.
 11. **Teardown** — cancel task: container removed, signing socket directory under `git-agent/<task>/<attempt>/` gone.
-12. **Claude/Antigravity binaries** — for a `claude` and an `antigravity` task, `docker inspect` must show the host CLI mounted read-only at `/usr/local/bin/claude` and `/usr/local/bin/agy`. Inside the worker (`docker exec`), `claude --version` and `agy --version` must report the bound binaries' versions.
-13. **Claude/Antigravity task home** — inside the worker, `ls -la /home/agent` must show `.claude/` and `.claude.json` (for `claude`) and `.gemini/` (for `antigravity`) copied from the host, owned by the daemon uid/gid (not root). `~/.claude/projects`, `~/.claude/logs`, and `~/.gemini/antigravity-cli/cache` must be absent. The host home and host config dir are never mounted: `docker inspect` must not show a bind whose source is the host `~/.claude` or `~/.gemini`.
+12. **Provider binaries** — for a `claude`, an `antigravity`, and an `mcode` task, `docker inspect` must show the host CLI mounted read-only at `/usr/local/bin/claude`, `/usr/local/bin/agy`, and `/usr/local/bin/mcode`. Inside the worker (`docker exec`), `claude --version`, `agy --version`, and `mcode --version` must report the bound binaries' versions. This same-path binary bind applies to every supported provider.
+13. **Task home** — inside the worker, `ls -la /home/agent` must show the provider's copied dot-directories (for example `.claude/` and `.claude.json` for `claude`, `.gemini/` for `antigravity`, `.mcode/` for `mcode`) owned by the daemon uid/gid (not root). Bulky/disposable trees (`~/.claude/projects`, `~/.claude/logs`, `~/.gemini/antigravity-cli/cache`) must be absent. The host home and host config dir are never mounted: `docker inspect` must not show a bind whose source is the host `~/.claude` or `~/.gemini`.
 14. **Claude settings file** — for a `claude` task with disabled runtime skills, the task-local `--settings` file must appear at `/home/agent/.multica/claude-settings.json` (read-only), and the worker must pass `--settings /home/agent/.multica/claude-settings.json` (not the host path).
-15. **Native binaries only** — only native CLI binaries are supported: a Node/npm shim whose resolved file is a script needs its interpreter, which the image does not provide, so such an install cannot run in the worker. Credentials that exist only in a system keyring and are not stored under `~/.claude`/`~/.gemini` will not work inside the boundary.
+15. **OpenClaw / QwenPaw same-path mounts** — for an `openclaw` task, `docker inspect` must show the per-task config file and include root bound read-only at their own absolute paths (`<path>:<path>:ro`), and the worker env must preserve `OPENCLAW_CONFIG_PATH` unchanged. For a `qwenpaw` task, the per-task workspace must be bound read-write at its own absolute path (`<path>:<path>:rw`).
+16. **Native binaries only** — only native CLI binaries are supported: a Node/npm shim whose resolved file is a script needs its interpreter, which the image does not provide, so such an install cannot run in the worker. Credentials that exist only in a system keyring and are not stored under the provider's home dot-directory will not work inside the boundary.
 
 ## Native agents (authorized only)
 
@@ -172,7 +176,7 @@ Per AGENTS.md:
 (cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 go test -tags=agentintegration ./pkg/agent -run '<TestName>' -count=1 -v)
 ```
 
-Pin Codex/Cursor/OpenCode/Claude/Antigravity versions in the image before claiming compatibility.
+Pin Codex/Cursor/OpenCode/Claude/Antigravity/MiniMax Code (`mcode`) and any other supported provider versions in the image before claiming compatibility.
 
 ## Evidence to record
 
