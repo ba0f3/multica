@@ -90,7 +90,15 @@ func (d *Daemon) dockerBackend(
 
 	agentConfig := config
 	if sandbox.ProviderUsesDockerAgentBinary(provider) {
-		if strings.EqualFold(strings.TrimSpace(provider), "mcode") {
+		switch strings.ToLower(strings.TrimSpace(provider)) {
+		case "cursor":
+			containerExec, cursorBinds, err := sandbox.DockerCursorAgentBinds(config.ExecutablePath)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+			}
+			binds = append(binds, cursorBinds)
+			agentConfig.ExecutablePath = containerExec
+		case "mcode":
 			containerExec, mcodeBinds, handled, err := sandbox.DockerMcodeContainerAgentBind(
 				config.ExecutablePath,
 				filepath.Join(env.RootDir, "mcode-container-launcher"),
@@ -110,7 +118,7 @@ func (d *Daemon) dockerBackend(
 				binds = append(binds, agentBind)
 				agentConfig.ExecutablePath = containerExec
 			}
-		} else {
+		default:
 			containerExec, agentBind, err := sandbox.DockerAgentBinaryBind(config.ExecutablePath)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)

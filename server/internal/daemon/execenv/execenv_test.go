@@ -2266,6 +2266,38 @@ func TestPrepareWithRepoContextOpencode(t *testing.T) {
 	}
 }
 
+func TestPrepareCursorSeedsAuthForIsolatedWorker(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	authDir := filepath.Join(configHome, "cursor")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(`{"accessToken":"task-test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := Prepare(PrepareParams{
+		WorkspacesRoot:       t.TempDir(),
+		WorkspaceID:          "ws-cursor-isolated",
+		TaskID:               "cursor-isolated-test",
+		AgentName:            "Cursor Agent",
+		Provider:             "cursor",
+		IsolatedToolBoundary: true,
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer env.Cleanup(true)
+
+	got, err := os.ReadFile(filepath.Join(env.RootDir, "home", ".config", "cursor", "auth.json"))
+	if err != nil {
+		t.Fatalf("read task Cursor auth: %v", err)
+	}
+	if string(got) != `{"accessToken":"task-test"}` {
+		t.Fatalf("task Cursor auth = %q", got)
+	}
+}
+
 // TestInjectRuntimeConfigRequiresExplicitCommentPost ensures the injected
 // workflow makes "post a comment with results" an explicit, unmissable step in
 // both the assignment- and comment-triggered branches, plus hard-warns in the

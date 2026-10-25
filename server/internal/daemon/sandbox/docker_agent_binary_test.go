@@ -34,6 +34,29 @@ func TestDockerAgentBinaryBindRequiresPath(t *testing.T) {
 	}
 }
 
+func TestDockerCursorAgentBindsWholeInstallation(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"cursor-agent", "node", "index.js"} {
+		mode := os.FileMode(0o644)
+		if name != "index.js" {
+			mode = 0o755
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	containerExec, bind, err := DockerCursorAgentBinds(filepath.Join(dir, "cursor-agent"))
+	if err != nil {
+		t.Fatalf("DockerCursorAgentBinds: %v", err)
+	}
+	if containerExec != "/usr/local/lib/multica/cursor-agent/cursor-agent" {
+		t.Fatalf("container exec = %q", containerExec)
+	}
+	if want := dir + ":/usr/local/lib/multica/cursor-agent:ro"; bind != want {
+		t.Fatalf("bind = %q, want %q", bind, want)
+	}
+}
+
 func TestProviderUsesDockerAgentBinary(t *testing.T) {
 	supported := append([]string{"omp"}, agent.SupportedTypes...)
 	for _, provider := range supported {

@@ -398,6 +398,31 @@ func TestDockerBackendOmitsCABundleWhenUnset(t *testing.T) {
 // bound at their own absolute paths so their absolute references stay valid
 // inside the container.
 func TestDockerBackendBindsGenericProviderAndSamePathMounts(t *testing.T) {
+	t.Run("cursor installation", func(t *testing.T) {
+		cursorDir := filepath.Join(t.TempDir(), "cursor-agent")
+		if err := os.MkdirAll(cursorDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"cursor-agent", "node", "index.js"} {
+			mode := os.FileMode(0o644)
+			if name != "index.js" {
+				mode = 0o755
+			}
+			if err := os.WriteFile(filepath.Join(cursorDir, name), []byte("test"), mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+		joined := dockerBackendArgvForProvider(t, "cursor", agent.Config{
+			TaskID: "task-1", ExecutablePath: filepath.Join(cursorDir, "cursor-agent"),
+		})
+		if want := cursorDir + ":/usr/local/lib/multica/cursor-agent:ro"; !strings.Contains(joined, want) {
+			t.Fatalf("docker argv missing Cursor installation bind %q:\n%s", want, joined)
+		}
+		if strings.Contains(joined, cursorDir+"/cursor-agent:/usr/local/bin/cursor-agent:ro") {
+			t.Fatalf("docker argv still mounts only the Cursor launcher:\n%s", joined)
+		}
+	})
+
 	t.Run("mcode binary", func(t *testing.T) {
 		root := t.TempDir()
 		binDir := filepath.Join(root, "bin")

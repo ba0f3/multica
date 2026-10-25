@@ -147,6 +147,30 @@ func TestPrepareAntigravityIsolatedHomeMissingSourceIsNonFatal(t *testing.T) {
 	}
 }
 
+func TestPrepareCursorIsolatedHomeCopiesCLIAuth(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	authDir := filepath.Join(configHome, "cursor")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(authDir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"accessToken":"test-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taskHome := t.TempDir()
+	if err := prepareCursorIsolatedHome(taskHome, nil); err != nil {
+		t.Fatalf("prepareCursorIsolatedHome: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(taskHome, ".config", "cursor", "auth.json"))
+	if err != nil {
+		t.Fatalf("read copied Cursor auth: %v", err)
+	}
+	if string(got) != `{"accessToken":"test-token"}` {
+		t.Fatalf("copied Cursor auth = %q", got)
+	}
+}
+
 func TestPrepareClaudeIsolatedHomeHonorsConfigDir(t *testing.T) {
 	home := t.TempDir()
 	configDir := filepath.Join(t.TempDir(), "custom-claude")

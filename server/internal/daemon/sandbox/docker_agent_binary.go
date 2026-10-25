@@ -12,6 +12,8 @@ import (
 // reference them without leaking host layout into the container.
 const dockerAgentBinaryContainerDir = "/usr/local/bin"
 
+const dockerCursorInstallContainerDir = "/usr/local/lib/multica/cursor-agent"
+
 // DockerAgentBinaryBind maps a host agent executable into the worker container.
 //
 // Isolated-tool providers register a host path at runtime discovery time. The
@@ -47,6 +49,31 @@ func DockerAgentBinaryBind(hostExecutable string) (containerExec string, bind st
 	// Docker volume syntax always uses forward slashes on the container side.
 	containerExec = strings.ReplaceAll(containerExec, "\\", "/")
 	bind = DockerBind(resolved, containerExec, "ro")
+	return containerExec, bind, nil
+}
+
+// DockerCursorAgentBinds mounts Cursor's complete versioned installation. Its
+// launcher executes the adjacent Node runtime and index.js, so mounting only
+// the launcher breaks the relative paths after it resolves its symlink.
+func DockerCursorAgentBinds(hostExecutable string) (containerExec string, bind string, err error) {
+	hostExecutable = strings.TrimSpace(hostExecutable)
+	if hostExecutable == "" {
+		return "", "", fmt.Errorf("sandbox: Cursor executable path is required")
+	}
+	resolved := hostExecutable
+	if link, linkErr := filepath.EvalSymlinks(hostExecutable); linkErr == nil && link != "" {
+		resolved = link
+	}
+	resolved = filepath.Clean(resolved)
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", "", fmt.Errorf("sandbox: Cursor executable %q: %w", hostExecutable, err)
+	}
+	if info.IsDir() {
+		return "", "", fmt.Errorf("sandbox: Cursor executable %q is a directory", hostExecutable)
+	}
+	containerExec = filepath.ToSlash(filepath.Join(dockerCursorInstallContainerDir, filepath.Base(resolved)))
+	bind = DockerBind(filepath.Dir(resolved), dockerCursorInstallContainerDir, "ro")
 	return containerExec, bind, nil
 }
 

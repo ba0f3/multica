@@ -233,6 +233,25 @@ func prepareAntigravityIsolatedHome(taskHome string, logger *slog.Logger) error 
 	return mirrorProviderTree(src, filepath.Join(taskHome, ".gemini"), antigravityIsolatedHomeSkipDirs, logger)
 }
 
+// prepareCursorIsolatedHome copies Cursor CLI's user-level auth/config into the
+// per-task HOME. The CLI reads its login from the XDG config directory rather
+// than CURSOR_DATA_DIR, which is reserved for per-workspace agent state.
+func prepareCursorIsolatedHome(taskHome string, logger *slog.Logger) error {
+	if strings.TrimSpace(taskHome) == "" {
+		return fmt.Errorf("task home is required")
+	}
+	configHome, err := os.UserConfigDir()
+	if err != nil {
+		return fmt.Errorf("resolve user config dir: %w", err)
+	}
+	return mirrorProviderTree(
+		filepath.Join(configHome, "cursor"),
+		filepath.Join(taskHome, ".config", "cursor"),
+		nil,
+		logger,
+	)
+}
+
 // providerHomeSeeds maps a provider to the task-home config directories that
 // hold its auth/config. These families read config from ~/<dir> and have no
 // bespoke isolated-home prep (unlike codex/cursor/opencode/hermes/openclaw/

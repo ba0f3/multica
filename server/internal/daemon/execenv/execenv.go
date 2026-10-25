@@ -701,6 +701,15 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	// this per-task data dir can load, so user-global MCP servers do not leak
 	// into managed-MCP runs.
 	if params.Provider == "cursor" {
+		if params.IsolatedToolBoundary {
+			taskHome := filepath.Join(envRoot, "home")
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				return nil, fmt.Errorf("execenv: create task home: %w", err)
+			}
+			if err := prepareCursorIsolatedHome(taskHome, logger); err != nil {
+				return nil, fmt.Errorf("execenv: prepare cursor isolated home: %w", err)
+			}
+		}
 		cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, params.McpConfig, params.CursorMcpAuthSource, params.IsolatedToolBoundary, manifest)
 		if err != nil {
 			return nil, fmt.Errorf("execenv: prepare cursor mcp config: %w", err)
@@ -1046,6 +1055,17 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// mcp_config must replace the prior run's .cursor/mcp.json and isolated
 	// approvals before the next cursor-agent process starts.
 	if params.Provider == "cursor" && env.RootDir != "" {
+		if params.IsolatedToolBoundary {
+			taskHome := filepath.Join(env.RootDir, "home")
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				logger.Warn("execenv: refresh cursor task home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
+			if err := prepareCursorIsolatedHome(taskHome, logger); err != nil {
+				logger.Warn("execenv: refresh cursor isolated home failed", "error", err)
+				return nil
+			}
+		}
 		cursorDataDir, err := prepareCursorMcpConfig(env.RootDir, params.WorkDir, params.McpConfig, params.CursorMcpAuthSource, params.IsolatedToolBoundary, manifest)
 		if err != nil {
 			logger.Warn("execenv: refresh cursor mcp config failed", "error", err)

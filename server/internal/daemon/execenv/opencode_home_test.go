@@ -6,16 +6,24 @@ import (
 	"testing"
 )
 
-func TestPrepareOpenCodeIsolatedHomeCopiesConfig(t *testing.T) {
+func TestPrepareOpenCodeIsolatedHomeCopiesConfigAndAuthData(t *testing.T) {
 	srcConfig := filepath.Join(t.TempDir(), "config", "opencode")
+	srcData := filepath.Join(t.TempDir(), "data", "opencode")
 	if err := os.MkdirAll(srcConfig, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(srcData, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(srcConfig, "opencode.json"), []byte(`{"model":"x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(srcData, "opencode.db"), []byte("auth database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("XDG_CONFIG_HOME", filepath.Dir(srcConfig))
+	t.Setenv("XDG_DATA_HOME", filepath.Dir(srcData))
 	taskHome := t.TempDir()
 	if err := prepareOpenCodeIsolatedHome(taskHome, nil); err != nil {
 		t.Fatalf("prepareOpenCodeIsolatedHome: %v", err)
@@ -26,5 +34,12 @@ func TestPrepareOpenCodeIsolatedHomeCopiesConfig(t *testing.T) {
 	}
 	if string(got) != `{"model":"x"}` {
 		t.Fatalf("copied config = %q", string(got))
+	}
+	got, err = os.ReadFile(filepath.Join(taskHome, ".local", "share", "opencode", "opencode.db"))
+	if err != nil {
+		t.Fatalf("read copied OpenCode auth database: %v", err)
+	}
+	if string(got) != "auth database" {
+		t.Fatalf("copied OpenCode auth database = %q", got)
 	}
 }
