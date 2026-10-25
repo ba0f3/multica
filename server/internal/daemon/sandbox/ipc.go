@@ -21,14 +21,14 @@ const (
 	FrameError   FrameType = "error"
 
 	// Supervisor → worker control frames (bidirectional Session IPC).
-	FrameSupplementRequest       FrameType = "supplement_request"
-	FrameSupplementReadyQuery    FrameType = "supplement_ready_query"
-	FrameSupplementReadyResponse FrameType = "supplement_ready"
-	FrameToolActivityQuery       FrameType = "tool_activity_query"
-	FrameToolActivityResponse    FrameType = "tool_activity"
-	FrameInterruptBackground     FrameType = "interrupt_background"
-	FrameInterruptResult         FrameType = "interrupt_result"
-	FrameTerminalObservedQuery   FrameType = "terminal_observed_query"
+	FrameSupplementRequest        FrameType = "supplement_request"
+	FrameSupplementReadyQuery     FrameType = "supplement_ready_query"
+	FrameSupplementReadyResponse  FrameType = "supplement_ready"
+	FrameToolActivityQuery        FrameType = "tool_activity_query"
+	FrameToolActivityResponse     FrameType = "tool_activity"
+	FrameInterruptBackground      FrameType = "interrupt_background"
+	FrameInterruptResult          FrameType = "interrupt_result"
+	FrameTerminalObservedQuery    FrameType = "terminal_observed_query"
 	FrameTerminalObservedResponse FrameType = "terminal_observed"
 )
 
