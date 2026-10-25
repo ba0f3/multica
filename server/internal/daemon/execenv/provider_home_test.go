@@ -164,3 +164,79 @@ func TestPrepareClaudeIsolatedHomeHonorsConfigDir(t *testing.T) {
 		t.Fatalf("credentials from CLAUDE_CONFIG_DIR not copied: %v", err)
 	}
 }
+
+func TestPrepareGenericProviderHomeCopiesMcodeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".mcode/config.json", `{"token":"secret"}`)
+	write(".minimax/credentials.json", `{"key":"k"}`)
+	write(".config/mcode/settings.json", `{}`)
+
+	taskHome := t.TempDir()
+	if err := prepareGenericProviderHome("mcode", taskHome, nil); err != nil {
+		t.Fatalf("prepareGenericProviderHome(mcode): %v", err)
+	}
+
+	for _, want := range []string{".mcode/config.json", ".minimax/credentials.json", ".config/mcode/settings.json"} {
+		if _, err := os.Stat(filepath.Join(taskHome, want)); err != nil {
+			t.Errorf("expected %s to be copied: %v", want, err)
+		}
+	}
+}
+
+func TestPrepareGenericProviderHomeMissingSourceIsNonFatal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	taskHome := t.TempDir()
+	if err := prepareGenericProviderHome("mcode", taskHome, nil); err != nil {
+		t.Fatalf("prepareGenericProviderHome with missing source: %v", err)
+	}
+}
+
+func TestPrepareGenericProviderHomeDoesNotOverwriteOnSecondPrepare(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	mcode := filepath.Join(home, ".mcode")
+	if err := os.MkdirAll(mcode, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mcode, "config.json"), []byte(`{"token":"host-v1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	taskHome := t.TempDir()
+	if err := prepareGenericProviderHome("mcode", taskHome, nil); err != nil {
+		t.Fatalf("first prepareGenericProviderHome: %v", err)
+	}
+	// The task home refreshes its own credential after the first copy.
+	target := filepath.Join(taskHome, ".mcode", "config.json")
+	if err := os.WriteFile(target, []byte(`{"token":"task-refreshed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The host credential moves on; a second prepare must not roll it back.
+	if err := os.WriteFile(filepath.Join(mcode, "config.json"), []byte(`{"token":"host-v2"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareGenericProviderHome("mcode", taskHome, nil); err != nil {
+		t.Fatalf("second prepareGenericProviderHome: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"token":"task-refreshed"}` {
+		t.Fatalf("second prepare overwrote the task credential: %q", string(got))
+	}
+}

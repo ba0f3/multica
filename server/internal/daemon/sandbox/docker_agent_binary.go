@@ -14,11 +14,10 @@ const dockerAgentBinaryContainerDir = "/usr/local/bin"
 
 // DockerAgentBinaryBind maps a host agent executable into the worker container.
 //
-// Isolated-tool providers (codex, cursor, opencode, claude, antigravity)
-// register a host path at runtime discovery time. The Docker worker image does
-// not bundle those CLIs; instead the supervisor bind-mounts the resolved binary
-// read-only at a fixed in-container path and rewrites ExecutablePath before the
-// manifest crosses the boundary.
+// Isolated-tool providers register a host path at runtime discovery time. The
+// Docker worker image does not bundle those CLIs; instead the supervisor
+// bind-mounts the resolved binary read-only at a fixed in-container path and
+// rewrites ExecutablePath before the manifest crosses the boundary.
 func DockerAgentBinaryBind(hostExecutable string) (containerExec string, bind string, err error) {
 	hostExecutable = strings.TrimSpace(hostExecutable)
 	if hostExecutable == "" {
@@ -52,12 +51,10 @@ func DockerAgentBinaryBind(hostExecutable string) (containerExec string, bind st
 }
 
 // ProviderUsesDockerAgentBinary reports whether the provider's CLI should be
-// bind-mounted for Docker-backed attempts.
+// bind-mounted for Docker-backed attempts. Every supported provider — a
+// Multica-supported backend or a built-in runtime — bind-mounts its resolved
+// host binary read-only into the worker image, which does not bundle agent
+// CLIs. Empty and unknown names return false.
 func ProviderUsesDockerAgentBinary(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "codex", "cursor", "opencode", "claude", "antigravity":
-		return true
-	default:
-		return false
-	}
+	return ProviderSupportsIsolatedTools(provider)
 }

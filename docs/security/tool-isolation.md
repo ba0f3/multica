@@ -1,6 +1,6 @@
 # Tool isolation (Git security MVP)
 
-This document describes how Multica constrains **Codex**, **Cursor**, **OpenCode**, **Claude Code** (`claude`), and **Antigravity** (`agy`) inside the Docker worker boundary. Codex, Cursor, and OpenCode also support the legacy bubblewrap backend; Claude Code and Antigravity require Docker because their per-task home is only mounted there. **By default** every daemon enables the sandbox (`MULTICA_TASK_SANDBOX` unset → Docker). Opt out with `MULTICA_TASK_SANDBOX=false`. **Network deny** (egress policy) is a separate follow-up.
+This document describes how Multica constrains agent CLIs inside the Docker worker boundary. The provider gate admits every Multica-supported backend (Claude Code, CodeBuddy, Codex, Copilot, OpenCode, CodeArts, DevEco, OpenClaw, Hermes, Pi, Cursor, Kimi, Reasonix, DSH, Kiro, Antigravity, Qoder, Trae, Grok, Qwen, QwenPaw, MiniMax Code (`mcode`), Muse, Dim, ZeroClaw) plus built-in runtime identities such as Oh-My-Pi (`omp`). Only **Codex**, **Cursor**, and **OpenCode** still support the legacy bubblewrap backend; every other provider requires Docker because its per-task config/credentials are seeded into the Docker task home. **By default** every daemon enables the sandbox (`MULTICA_TASK_SANDBOX` unset → Docker). Opt out with `MULTICA_TASK_SANDBOX=false`. **Network deny** (egress policy) is a separate follow-up.
 
 ## Defaults
 
@@ -14,12 +14,12 @@ This document describes how Multica constrains **Codex**, **Cursor**, **OpenCode
 
 | Layer | What it does |
 | --- | --- |
-| Provider gate | Only `codex`, `cursor`, `opencode`, `claude`, and `antigravity` may run when the sandbox is enabled (`server/internal/daemon/sandbox/providers.go`). `claude` and `antigravity` require the Docker backend; bwrap refuses them. |
+| Provider gate | Every Multica-supported backend and built-in runtime may run when the sandbox is enabled (`server/internal/daemon/sandbox/providers.go`). Only `codex`, `cursor`, and `opencode` may use bwrap; every other provider requires the Docker backend. |
 | Worker boundary | Agent CLI runs inside Docker (or bwrap for codex/cursor/opencode); Session IPC and git signing stay on controlled mounts. |
 | Repo cache mounts (Docker only) | Before launch, the daemon strictly fetches each `task.Repos` repo into the workspace bare cache and binds only those caches read-only at their host paths (`<cache>:<cache>:ro`). A read-only `repo-cache.json` manifest lists the allowed URLs, refs, resolved SHAs, and cache paths. Unrelated sibling repositories and shared checkouts are not mounted; a reused workdir may add read-only caches named by its own alternates, still under the workspace cache root. |
 | In-worker repo checkout (Docker only) | `multica repo checkout` reads the task manifest instead of the host daemon, creates a private `.git` in the task workdir with `objects/info/alternates` pointing at the mounted cache, sets `origin` to the real URL, and copies the cache's remote refs. The cache is never written or hardlinked. bwrap has no task manifest, so this path does not apply there. |
 | Worker CA bundle (Docker only) | The daemon builds `/home/agent/.multica/ca-bundle.pem` from the repo cache's Git trust plus `MULTICA_DOCKER_TASK_CA_BUNDLE`, mounts it read-only, and exports `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `REQUESTS_CA_BUNDLE`. bwrap receives no worker CA bundle. |
-| Docker agent CLI | For codex/cursor/opencode/claude/antigravity, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
+| Docker agent CLI | For every supported provider, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
 | Provider prep | `IsolatedToolBoundary` on execenv prepare/reuse copies provider secrets into the task env and fixes container identity paths. |
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
 
@@ -54,9 +54,40 @@ This document describes how Multica constrains **Codex**, **Cursor**, **OpenCode
 - **Docker only.** **Credentials and app data** are copied into the task `home/` tree (`~/.gemini`) before the worker starts. Top-level auth/config JSON files and `antigravity-cli/` app data — including `antigravity-cli/brain`, which `--conversation` resume reads — are copied; disposable `tmp`/`cache`/`history` trees are skipped. A missing host source is a warning, not a failed task.
 - No extra environment is set: `agy` resolves auth and app data under `HOME`, which the worker points at `/home/agent`.
 
+## Generic config seeding
+
+Providers without bespoke prep mirror their auth/config dot-directories from the daemon user's home into the task home, with the same missing-only, no-symlink, 0700/0600 rules as Claude/Antigravity. The mapping (`server/internal/daemon/execenv/provider_home.go`) covers:
+
+| Provider | Task-home directories |
+| --- | --- |
+| `codebuddy` | `.codebuddy` |
+| `copilot` | `.copilot` |
+| `codearts` | `.codeartsdoer` |
+| `deveco` | `.deveco` |
+| `pi`, `omp` | `.pi`, `.omp` |
+| `kimi` | `.kimi` |
+| `reasonix` | `.reasonix` |
+| `dsh` | `.dsh` |
+| `kiro` | `.kiro` |
+| `qoder`, `qoderclicn` | `.qoder` |
+| `traecli` | `.traecli`, `.trae` |
+| `grok` | `.grok` |
+| `qwen` | `.qwen` |
+| `qwenpaw` | `.qwenpaw` |
+| `mcode` (MiniMax Code) | `.mcode`, `.minimax`, `.config/mcode` |
+| `muse` | `.muse` |
+| `dim` | `.dim` |
+| `zeroclaw` | `.zeroclaw` |
+
+Codex, Cursor, OpenCode, Hermes, OpenClaw, Claude, and Antigravity are excluded because they have bespoke prep or mounts. A missing source directory is a warning (auth may fail), not a failed task.
+
+## OpenClaw / QwenPaw same-path mounts
+
+OpenClaw reads its per-task config through an absolute `$include`, and QwenPaw takes its workspace via an absolute `--workspace`. The Docker backend binds those per-task paths at their **own absolute paths** (read-only for the OpenClaw config file and include root, read-write for the QwenPaw workspace) so those absolute references stay valid inside the container. `OPENCLAW_CONFIG_PATH` is no longer rewritten to a container path; the host path is preserved because the same-path bind makes it valid.
+
 ## Native-binary requirement
 
-Claude Code and Antigravity are supported only as **native CLI binaries**. A Node/npm shim whose resolved file is a script needs its interpreter (and `node_modules`), which the worker image does not bundle; bind-mounting only the resolved script is not enough for such an install. Credentials stored only in a system keyring that the CLI does not materialise under `~/.claude`/`~/.gemini` will not reach the worker, because the boundary mounts only copies in the task home and never the host home or a keyring socket.
+Every provider is supported only as a **native CLI binary**. A Node/npm shim whose resolved file is a script needs its interpreter (and `node_modules`), which the worker image does not bundle; bind-mounting only the resolved script is not enough for such an install. Credentials stored only in a system keyring that the CLI does not materialise under its home dot-directory (or via an explicitly exported env/custom config) will not reach the worker, because the boundary mounts only copies in the task home and never the host home or a keyring socket. Providers whose auth lives outside the listed dot-directories need an env/custom config source to carry credentials across the boundary.
 
 ## Environment signals
 

@@ -64,7 +64,7 @@ func (d *Daemon) sandboxedBackend(
 		return nil, nil
 	}
 	if !sandbox.ProviderSupportsIsolatedTools(provider) {
-		return nil, fmt.Errorf("%w: provider %q is not supported in the isolated tool boundary (codex, cursor, opencode, claude, antigravity only)", errSandboxUnavailable, provider)
+		return nil, fmt.Errorf("%w: provider %q is not a supported agent backend", errSandboxUnavailable, provider)
 	}
 	if d.cfg.TaskProtectedMode && d.cfg.TaskSandboxBackend == "" {
 		return nil, fmt.Errorf("%w: protected mode requires a sandbox backend", errSandboxUnavailable)
@@ -74,9 +74,10 @@ func (d *Daemon) sandboxedBackend(
 		backend = "bwrap"
 	}
 	if backend == "bwrap" && sandbox.ProviderRequiresDockerBackend(provider) {
-		// Claude Code and Antigravity are seeded into the per-task home, which
-		// only the Docker backend mounts as HOME. Refuse them on bwrap instead
-		// of launching without auth under the host-home policy.
+		// Every provider except codex/cursor/opencode is seeded into the
+		// per-task home, which only the Docker backend mounts as HOME. Refuse
+		// them on bwrap instead of launching without auth under the host-home
+		// policy.
 		return nil, fmt.Errorf("%w: provider %q requires the docker backend", errSandboxUnavailable, provider)
 	}
 	switch backend {
@@ -356,5 +357,5 @@ func sandboxBinaryRoots(executablePath string) []string {
 // daemon's PATH points into the user's home (nvm, asdf, local bins), which the
 // sandbox deliberately does not mount.
 func sandboxPath() string {
-	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/home/agent/go/bin:/home/agent/.local/bin"
+	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 }

@@ -222,3 +222,67 @@ func prepareAntigravityIsolatedHome(taskHome string, logger *slog.Logger) error 
 	}
 	return mirrorProviderTree(src, filepath.Join(taskHome, ".gemini"), antigravityIsolatedHomeSkipDirs, logger)
 }
+
+// providerHomeSeeds maps a provider to the task-home config directories that
+// hold its auth/config. These families read config from ~/<dir> and have no
+// bespoke isolated-home prep (unlike codex/cursor/opencode/hermes/openclaw/
+// claude/antigravity, which prepare or mount their own per-task state). Each
+// directory is mirrored from the daemon user's home into the per-task home via
+// mirrorProviderTree: a missing source is a warning, files and directories are
+// copied only when missing, and host symlinks are never followed.
+var providerHomeSeeds = map[string][]string{
+	"codebuddy":  {".codebuddy"},
+	"copilot":    {".copilot"},
+	"codearts":   {".codeartsdoer"},
+	"deveco":     {".deveco"},
+	"pi":         {".pi"},
+	"kimi":       {".kimi"},
+	"reasonix":   {".reasonix"},
+	"dsh":        {".dsh"},
+	"kiro":       {".kiro"},
+	"qoder":      {".qoder"},
+	"qoderclicn": {".qoder"},
+	"traecli":    {".traecli", ".trae"},
+	"grok":       {".grok"},
+	"qwen":       {".qwen"},
+	"qwenpaw":    {".qwenpaw"},
+	"mcode":      {".mcode", ".minimax", ".config/mcode"},
+	"muse":       {".muse"},
+	"dim":        {".dim"},
+	"zeroclaw":   {".zeroclaw"},
+	"omp":        {".omp"},
+}
+
+// genericProviderHomeDirs returns the home config directories to seed for a
+// provider, and whether the provider has a generic (non-bespoke) task home.
+func genericProviderHomeDirs(provider string) ([]string, bool) {
+	dirs, ok := providerHomeSeeds[strings.ToLower(strings.TrimSpace(provider))]
+	return dirs, ok
+}
+
+// prepareGenericProviderHome mirrors a provider's ~/<dir> auth/config trees
+// into the task home. It is the generic counterpart to the bespoke preparers
+// (Claude, Antigravity, OpenCode, Codex, Cursor, Hermes, OpenClaw): each
+// listed directory is copied with the same missing-only, no-symlink, 0700/0600
+// rules, and a missing source is a warning rather than a failure.
+func prepareGenericProviderHome(provider, taskHome string, logger *slog.Logger) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if strings.TrimSpace(taskHome) == "" {
+		return fmt.Errorf("task home is required")
+	}
+	dirs, ok := providerHomeSeeds[provider]
+	if !ok {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve user home: %w", err)
+	}
+	for _, rel := range dirs {
+		src := filepath.Join(home, rel)
+		if err := mirrorProviderTree(src, filepath.Join(taskHome, rel), nil, logger); err != nil {
+			return fmt.Errorf("copy %s config: %w", provider, err)
+		}
+	}
+	return nil
+}

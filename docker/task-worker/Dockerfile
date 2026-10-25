@@ -11,10 +11,9 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o /out/multica ./cmd/multica
 
-# glibc-based runtime so host-discovered agent CLIs (codex, cursor, opencode,
-# claude, antigravity) can be bind-mounted into the worker at run time (see
-# sandbox.DockerAgentBinaryBind). Node 22 is the base so agents can build and
-# test JS/TS projects without a host toolchain.
+# glibc-based runtime so host-discovered agent CLIs can be bind-mounted into
+# the worker at run time (see sandbox.DockerAgentBinaryBind). Node 22 is the
+# base so agents can build and test JS/TS projects without a host toolchain.
 FROM node:22-bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
