@@ -1,6 +1,6 @@
 # Git security MVP — implementation status
 
-Status date: **2026-10-21**. Branch: `feature/git-security-mvp`. Spec revision: `877dbe95a1fb3d5047091b0ca0d8ab0921de7939`.
+Status date: **2026-10-25**. Branch: `feature/repo-cache-docker-worker`. Spec revision: `877dbe95a1fb3d5047091b0ca0d8ab0921de7939`.
 
 [Spec](per-user-git-credentials-plan.md) targets **Docker per attempt** for Codex, Cursor Agent, and OpenCode. [Handoff](git-security-agent-handoff.md) tracks remaining integration work.
 
@@ -16,7 +16,12 @@ Status date: **2026-10-21**. Branch: `feature/git-security-mvp`. Spec revision: 
 | Native agent matrix (Codex/Cursor/OpenCode) | **Not run** | Requires image build + authorized real-agent smoke per AGENTS.md |
 | Network deny policy on live bridge | **Deferred** | Code accepts `MULTICA_DOCKER_TASK_NETWORK`; not in scope for tool-isolation slice |
 | Tool isolation (Codex/Cursor/OpenCode only) | **Implemented** | [tool-isolation.md](tool-isolation.md); provider gate, execenv copies, OpenCode `--server` ban |
-| Git prepare/finalize entirely in container | **Hybrid** | Host prepare + repocache; **host `/repo/checkout` blocked** when isolated — see [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md) |
+| Task repo cache prepare | **Implemented** | `repocache.Prepare` strictly clones/fetches each `task.Repos` repo and resolves a commit SHA before launch; `TestPrepare*`; cold/warm benchmark `BenchmarkRepoCacheCheckout` |
+| In-worker repo checkout | **Implemented** | Task manifest (`repo-cache.json`), read-only per-task cache binds, `origin` + `objects/info/alternates`; `workercheckout` and isolated `multica repo checkout`; `TestCheckout*`, `TestManifest*`, `TestRunRepoCheckoutIsolated*` |
+| Docker worker repo mounts | **Implemented** | Only this task's bare caches are mounted `:ro` at their host paths, plus the read-only manifest; no sibling repo or shared checkout; `TestDockerBackendMountsRepoCacheReadOnly`, `TestDockerRepoCacheBinds*`, `TestTwoDockerTasksUseSeparateWorkdirsAndOneSharedCache` |
+| Repo cache retention | **Implemented** | `.dependents` records pin caches across daemon restarts; GC skips eviction and prune/repack while a live workdir depends on them; `TestRepoCacheKept*`, `TestRepoCacheEvictedAfterDependentRemoved`, `TestRepoCacheMaintenanceSkippedWhileDependent`, `TestLiveDependentCachePaths*` |
+| Docker worker CA trust | **Implemented** | `repocache.CABundlePEM()` plus `MULTICA_DOCKER_TASK_CA_BUNDLE`; bundle mounted read-only and exported through CA env vars; `TestWriteWorkerCABundle*`, `TestDockerBackendMountsCABundleReadOnly`, `TestExtraCACerts*` |
+| Git prepare/finalize entirely in container | **Partial (worker checkout)** | Daemon prepares bare caches before launch; in-worker `multica repo checkout` reads the manifest and checks out through alternates; **host `/repo/checkout` stays blocked** when isolated; finalize still runs on the host — see [git-lifecycle-in-worker.md](git-lifecycle-in-worker.md) |
 
 ## Signing / principal (#88) — partial
 
@@ -41,6 +46,9 @@ Existing UI/API/custody from branch baseline **retained**. No new gaps addressed
 | `go -C server test ./internal/daemon/ -run TestTaskIsolationE2E_ -count=1` | **pass** |
 | `pnpm exec playwright test e2e/task-isolation.spec.ts` | **pass** (wraps Go e2e) |
 | `go -C server test ./internal/r2dgit/ -count=1` | **pass** |
+| `go -C server test ./internal/daemon/... -count=1` | **pass** |
+| `go -C server test ./cmd/multica -run TestRunRepoCheckout -count=1` | **pass** |
+| `go -C server test ./internal/daemon/workercheckout -run '^$' -bench BenchmarkRepoCacheCheckout -benchtime 3x -count=1` | **pass** (cold/warm prepare, checkout, and write metrics recorded in the PR) |
 | `go -C server test ./internal/handler/ -run 'TestOpenGitSigning|TestAgentEnv_TaskToken' -count=1` | **pass** (DB tests skip when no DB) |
 | Docker image build / live container smoke | **blocked** (no Docker); manual steps: [docker-task-worker-manual-test.md](docker-task-worker-manual-test.md) |
 | Real-agent / provider Git smoke | **not run** (no authorization) |
@@ -50,5 +58,5 @@ Existing UI/API/custody from branch baseline **retained**. No new gaps addressed
 
 1. Build and pin `multica/task-worker` image digest; install Docker (rootless or hardened rootful) on task nodes.
 2. Run eight acceptance checks from spec on real backend (A/B isolation, network canaries, limits, teardown).
-3. Move task Git prepare/finalize off host paths; gate host checkout APIs for protected tasks.
+3. Move task Git finalize and hooks off host paths; inspect and tune the per-workspace repo cache size, TTL, and prepare timeout on large monorepos.
 4. Complete native Session IPC validation under real Codex/Cursor/OpenCode versions inside the image.
