@@ -3480,7 +3480,9 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 		return nil, errors.New("repo cache does not support Prepare")
 	}
 
-	// Dedupe task.Repos by URL (first Ref wins) and skip empty URLs.
+	// Dedupe task.Repos by their canonical cache path (first URL and Ref win)
+	// and skip empty URLs. HTTPS and SSH spellings for the same remote map to
+	// the same bare cache and must only be mounted once in the worker.
 	seen := make(map[string]struct{}, len(task.Repos))
 	infos := make([]repocache.RepoInfo, 0, len(task.Repos))
 	for _, repo := range task.Repos {
@@ -3488,10 +3490,16 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 		if url == "" {
 			continue
 		}
-		if _, dup := seen[url]; dup {
+		cacheKey := d.repoCache.BarePath(task.WorkspaceID, url)
+		if cacheKey == "" {
+			cacheKey = url
+		} else {
+			cacheKey = filepath.Clean(cacheKey)
+		}
+		if _, dup := seen[cacheKey]; dup {
 			continue
 		}
-		seen[url] = struct{}{}
+		seen[cacheKey] = struct{}{}
 		infos = append(infos, repocache.RepoInfo{URL: url, Ref: strings.TrimSpace(repo.Ref)})
 	}
 	if len(infos) == 0 {
@@ -3500,7 +3508,7 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 
 	prepared, err := preparer.Prepare(ctx, task.WorkspaceID, infos)
 	if err != nil {
-		return nil, err
+		return nil, taskRepoPrepareError(task, err)
 	}
 
 	resolvedRoot, err := filepath.EvalSymlinks(d.workspaceRepoCacheRoot(task.WorkspaceID))

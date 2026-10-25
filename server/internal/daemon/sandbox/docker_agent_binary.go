@@ -50,6 +50,40 @@ func DockerAgentBinaryBind(hostExecutable string) (containerExec string, bind st
 	return containerExec, bind, nil
 }
 
+// DockerMcodeRuntimeBinds mounts the versioned runtime files used by the
+// MiniMax Code install launcher. The launcher derives its install root from
+// /usr/local/bin/mcode, so its current pointer and releases directory must be
+// available under /usr/local in the worker as well.
+func DockerMcodeRuntimeBinds(hostExecutable string) ([]string, error) {
+	hostExecutable = strings.TrimSpace(hostExecutable)
+	if hostExecutable == "" {
+		return nil, fmt.Errorf("sandbox: MCode executable path is required")
+	}
+	resolved := hostExecutable
+	if link, err := filepath.EvalSymlinks(hostExecutable); err == nil && link != "" {
+		resolved = link
+	}
+	script, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: read MCode launcher %q: %w", hostExecutable, err)
+	}
+	contents := string(script)
+	if !strings.Contains(contents, `"$root/current"`) || !strings.Contains(contents, `"$root/releases/$release/.mcode-launcher"`) {
+		return nil, nil
+	}
+	installRoot := filepath.Dir(filepath.Dir(filepath.Clean(resolved)))
+	var binds []string
+	for _, name := range []string{"current", "releases"} {
+		source := filepath.Join(installRoot, name)
+		if _, err := os.Stat(source); err != nil {
+			return nil, fmt.Errorf("sandbox: MCode launcher dependency %q: %w", source, err)
+		}
+		target := filepath.Join(filepath.Dir(dockerAgentBinaryContainerDir), name)
+		binds = append(binds, DockerBind(source, target, "ro"))
+	}
+	return binds, nil
+}
+
 // ProviderUsesDockerAgentBinary reports whether the provider's CLI should be
 // bind-mounted for Docker-backed attempts. Every supported provider — a
 // Multica-supported backend or a built-in runtime — bind-mounts its resolved

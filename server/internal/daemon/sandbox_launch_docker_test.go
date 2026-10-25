@@ -399,13 +399,36 @@ func TestDockerBackendOmitsCABundleWhenUnset(t *testing.T) {
 // inside the container.
 func TestDockerBackendBindsGenericProviderAndSamePathMounts(t *testing.T) {
 	t.Run("mcode binary", func(t *testing.T) {
-		mcode := filepath.Join(t.TempDir(), "mcode")
-		if err := os.WriteFile(mcode, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		root := t.TempDir()
+		binDir := filepath.Join(root, "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mcode := filepath.Join(binDir, "mcode")
+		launcher := "#!/bin/sh\nroot=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd -P)\nrelease=$(tr -d '\\r\\n' < \"$root/current\")\nexec \"$root/releases/$release/.mcode-launcher\" \"$@\"\n"
+		if err := os.WriteFile(mcode, []byte(launcher), 0o755); err != nil {
 			t.Fatalf("write fake mcode: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "releases", "1.2.3"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "current"), []byte("1.2.3\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "releases", "1.2.3", ".mcode-launcher"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
 		}
 		joined := dockerBackendArgvForProvider(t, "mcode", agent.Config{TaskID: "task-1", ExecutablePath: mcode})
 		if !strings.Contains(joined, mcode+":/usr/local/bin/mcode:ro") {
 			t.Errorf("docker argv missing mcode binary bind:\n%s", joined)
+		}
+		for _, want := range []string{
+			filepath.Join(root, "current") + ":/usr/local/current:ro",
+			filepath.Join(root, "releases") + ":/usr/local/releases:ro",
+		} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("docker argv missing MCode runtime bind %q:\n%s", want, joined)
+			}
 		}
 	})
 

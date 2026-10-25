@@ -95,6 +95,13 @@ func (d *Daemon) dockerBackend(
 			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
 		}
 		binds = append(binds, agentBind)
+		if strings.EqualFold(strings.TrimSpace(provider), "mcode") {
+			runtimeBinds, err := sandbox.DockerMcodeRuntimeBinds(config.ExecutablePath)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+			}
+			binds = append(binds, runtimeBinds...)
+		}
 		agentConfig.ExecutablePath = containerExec
 	}
 

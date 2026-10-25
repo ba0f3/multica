@@ -33,6 +33,74 @@ func TestDockerRepoCacheUsesTaskSigningForNewPrivateRepo(t *testing.T) {
 	}
 }
 
+func TestGitHubNotFoundPrepareErrorExplainsHowToGrantAccess(t *testing.T) {
+	err := fmt.Errorf("prepare repo https://github.com/ba0f3/xpfarm.git: git clone --bare: remote: Repository not found.\nfatal: repository not found: exit status 128")
+	got := taskRepoPrepareError(Task{Repos: []RepoData{{URL: "https://github.com/ba0f3/xpfarm.git"}}}, err)
+	for _, want := range []string{
+		"Repository not found",
+		"If it is private",
+		"add its SSH public key to the GitHub account",
+		"Check connection",
+		"verify the repository URL",
+	} {
+		if !strings.Contains(got.Error(), want) {
+			t.Errorf("taskRepoPrepareError() missing %q:\n%s", want, got)
+		}
+	}
+	if !errors.Is(got, err) {
+		t.Fatal("taskRepoPrepareError() did not preserve the underlying error")
+	}
+}
+
+func TestGitHubNotFoundPrepareErrorLeavesOtherFailuresUnchanged(t *testing.T) {
+	err := fmt.Errorf("prepare repo https://github.com/ba0f3/xpfarm.git: connection timeout")
+	got := taskRepoPrepareError(Task{Repos: []RepoData{{URL: "https://github.com/ba0f3/xpfarm.git"}}}, err)
+	if got != err {
+		t.Fatalf("taskRepoPrepareError() = %v, want original error", got)
+	}
+}
+
+func TestPrepareTaskRepoCachesDeduplicatesCanonicalCachePaths(t *testing.T) {
+	workspacesRoot := t.TempDir()
+	workspaceID := "ws-1"
+	cacheRoot := filepath.Join(workspacesRoot, ".repos")
+	realCache := repocache.New(cacheRoot, newDiscardLogger())
+	barePath := realCache.BarePath(workspaceID, "https://github.com/r2d-ai/multica.git")
+	if err := os.MkdirAll(filepath.Dir(barePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	createBareRepoDir(t, barePath)
+	cache := &fakePrepareCache{
+		barePathFn: realCache.BarePath,
+		prepareFn: func(_ context.Context, _ string, repos []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+			if len(repos) != 1 {
+				t.Fatalf("Prepare received %d repos, want canonical duplicates collapsed to 1: %+v", len(repos), repos)
+			}
+			return []repocache.PreparedRepo{{URL: repos[0].URL, Ref: repos[0].Ref, CommitSHA: fakeCommitSHA, BarePath: barePath}}, nil
+		},
+	}
+	d := &Daemon{
+		cfg:       Config{WorkspacesRoot: workspacesRoot},
+		repoCache: cache,
+		logger:    newDiscardLogger(),
+	}
+	task := Task{
+		WorkspaceID: workspaceID,
+		Repos: []RepoData{
+			{URL: "https://github.com/r2d-ai/multica.git", Ref: "main"},
+			{URL: "git@github.com:r2d-ai/multica.git", Ref: "main"},
+		},
+	}
+
+	entries, err := d.prepareTaskRepoCaches(context.Background(), task)
+	if err != nil {
+		t.Fatalf("prepareTaskRepoCaches: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("prepared entries = %d, want 1: %+v", len(entries), entries)
+	}
+}
+
 func testDockerRepoCacheTaskSigning(t *testing.T, host string, port int) {
 	t.Helper()
 	if _, err := exec.LookPath("ssh-add"); err != nil {
@@ -111,6 +179,7 @@ type fakePrepareCache struct {
 	mu sync.Mutex
 
 	prepared     []repocache.PreparedRepo
+	barePathFn   func(string, string) string
 	prepareFn    func(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error)
 	prepareCalls int
 
@@ -123,7 +192,10 @@ type fakePrepareCache struct {
 }
 
 func (c *fakePrepareCache) Lookup(string, string) string { return "" }
-func (c *fakePrepareCache) BarePath(string, string) string {
+func (c *fakePrepareCache) BarePath(workspaceID, url string) string {
+	if c.barePathFn != nil {
+		return c.barePathFn(workspaceID, url)
+	}
 	return ""
 }
 func (c *fakePrepareCache) Sync(string, []repocache.RepoInfo) error {
