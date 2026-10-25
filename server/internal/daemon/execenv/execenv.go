@@ -718,19 +718,32 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		}
 	}
 
-	if params.IsolatedToolBoundary && (params.Provider == "claude" || params.Provider == "antigravity") {
+	if params.IsolatedToolBoundary {
 		taskHome := filepath.Join(envRoot, "home")
-		if err := os.MkdirAll(taskHome, 0o700); err != nil {
-			return nil, fmt.Errorf("execenv: create task home: %w", err)
-		}
 		switch params.Provider {
 		case "claude":
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				return nil, fmt.Errorf("execenv: create task home: %w", err)
+			}
 			if err := prepareClaudeIsolatedHome(taskHome, logger); err != nil {
 				return nil, fmt.Errorf("execenv: prepare claude isolated home: %w", err)
 			}
 		case "antigravity":
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				return nil, fmt.Errorf("execenv: create task home: %w", err)
+			}
 			if err := prepareAntigravityIsolatedHome(taskHome, logger); err != nil {
 				return nil, fmt.Errorf("execenv: prepare antigravity isolated home: %w", err)
+			}
+		default:
+			if _, ok := genericProviderHomeDirs(params.Provider); !ok {
+				break
+			}
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				return nil, fmt.Errorf("execenv: create task home: %w", err)
+			}
+			if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
+				return nil, fmt.Errorf("execenv: prepare generic provider home: %w", err)
 			}
 		}
 	}
@@ -1041,24 +1054,40 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		env.CursorDataDir = cursorDataDir
 	}
 
-	// Refresh the isolated Claude/Antigravity task home on reuse. The preparers
-	// copy only missing files, so a reused home keeps credentials the prior run
-	// refreshed; a freshly added auth/config file on the host is picked up.
-	if params.IsolatedToolBoundary && env.RootDir != "" && (params.Provider == "claude" || params.Provider == "antigravity") {
+	// Refresh the isolated task home on reuse. The preparers copy only missing
+	// files, so a reused home keeps credentials the prior run refreshed; a
+	// freshly added auth/config file on the host is picked up.
+	if params.IsolatedToolBoundary && env.RootDir != "" {
 		taskHome := filepath.Join(env.RootDir, "home")
-		if err := os.MkdirAll(taskHome, 0o700); err != nil {
-			logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
-			return nil
-		}
 		switch params.Provider {
 		case "claude":
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
 			if err := prepareClaudeIsolatedHome(taskHome, logger); err != nil {
 				logger.Warn("execenv: refresh claude isolated home failed; forcing fresh prepare", "error", err)
 				return nil
 			}
 		case "antigravity":
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
 			if err := prepareAntigravityIsolatedHome(taskHome, logger); err != nil {
 				logger.Warn("execenv: refresh antigravity isolated home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
+		default:
+			if _, ok := genericProviderHomeDirs(params.Provider); !ok {
+				break
+			}
+			if err := os.MkdirAll(taskHome, 0o700); err != nil {
+				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
+			if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
+				logger.Warn("execenv: refresh generic provider home failed; forcing fresh prepare", "error", err)
 				return nil
 			}
 		}
