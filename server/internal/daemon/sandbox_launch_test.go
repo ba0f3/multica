@@ -310,10 +310,10 @@ func TestSandboxBinaryRootsIncludesTheSymlinkAndItsTarget(t *testing.T) {
 	}
 }
 
-func TestSandboxHiddenHomePathsCoverTheCredentials(t *testing.T) {
+func TestSandboxCredentialRootsCoverTheCredentials(t *testing.T) {
 	home := t.TempDir()
 	profile := filepath.Join(home, ".multica")
-	paths := sandboxHiddenHomePaths(home, profile)
+	paths := sandboxCredentialRoots(home, profile)
 	joined := strings.Join(paths, "\n")
 	for _, want := range []string{
 		filepath.Join(home, ".ssh"),
@@ -340,10 +340,10 @@ func TestSandboxHiddenHomePathsCoverTheCredentials(t *testing.T) {
 	}
 }
 
-func TestSandboxHiddenHomePathsHonourOperatorAdditions(t *testing.T) {
+func TestSandboxCredentialRootsHonourOperatorAdditions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("MULTICA_SANDBOX_HIDE", filepath.Join(home, ".aws")+", "+filepath.Join(home, ".kube"))
-	paths := sandboxHiddenHomePaths(home, "")
+	paths := sandboxCredentialRoots(home, "")
 	joined := strings.Join(paths, "\n")
 	if !strings.Contains(joined, filepath.Join(home, ".aws")) {
 		t.Error("an operator addition was ignored")

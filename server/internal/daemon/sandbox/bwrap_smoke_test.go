@@ -35,8 +35,7 @@ func TestBwrapSmokeRunsAWorkerInTheBoundary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "visible.txt"), []byte("inside"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// A fake host home: the boundary must let the CLI read its config but not
-	// the credential stores.
+	// The fake host home remains absent; only the named provider profile is shared.
 	hostHome := filepath.Join(root, "host-home")
 	for _, dir := range []string{
 		filepath.Join(hostHome, ".ssh"),
@@ -92,17 +91,15 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 	}
 
 	policy := Policy{
-		TaskRoot:     taskRoot,
-		HomeDir:      home,
-		ReadOnlyHome: hostHome,
-		HiddenHomePaths: []string{
-			filepath.Join(hostHome, ".ssh"),
-			filepath.Join(hostHome, ".multica"),
-		},
+		TaskRoot:       taskRoot,
+		HomeDir:        home,
+		HostHome:       hostHome,
 		TempDir:        temp,
 		CheckoutDir:    checkout,
 		RuntimeRoots:   []string{"/usr", "/bin", "/lib", "/lib64", "/etc"},
-		ForbiddenRoots: []string{workspaces},
+		ForbiddenRoots: []string{workspaces, hostHome},
+		AllowedRoots:   []string{filepath.Join(hostHome, ".claude")},
+		ExtraMounts:    []Mount{{Source: filepath.Join(hostHome, ".claude"), Target: filepath.Join(hostHome, ".claude")}},
 		Env:            map[string]string{},
 	}
 	args, err := BuildArgs(policy, script)
@@ -140,13 +137,11 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 		"can_write=yes",
 		"secret=BLOCKED",
 		"siblings=BLOCKED",
-		// The SSH key and the application token are gone, the provider
-		// config and the rest of the home are readable, and the home itself
-		// cannot be written.
+		// Only the provider configuration is granted from the host home.
 		"ssh=0",
 		"multica=BLOCKED",
 		"claude=provider-config",
-		"bashrc=shell-config",
+		"bashrc=MISSING",
 		"home_write=DENIED",
 	} {
 		if !strings.Contains(report, want) {
