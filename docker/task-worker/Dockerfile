@@ -20,7 +20,12 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 # Optional extra CA for private/self-signed endpoints. Build with:
 #   docker build --secret id=extra_ca,src=/path/to/ca.crt ...
+# BuildKit does not include secret content in the cache key, so the
+# fingerprint arg is part of the RUN command: a CA build and a no-CA build
+# never share this layer on the same local cache.
+ARG EXTRA_CA_FINGERPRINT=no-extra-ca
 RUN --mount=type=secret,id=extra_ca,required=false \
+    echo "extra-ca-fingerprint:${EXTRA_CA_FINGERPRINT}" && \
     if [ -s /run/secrets/extra_ca ]; then \
       install -m 0644 /run/secrets/extra_ca /usr/local/share/ca-certificates/multica-extra-ca.crt && \
       update-ca-certificates; \
