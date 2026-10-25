@@ -119,22 +119,12 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		return nil, fmt.Errorf("mcode stdin pipe: %w", err)
 	}
 	providerErr := newACPProviderErrorSniffer("mcode")
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("mcode stderr pipe: %w", err)
-	}
+	stderrBuf := newStderrTail(io.MultiWriter(newLogWriter(b.cfg.Logger, "[mcode:stderr] "), providerErr), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 	if err := startOwnedProcessTree(cmd, b.cfg.Logger); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start mcode: %w", err)
 	}
-
-	stderrSink := io.MultiWriter(newLogWriter(b.cfg.Logger, "[mcode:stderr] "), providerErr)
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		_, _ = io.Copy(stderrSink, stderr)
-	}()
 
 	b.cfg.Logger.Info("mcode acp started", "pid", cmd.Process.Pid, "cwd", opts.Cwd)
 	msgStream := newMcodeMessageStream(256)
@@ -192,14 +182,59 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	go func() {
 		defer msgStream.close()
 		defer close(resCh)
+		var result Result
+		var processExited bool
 		defer func() {
+			streamingCurrentTurn.Store(false)
 			_ = stdin.Close()
-			// Cancellation must remain reachable before Wait. MCode or a tool
-			// descendant may ignore stdin EOF, so waiting first can deadlock every
-			// early-return path, including a rejected session resume.
+			waitDone := make(chan error, 1)
+			go func() { waitDone <- cmd.Wait() }()
+			var exitErr error
+			naturalExit := false
+			if processExited {
+				// stdout can close before the final stderr and exit status arrive.
+				// Give a failing process a bounded chance to exit naturally so our
+				// own cancellation does not replace its exit code with SIGKILL.
+				timer := time.NewTimer(mcodeReaderDrainGrace)
+				select {
+				case exitErr = <-waitDone:
+					naturalExit = true
+				case <-runCtx.Done():
+					cancel()
+					exitErr = <-waitDone
+				case <-timer.C:
+					cancel()
+					exitErr = <-waitDone
+				}
+				timer.Stop()
+			} else {
+				cancel()
+				exitErr = <-waitDone
+			}
 			cancel()
-			_ = cmd.Wait()
+			signalProcessGroup(cmd, syscall.SIGKILL)
+			<-readerDone
 			releaseProcessGroup(cmd)
+
+			// Wait joins os/exec's stderr copier before any result, including
+			// startup failures, is published to the daemon or Docker IPC.
+			finalOutput, fullOutput := deliverable.result()
+			result.Output = finalOutput
+			result.Status, result.Error = promoteACPResultOnProviderError(result.Status, result.Error, fullOutput, providerErr)
+			if accumulated := c.accumulatedUsage(); acpUsagePresent(accumulated) {
+				result.Usage = map[string]TokenUsage{"unknown": accumulated}
+			}
+			if result.Error != "" {
+				if naturalExit && result.Status == "failed" {
+					if exitErr != nil {
+						result.Error += fmt.Sprintf("; process: %v", exitErr)
+					} else {
+						result.Error += "; process: exit status 0"
+					}
+				}
+				result.Error = withAgentStderr(sanitizeAgentDiagnostic(result.Error), "mcode", sanitizeAgentDiagnostic(stderrBuf.Tail()))
+			}
+			resCh <- result
 		}()
 
 		startTime := time.Now()
@@ -217,8 +252,9 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			"clientCapabilities": map[string]any{},
 		})
 		if err != nil {
+			processExited = mcodeProcessExited(err)
 			finalStatus, finalError = mcodeRequestFailure(runCtx, opts.Timeout, "initialize", err)
-			resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
+			result = Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 			return
 		}
 
@@ -238,7 +274,7 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				finalStatus = "failed"
 				finalError = "mcode ACP does not support session loading; retry with a fresh session"
 				resumeRejected = true
-				resCh <- Result{
+				result = Result{
 					Status:         finalStatus,
 					Error:          finalError,
 					DurationMs:     time.Since(startTime).Milliseconds(),
@@ -248,7 +284,7 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			}
 			if err := mcodeWaitForSessionStartup(runCtx); err != nil {
 				finalStatus, finalError = mcodeRequestFailure(runCtx, opts.Timeout, "session/load", err)
-				resCh <- Result{
+				result = Result{
 					Status:         finalStatus,
 					Error:          finalError,
 					DurationMs:     time.Since(startTime).Milliseconds(),
@@ -256,17 +292,18 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				}
 				return
 			}
-			result, loadErr := c.request(runCtx, "session/load", map[string]any{
+			loadResult, loadErr := c.request(runCtx, "session/load", map[string]any{
 				"cwd":        cwd,
 				"sessionId":  opts.ResumeSessionID,
 				"mcpServers": mcpServers,
 			})
 			if loadErr != nil {
+				processExited = mcodeProcessExited(loadErr)
 				finalStatus, finalError = mcodeRequestFailure(runCtx, opts.Timeout, "session/load", loadErr)
 				if finalStatus == "failed" && isACPSessionNotFound(loadErr) {
 					resumeRejected = true
 				}
-				resCh <- Result{
+				result = Result{
 					Status:         finalStatus,
 					Error:          finalError,
 					DurationMs:     time.Since(startTime).Milliseconds(),
@@ -274,25 +311,26 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				}
 				return
 			}
-			sessionID, _ = resolveResumedSessionID(opts.ResumeSessionID, result)
+			sessionID, _ = resolveResumedSessionID(opts.ResumeSessionID, loadResult)
 		} else {
 			if err := mcodeWaitForSessionStartup(runCtx); err != nil {
 				finalStatus, finalError = mcodeRequestFailure(runCtx, opts.Timeout, "session/new", err)
-				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
+				result = Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 				return
 			}
-			result, newErr := c.request(runCtx, "session/new", map[string]any{
+			newResult, newErr := c.request(runCtx, "session/new", map[string]any{
 				"cwd":        cwd,
 				"mcpServers": mcpServers,
 			})
 			if newErr != nil {
+				processExited = mcodeProcessExited(newErr)
 				finalStatus, finalError = mcodeRequestFailure(runCtx, opts.Timeout, "session/new", newErr)
-				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
+				result = Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 				return
 			}
-			sessionID = extractACPSessionID(result)
+			sessionID = extractACPSessionID(newResult)
 			if sessionID == "" {
-				resCh <- Result{
+				result = Result{
 					Status:     "failed",
 					Error:      "mcode session/new returned no session ID",
 					DurationMs: time.Since(startTime).Milliseconds(),
@@ -313,6 +351,7 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			},
 		})
 		if err != nil {
+			processExited = mcodeProcessExited(err)
 			finalStatus, finalError = mcodeRequestFailure(runCtx, opts.Timeout, "session/prompt", err)
 			if opts.ResumeSessionID != "" && isACPSessionNotFound(err) {
 				resumeRejected = true
@@ -333,33 +372,13 @@ func (b *mcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			}
 			waitForACPNotificationQuiescence(runCtx, activity, readerDone, acpNotificationQuietTime, mcodeReaderDrainGrace)
 		}
-		streamingCurrentTurn.Store(false)
-
 		duration := time.Since(startTime)
-		_ = stdin.Close()
-		cancel()
-		<-readerDone
-		<-stderrDone
-
-		finalOutput, fullOutput := deliverable.result()
-		finalStatus, finalError = promoteACPResultOnProviderError(
-			finalStatus,
-			finalError,
-			fullOutput,
-			providerErr,
-		)
-		var usage map[string]TokenUsage
-		if accumulated := c.accumulatedUsage(); acpUsagePresent(accumulated) {
-			usage = map[string]TokenUsage{"unknown": accumulated}
-		}
-		resCh <- Result{
+		result = Result{
 			Status:         finalStatus,
-			Output:         finalOutput,
 			Error:          finalError,
 			DurationMs:     duration.Milliseconds(),
 			SessionID:      sessionID,
 			ResumeRejected: resumeRejected,
-			Usage:          usage,
 		}
 	}()
 
@@ -408,5 +427,9 @@ func mcodeSessionStartupExited(operation string, err error) bool {
 	// mcpServers are launched, so text matching on "process exited" or
 	// "broken pipe" would rewrite a caller's real MCP startup error into
 	// an MCode-exited message and drop its root cause.
+	return mcodeProcessExited(err)
+}
+
+func mcodeProcessExited(err error) bool {
 	return errors.Is(err, errMcodeProcessExited) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE)
 }

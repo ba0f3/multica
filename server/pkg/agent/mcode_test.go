@@ -225,6 +225,102 @@ func TestMcodeSessionNewExitAfterInitializeReportsStartupFailure(t *testing.T) {
 	if strings.Contains(result.Error, "initialize failed") {
 		t.Fatalf("error = %q, must not blame initialize", result.Error)
 	}
+	for _, want := range []string{"exit status 42", "mcode exited while starting a session"} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("error = %q, missing startup diagnostic %q", result.Error, want)
+		}
+	}
+}
+
+func TestMcodeStartupFailurePreservesRedactedProcessDiagnostics(t *testing.T) {
+	t.Parallel()
+	for _, operation := range []string{"initialize", "session/new", "session/load"} {
+		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
+			const secret = "sk-mcode-test-secret-12345678901234567890"
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "mcode")
+			script := fmt.Sprintf(`#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"%s"'*)
+      exec 1>&-
+      sleep 0.05
+      printf 'Cannot load runtime dependency\nAuthorization: Bearer %s\n' >&2
+      exit 17
+      ;;
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%%s,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}\n' "$id"
+      ;;
+  esac
+done
+`, operation, secret)
+			writeTestExecutable(t, bin, []byte(script))
+			backend, err := New("mcode", Config{
+				ExecutablePath: bin,
+				Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			opts := ExecOptions{Cwd: dir}
+			if operation == "session/load" {
+				opts.ResumeSessionID = "existing-session"
+			}
+			session, err := backend.Execute(ctx, "test startup diagnostics", opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range session.Messages {
+			}
+			result := <-session.Result
+			if result.Status != "failed" || result.ResumeRejected {
+				t.Fatalf("unexpected startup result: %+v", result)
+			}
+			for _, want := range []string{operation, "exit status 17", "Cannot load runtime dependency", "[REDACTED]"} {
+				if !strings.Contains(result.Error, want) {
+					t.Errorf("error = %q, missing startup diagnostic %q", result.Error, want)
+				}
+			}
+			if strings.Contains(result.Error, secret) {
+				t.Error("startup error leaked a credential")
+			}
+		})
+	}
+}
+
+func TestMcodeStartupFailureKeepsBoundedStderrTail(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	diagnosticFile := filepath.Join(dir, "stderr.txt")
+	diagnostics := "discard this old startup line\n" + strings.Repeat("startup progress\n", 4096) + "Final startup failure\n"
+	if err := os.WriteFile(diagnosticFile, []byte(diagnostics), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "mcode")
+	writeTestExecutable(t, bin, []byte(fmt.Sprintf("#!/bin/sh\nIFS= read -r request\ncat %q >&2\nexit 17\n", diagnosticFile)))
+	backend, err := New("mcode", Config{ExecutablePath: bin, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "test bounded diagnostics", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range session.Messages {
+	}
+	result := <-session.Result
+	if result.Status != "failed" || !strings.Contains(result.Error, "Final startup failure") {
+		t.Fatalf("startup failure lost its final diagnostic: %+v", result)
+	}
+	if len(result.Error) > 4096 || strings.Contains(result.Error, "discard this old startup line") {
+		t.Errorf("startup stderr was not bounded to a tail: %d bytes", len(result.Error))
+	}
 }
 
 func TestMcodeUnsupportedResumeRequestsFreshRetry(t *testing.T) {

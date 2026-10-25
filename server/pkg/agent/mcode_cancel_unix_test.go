@@ -7,10 +7,74 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestMcodeStartupFailureTerminatesRemainingProcessTree(t *testing.T) {
+	for _, hang := range []bool{false, true} {
+		name := "exited parent"
+		if hang {
+			name = "parent closes pipes without exiting"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			pidFile := filepath.Join(dir, "pids")
+			bin := filepath.Join(dir, "mcode")
+			writeTestExecutable(t, bin, []byte(`#!/bin/sh
+IFS= read -r request
+( sleep 300 ) >/dev/null 2>&1 &
+printf '%s %s\n' "$$" "$!" > "$MCODE_PID_FILE"
+printf 'Runtime failed before initialize\n' >&2
+if [ "$MCODE_HANG" = 1 ]; then
+  exec 1>&- 2>&-
+  while true; do sleep 1; done
+fi
+exit 17
+`))
+			hangEnv := "0"
+			if hang {
+				hangEnv = "1"
+			}
+			backend, err := New("mcode", Config{
+				ExecutablePath: bin,
+				Logger:         slog.Default(),
+				Env:            map[string]string{"MCODE_PID_FILE": pidFile, "MCODE_HANG": hangEnv},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			session, err := backend.Execute(ctx, "test startup cleanup", ExecOptions{Cwd: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pids := waitForPids(t, pidFile)
+			t.Cleanup(func() {
+				for _, pid := range pids {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			})
+			select {
+			case result := <-session.Result:
+				if result.Status != "failed" || !strings.Contains(result.Error, "Runtime failed before initialize") {
+					t.Fatalf("startup diagnostics lost during process cleanup: %+v", result)
+				}
+				if !hang && !strings.Contains(result.Error, "exit status 17") {
+					t.Errorf("natural exit status lost: %q", result.Error)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("startup failure hung during process cleanup")
+			}
+			for _, pid := range pids {
+				waitProcessGone(t, pid)
+			}
+		})
+	}
+}
 
 func TestMcodeUnsupportedResumeTerminatesProcessTreeBeforeWait(t *testing.T) {
 	tempDir := t.TempDir()
