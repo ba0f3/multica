@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // PreparedRepo describes a repository that has been fetched into the
@@ -44,13 +46,21 @@ func (c *Cache) Prepare(ctx context.Context, workspaceID string, repos []RepoInf
 		return nil, fmt.Errorf("create workspace cache dir: %w", err)
 	}
 
-	prepared := make([]PreparedRepo, 0, len(repos))
-	for _, repo := range repos {
-		preparedRepo, err := c.prepareRepo(ctx, workspaceID, repo)
-		if err != nil {
-			return nil, fmt.Errorf("prepare repo %s: %w", repo.URL, err)
-		}
-		prepared = append(prepared, preparedRepo)
+	prepared := make([]PreparedRepo, len(repos))
+	group, prepareCtx := errgroup.WithContext(ctx)
+	group.SetLimit(4)
+	for i, repo := range repos {
+		group.Go(func() error {
+			preparedRepo, err := c.prepareRepo(prepareCtx, workspaceID, repo)
+			if err != nil {
+				return fmt.Errorf("prepare repo %s: %w", repo.URL, err)
+			}
+			prepared[i] = preparedRepo
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 	return prepared, nil
 }

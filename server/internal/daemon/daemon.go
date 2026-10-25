@@ -7983,6 +7983,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	dockerRepoCache := d.usesDockerRepoCache(provider)
 	var taskRepoCaches []workercheckout.Entry
 	if dockerRepoCache {
+		phaseRecorder.Mark(taskPhaseRepoCacheStarted)
 		prepared, prepareErr := d.prepareTaskRepoCaches(prepareCtx, task)
 		if prepareErr != nil {
 			return TaskResult{}, fmt.Errorf("prepare task repo cache: %w", prepareErr)
@@ -7995,6 +7996,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			d.syncWorkspaceRepos(task.WorkspaceID, toSync)
 		}()
 	}
+
+	phaseRecorder.Mark(taskPhaseRepoCacheReady)
 
 	entry, ok := d.agents()[provider]
 	// A custom runtime profile (MUL-3284) overrides the executable path: the
@@ -8042,6 +8045,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if !ok {
 		return TaskResult{}, fmt.Errorf("no agent configured for provider %q", provider)
 	}
+
+	phaseRecorder.Mark(taskPhaseRuntimeResolved)
 
 	stopPrepareLease := d.startTaskPrepareLeaseExtender(prepareCtx, task, taskLog)
 	defer stopPrepareLease()

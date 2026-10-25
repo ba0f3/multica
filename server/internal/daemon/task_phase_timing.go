@@ -14,6 +14,9 @@ type taskPhase string
 const (
 	taskPhaseClaimed             taskPhase = "claimed"
 	taskPhasePrepareStarted      taskPhase = "prepare_started"
+	taskPhaseRepoCacheStarted    taskPhase = "repo_cache_started"
+	taskPhaseRepoCacheReady      taskPhase = "repo_cache_ready"
+	taskPhaseRuntimeResolved     taskPhase = "runtime_resolved"
 	taskPhaseSkillsReady         taskPhase = "skills_ready"
 	taskPhaseEnvironmentReady    taskPhase = "environment_ready"
 	taskPhaseRuntimeStarted      taskPhase = "runtime_started"

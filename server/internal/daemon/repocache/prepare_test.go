@@ -3,9 +3,11 @@ package repocache
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrepareUsesTaskGitEnvironmentForColdCloneAndFetch(t *testing.T) {
@@ -250,5 +252,103 @@ func TestPrepareRefreshesCABundleOnCachedRepo(t *testing.T) {
 	}
 	if got, want := strings.TrimSpace(out), cache.caBundlePath(); got != want {
 		t.Fatalf("%s = %q, want %q", caBundleConfigKey, got, want)
+	}
+}
+
+func TestPrepareFetchesIndependentReposConcurrentlyWithBound(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := t.TempDir()
+	release := filepath.Join(gate, "release")
+	ready := filepath.Join(gate, "ready")
+	if err := os.Mkdir(ready, 0700); err != nil {
+		t.Fatal(err)
+	}
+	wrapperDir := t.TempDir()
+	wrapper := `#!/bin/sh
+if [ "$1" = clone ]; then
+ for last do :; done
+ touch "$TEST_PREPARE_READY/$(basename "$last")"
+ while [ ! -f "$TEST_PREPARE_RELEASE" ]; do sleep 0.01; done
+fi
+exec "$TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(filepath.Join(wrapperDir, "git"), []byte(wrapper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	repos := make([]RepoInfo, 6)
+	for i := range repos {
+		repos[i] = RepoInfo{URL: createTestRepo(t)}
+	}
+	t.Setenv("TEST_REAL_GIT", git)
+	t.Setenv("TEST_PREPARE_READY", ready)
+	t.Setenv("TEST_PREPARE_RELEASE", release)
+	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cache := New(t.TempDir(), testLogger())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type result struct {
+		repos []PreparedRepo
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() { repos, err := cache.Prepare(ctx, "ws-1", repos); done <- result{repos, err} }()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	count := 0
+wait:
+	for {
+		entries, err := os.ReadDir(ready)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count = len(entries)
+		if count >= 4 {
+			break
+		}
+		select {
+		case <-deadline:
+			break wait
+		case <-ticker.C:
+		}
+	}
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if count != 4 {
+		t.Fatalf("concurrent clone count=%d, want 4; independent repos must not prepare serially or without a bound", count)
+	}
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if len(got.repos) != len(repos) {
+		t.Fatalf("prepared %d repos", len(got.repos))
+	}
+	for i, repo := range got.repos {
+		if repo.URL != repos[i].URL {
+			t.Fatalf("repository order changed at %d", i)
+		}
+	}
+}
+
+func TestPrepareBatchFailureReturnsNoPartialRepositories(t *testing.T) {
+	t.Parallel()
+	first, second := createTestRepo(t), createTestRepo(t)
+	repos := []RepoInfo{{URL: first}, {URL: second}}
+	cache := New(t.TempDir(), testLogger())
+	if _, err := cache.Prepare(context.Background(), "ws-1", repos); err != nil {
+		t.Fatal(err)
+	}
+	addEmptyCommit(t, first, "updated head")
+	if err := os.RemoveAll(second); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cache.Prepare(context.Background(), "ws-1", repos)
+	if err == nil || !strings.Contains(err.Error(), second) || got != nil {
+		t.Fatalf("expected strict batch failure, got=%v err=%v", got, err)
 	}
 }
