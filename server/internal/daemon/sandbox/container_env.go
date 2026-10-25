@@ -66,7 +66,6 @@ func ContainerEnv(env map[string]string) map[string]string {
 	rewriteIfSet(rewritten, "CODEX_HOME", filepath.Join(HomePath, ".codex"))
 	rewriteIfSet(rewritten, "CURSOR_DATA_DIR", filepath.Join(HomePath, ".cursor"))
 	rewriteIfSet(rewritten, "HERMES_HOME", filepath.Join(HomePath, ".hermes"))
-	rewriteIfSet(rewritten, "OPENCLAW_CONFIG_PATH", filepath.Join(HomePath, ".openclaw", "config.json"))
 	rewriteIfSet(rewritten, "XDG_CONFIG_HOME", filepath.Join(HomePath, ".config"))
 	rewriteIfSet(rewritten, "XDG_DATA_HOME", filepath.Join(HomePath, ".local", "share"))
 	rewriteIfSet(rewritten, "XDG_CACHE_HOME", filepath.Join(HomePath, ".cache"))
@@ -94,11 +93,12 @@ func DockerBind(hostPath, containerPath, mode string) string {
 // DockerConfigBinds maps per-task host directories into the container home
 // layout. Only non-empty host paths are bound.
 //
-// OpenClaw is deliberately absent: the isolated tool boundary only admits
-// codex, cursor, opencode, claude, and antigravity, so there is never a
-// per-task OpenClaw config to mount. Passing filepath.Dir of an empty path here
-// used to bind "." — the daemon's working directory, which is the user's home on
-// a systemd user unit.
+// OpenClaw and QwenPaw are deliberately absent here: their per-task paths are
+// bound at their own absolute paths in dockerBackend (not remapped into the
+// container home), because their CLIs reference those paths by absolute value
+// (OpenClaw's `$include`, QwenPaw's `--workspace`). Passing filepath.Dir of an
+// empty path here used to bind "." — the daemon's working directory, which is
+// the user's home on a systemd user unit.
 func DockerConfigBinds(hostHome, hostMultica, hostCodex, hostCursor, hostHermes string) []string {
 	type pair struct {
 		host   string

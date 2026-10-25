@@ -391,3 +391,107 @@ func TestDockerBackendOmitsCABundleWhenUnset(t *testing.T) {
 		}
 	}
 }
+
+// TestDockerBackendBindsGenericProviderAndSamePathMounts verifies the newly
+// admitted providers bind their host CLI read-only at /usr/local/bin/<basename>,
+// and that the per-task QwenPaw workspace and the OpenClaw config/include are
+// bound at their own absolute paths so their absolute references stay valid
+// inside the container.
+func TestDockerBackendBindsGenericProviderAndSamePathMounts(t *testing.T) {
+	t.Run("mcode binary", func(t *testing.T) {
+		mcode := filepath.Join(t.TempDir(), "mcode")
+		if err := os.WriteFile(mcode, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake mcode: %v", err)
+		}
+		joined := dockerBackendArgvForProvider(t, "mcode", agent.Config{TaskID: "task-1", ExecutablePath: mcode})
+		if !strings.Contains(joined, mcode+":/usr/local/bin/mcode:ro") {
+			t.Errorf("docker argv missing mcode binary bind:\n%s", joined)
+		}
+	})
+
+	t.Run("qwenpaw workspace", func(t *testing.T) {
+		qwenpaw := filepath.Join(t.TempDir(), "qwenpaw")
+		if err := os.MkdirAll(qwenpaw, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(t.TempDir(), "qwenpaw")
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake qwenpaw: %v", err)
+		}
+		joined := dockerBackendArgvForProvider(t, "qwenpaw", agent.Config{TaskID: "task-1", ExecutablePath: bin}, func(env *execenv.Environment) {
+			env.QwenpawWorkspace = qwenpaw
+		})
+		if !strings.Contains(joined, qwenpaw+":"+qwenpaw+":rw") {
+			t.Errorf("docker argv missing qwenpaw same-path bind:\n%s", joined)
+		}
+	})
+
+	t.Run("openclaw config and include", func(t *testing.T) {
+		cfgDir := t.TempDir()
+		cfg := filepath.Join(cfgDir, "config.json")
+		if err := os.WriteFile(cfg, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		includeRoot := filepath.Join(t.TempDir(), "include")
+		if err := os.MkdirAll(includeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(t.TempDir(), "openclaw")
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake openclaw: %v", err)
+		}
+		joined := dockerBackendArgvForProvider(t, "openclaw", agent.Config{TaskID: "task-1", ExecutablePath: bin}, func(env *execenv.Environment) {
+			env.OpenclawConfigPath = cfg
+			env.OpenclawIncludeRoot = includeRoot
+		})
+		if !strings.Contains(joined, cfg+":"+cfg+":ro") {
+			t.Errorf("docker argv missing openclaw config same-path bind:\n%s", joined)
+		}
+		if !strings.Contains(joined, includeRoot+":"+includeRoot+":ro") {
+			t.Errorf("docker argv missing openclaw include same-path bind:\n%s", joined)
+		}
+	})
+}
+
+// dockerBackendArgvForProvider runs one attempt for an arbitrary provider
+// through a fake docker CLI and returns the captured argv. Optional setup
+// callbacks mutate the execution environment before the backend is built.
+func dockerBackendArgvForProvider(t *testing.T, provider string, config agent.Config, setup ...func(*execenv.Environment)) string {
+	t.Helper()
+	record := filepath.Join(t.TempDir(), "argv")
+	fakeDocker := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + "\nhead -n1 > /dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	daemon := newSandboxTestDaemon(t, "bwrap")
+	daemon.cfg.TaskSandboxBackend = "docker"
+	daemon.cfg.DockerCLIPath = fakeDocker
+	daemon.cfg.DockerTaskImage = "multica/task-worker:test"
+	env := newSandboxTestEnv(t)
+	for _, fn := range setup {
+		fn(env)
+	}
+	backend, err := daemon.sandboxedBackend(provider, config, env, "", "", "attempt-"+provider, nil, nil)
+	if err != nil {
+		t.Fatalf("sandboxedBackend(%s): %v", provider, err)
+	}
+	if backend == nil {
+		t.Fatalf("expected docker backend for %s", provider)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "prompt", agent.ExecOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	_, result := collectSandboxSession(ctx, t, session)
+	if result.Status != "completed" {
+		t.Fatalf("result = %+v", result)
+	}
+	raw, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read argv: %v", err)
+	}
+	return string(raw)
+}

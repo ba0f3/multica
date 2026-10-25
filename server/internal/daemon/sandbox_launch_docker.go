@@ -98,6 +98,25 @@ func (d *Daemon) dockerBackend(
 		agentConfig.ExecutablePath = containerExec
 	}
 
+	// Per-task QwenPaw workspace: bind it read-write at its own absolute path
+	// so ExecSpec.QwenpawWorkspace (which the worker passes to `qwenpaw acp
+	// --workspace`) stays valid. The path is a directory the daemon created for
+	// this task, not an inherited host-home tree.
+	if env.QwenpawWorkspace != "" {
+		binds = append(binds, sandbox.DockerBind(env.QwenpawWorkspace, env.QwenpawWorkspace, "rw"))
+	}
+
+	// OpenClaw reads its per-task config through an absolute $include. Bind the
+	// config file and its include root at their own absolute paths so the
+	// wrapper's include resolution stays valid inside the container. Both are
+	// per-task paths the daemon synthesized/validated for this attempt.
+	if env.OpenclawConfigPath != "" {
+		binds = append(binds, sandbox.DockerBind(env.OpenclawConfigPath, env.OpenclawConfigPath, "ro"))
+	}
+	if env.OpenclawIncludeRoot != "" {
+		binds = append(binds, sandbox.DockerBind(env.OpenclawIncludeRoot, env.OpenclawIncludeRoot, "ro"))
+	}
+
 	// Bind the task-local Claude --settings file after the config binds so the
 	// .multica parent directory exists when docker creates the file mount. The
 	// host path is rewritten to the container path in the manifest below, so

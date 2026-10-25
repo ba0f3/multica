@@ -72,6 +72,14 @@ func TestDockerRepoCacheBindsRejectsRelativeAndDotDotPaths(t *testing.T) {
 	}
 }
 
+func TestContainerEnvPreservesOpenclawConfigPath(t *testing.T) {
+	const hostPath = "/host/task/openclaw/config.json"
+	env := ContainerEnv(map[string]string{"OPENCLAW_CONFIG_PATH": hostPath})
+	if got := env["OPENCLAW_CONFIG_PATH"]; got != hostPath {
+		t.Errorf("OPENCLAW_CONFIG_PATH = %q, want %q (host path preserved for same-path bind)", got, hostPath)
+	}
+}
+
 func TestContainerEnvIncludesToolchainPath(t *testing.T) {
 	env := ContainerEnv(nil)
 	path := env["PATH"]
