@@ -16,6 +16,11 @@ const RepoManifestPath = HomePath + "/.multica/" + workercheckout.ManifestFileNa
 // git/curl/node/python must trust for private Git hosts.
 const RepoCABundlePath = HomePath + "/.multica/ca-bundle.pem"
 
+// ClaudeSettingsPath is the in-container path of the task-local Claude Code
+// --settings file. dockerBackend binds the host file here; bwrap already mounts
+// it at its own host path, so only Docker needs this fixed container path.
+const ClaudeSettingsPath = HomePath + "/.multica/claude-settings.json"
+
 // CAEnv returns the environment variables that point a worker's TLS tooling at
 // the mounted CA bundle, all set to bundlePath.
 func CAEnv(bundlePath string) map[string]string {
@@ -51,6 +56,11 @@ func ContainerEnv(env map[string]string) map[string]string {
 	if _, ok := rewritten["CLAUDE_CODE_TMPDIR"]; ok {
 		rewritten["CLAUDE_CODE_TMPDIR"] = TempPath
 	}
+	// Claude Code reads ~/.claude, which the task-home copy seeds at
+	// /home/agent/.claude; an explicit CLAUDE_CONFIG_DIR host path must not
+	// survive into the container. Antigravity has no such variable (it uses
+	// HOME), so nothing is added for it.
+	rewriteIfSet(rewritten, "CLAUDE_CONFIG_DIR", filepath.Join(HomePath, ".claude"))
 	rewriteIfSet(rewritten, "MULTICA_CONFIG_ROOT", filepath.Join(HomePath, ".multica"))
 	rewriteIfSet(rewritten, "MULTICA_TASK_CONFIG_ROOT", filepath.Join(HomePath, ".multica"))
 	rewriteIfSet(rewritten, "CODEX_HOME", filepath.Join(HomePath, ".codex"))
@@ -70,7 +80,7 @@ func rewriteIfSet(env map[string]string, key, target string) {
 }
 
 func containerPath() string {
-	return "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/home/agent/go/bin:/home/agent/.local/bin"
 }
 
 // DockerBind returns a docker volume bind hostPath:containerPath:mode.
@@ -85,9 +95,10 @@ func DockerBind(hostPath, containerPath, mode string) string {
 // layout. Only non-empty host paths are bound.
 //
 // OpenClaw is deliberately absent: the isolated tool boundary only admits
-// codex, cursor, and opencode, so there is never a per-task OpenClaw config to
-// mount. Passing filepath.Dir of an empty path here used to bind "." — the
-// daemon's working directory, which is the user's home on a systemd user unit.
+// codex, cursor, opencode, claude, and antigravity, so there is never a
+// per-task OpenClaw config to mount. Passing filepath.Dir of an empty path here
+// used to bind "." — the daemon's working directory, which is the user's home on
+// a systemd user unit.
 func DockerConfigBinds(hostHome, hostMultica, hostCodex, hostCursor, hostHermes string) []string {
 	type pair struct {
 		host   string

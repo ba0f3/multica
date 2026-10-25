@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -29,6 +30,100 @@ func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("docker argv missing %q:\n%s", want, joined)
 		}
+	}
+}
+
+// TestDockerBackendBindsClaudeAndAntigravity verifies the two newly admitted
+// providers pass the gate, their resolved host binaries are bind-mounted
+// read-only at /usr/local/bin/<basename>, and Claude's task-local --settings
+// file is mounted and rewritten to the in-container path.
+func TestDockerBackendBindsClaudeAndAntigravity(t *testing.T) {
+	for _, provider := range []string{"claude", "antigravity"} {
+		t.Run(provider, func(t *testing.T) {
+			argvRecord := filepath.Join(t.TempDir(), "argv")
+			manifestRecord := filepath.Join(t.TempDir(), "manifest")
+			fakeDocker := filepath.Join(t.TempDir(), "docker")
+			dockerScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvRecord + "\nhead -n1 > " + manifestRecord + "\nprintf '%s\\n' '{\"type\":\"result\",\"result\":{\"Status\":\"completed\",\"Output\":\"ok\"}}'\n"
+			if err := os.WriteFile(fakeDocker, []byte(dockerScript), 0o755); err != nil {
+				t.Fatalf("write fake docker: %v", err)
+			}
+
+			daemon := newSandboxTestDaemon(t, "bwrap")
+			daemon.cfg.TaskSandboxBackend = "docker"
+			daemon.cfg.DockerCLIPath = fakeDocker
+			daemon.cfg.DockerTaskImage = "multica/task-worker:test"
+			env := newSandboxTestEnv(t)
+
+			binName := provider
+			if provider == "antigravity" {
+				binName = "agy"
+			}
+			hostBinary := filepath.Join(t.TempDir(), binName)
+			if err := os.WriteFile(hostBinary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatalf("write fake %s: %v", binName, err)
+			}
+
+			config := agent.Config{TaskID: "task-1", ExecutablePath: hostBinary}
+			var wantSettingsBind string
+			if provider == "claude" {
+				settings := filepath.Join(env.RootDir, "claude-runtime-skill-settings.json")
+				if err := os.WriteFile(settings, []byte(`{"disabled":[]}`), 0o600); err != nil {
+					t.Fatalf("write settings: %v", err)
+				}
+				env.ClaudeSettingsPath = settings
+				wantSettingsBind = settings + ":" + sandbox.ClaudeSettingsPath + ":ro"
+			}
+
+			backend, err := daemon.sandboxedBackend(provider, config, env, "", "", "attempt-"+provider, nil, nil)
+			if err != nil {
+				t.Fatalf("sandboxedBackend(%s): %v", provider, err)
+			}
+			if backend == nil {
+				t.Fatalf("expected docker backend for %s", provider)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			session, err := backend.Execute(ctx, "prompt", agent.ExecOptions{ClaudeSettingsPath: env.ClaudeSettingsPath})
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			_, result := collectSandboxSession(ctx, t, session)
+			if result.Status != "completed" {
+				t.Fatalf("result = %+v", result)
+			}
+
+			argvRaw, err := os.ReadFile(argvRecord)
+			if err != nil {
+				t.Fatalf("read argv: %v", err)
+			}
+			joined := string(argvRaw)
+			binds := strings.Join(dockerBinds(joined), "\n")
+			wantBinaryBind := hostBinary + ":/usr/local/bin/" + binName + ":ro"
+			if !strings.Contains(binds, wantBinaryBind) {
+				t.Errorf("docker argv missing binary bind %q:\n%s", wantBinaryBind, binds)
+			}
+			if wantSettingsBind != "" && !strings.Contains(binds, wantSettingsBind) {
+				t.Errorf("docker argv missing settings bind %q:\n%s", wantSettingsBind, binds)
+			}
+
+			manifestRaw, err := os.ReadFile(manifestRecord)
+			if err != nil {
+				t.Fatalf("read manifest: %v", err)
+			}
+			var manifest sandbox.Manifest
+			if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+				t.Fatalf("decode manifest: %v\n%s", err, manifestRaw)
+			}
+			if got := manifest.Config.ExecutablePath; got != "/usr/local/bin/"+binName {
+				t.Errorf("manifest executable = %q, want /usr/local/bin/%s", got, binName)
+			}
+			if provider == "claude" {
+				if got := manifest.Exec.ClaudeSettingsPath; got != sandbox.ClaudeSettingsPath {
+					t.Errorf("manifest claude_settings_path = %q, want %q", got, sandbox.ClaudeSettingsPath)
+				}
+			}
+		})
 	}
 }
 

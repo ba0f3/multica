@@ -29,6 +29,13 @@ type IPCBackend struct {
 	KeepStdinOpen bool
 	// StopAttempt stops the outer execution boundary (for example docker kill).
 	StopAttempt func()
+	// ClaudeSettingsPath is the in-container path of the task-local Claude
+	// --settings file, when the launcher bind-mounted it at a path that differs
+	// from the host path carried in ExecOptions.ClaudeSettingsPath. When set, it
+	// replaces the host path in the manifest so the worker only ever sees the
+	// mounted container path. bwrap mounts the host file at its own path, so it
+	// leaves this empty.
+	ClaudeSettingsPath string
 }
 
 var _ agent.Backend = (*IPCBackend)(nil)
@@ -41,6 +48,12 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	}
 	spec := ConvertExecOptions(opts)
 	spec.Cwd = CheckoutPath
+	if b.ClaudeSettingsPath != "" {
+		// The launcher bound the host settings file at a fixed container path;
+		// the manifest must name that path, never the host path it was copied
+		// from. This keeps the host layout out of the container manifest.
+		spec.ClaudeSettingsPath = b.ClaudeSettingsPath
+	}
 	if len(spec.CursorHookCommand) > 0 {
 		spec.CursorHookCommand = append([]string(nil), spec.CursorHookCommand...)
 		spec.CursorHookCommand[0] = sandboxWorker

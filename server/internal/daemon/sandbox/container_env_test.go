@@ -12,6 +12,7 @@ func TestContainerEnvRewritesTaskConfigRoot(t *testing.T) {
 	env := ContainerEnv(map[string]string{
 		"MULTICA_TASK_CONFIG_ROOT": "/host/task-multica",
 		"MULTICA_CONFIG_ROOT":      "/host/config",
+		"CLAUDE_CONFIG_DIR":        "/host/.claude",
 	})
 	configRoot := filepath.Join(HomePath, ".multica")
 	if got := env["MULTICA_TASK_CONFIG_ROOT"]; got != configRoot {
@@ -25,6 +26,11 @@ func TestContainerEnvRewritesTaskConfigRoot(t *testing.T) {
 	}
 	if got := env["MULTICA_HOST_REPO_CHECKOUT"]; got != "disabled" {
 		t.Errorf("MULTICA_HOST_REPO_CHECKOUT = %q, want disabled", got)
+	}
+	// Claude Code reads ~/.claude; the task-home copy seeds it at /home/agent,
+	// so an explicit host CLAUDE_CONFIG_DIR must not survive into the container.
+	if got := env["CLAUDE_CONFIG_DIR"]; got != filepath.Join(HomePath, ".claude") {
+		t.Errorf("CLAUDE_CONFIG_DIR = %q, want %q", got, filepath.Join(HomePath, ".claude"))
 	}
 }
 
@@ -62,6 +68,21 @@ func TestDockerRepoCacheBindsRejectsRelativeAndDotDotPaths(t *testing.T) {
 	} {
 		if _, err := DockerRepoCacheBinds(nil, []string{path}); err == nil {
 			t.Errorf("DockerRepoCacheBinds accepted unsafe path %q", path)
+		}
+	}
+}
+
+func TestContainerEnvIncludesToolchainPath(t *testing.T) {
+	env := ContainerEnv(nil)
+	path := env["PATH"]
+	for _, want := range []string{
+		"/usr/local/go/bin",
+		"/usr/local/bin",
+		HomePath + "/go/bin",
+		HomePath + "/.local/bin",
+	} {
+		if !strings.Contains(path, want) {
+			t.Errorf("PATH %q missing %q", path, want)
 		}
 	}
 }

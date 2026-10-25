@@ -1,6 +1,6 @@
 # Tool isolation (Git security MVP)
 
-This document describes how Multica constrains **Codex**, **Cursor**, and **OpenCode** inside the Docker or bubblewrap worker boundary. **By default** every daemon enables the sandbox (`MULTICA_TASK_SANDBOX` unset → Docker). Opt out with `MULTICA_TASK_SANDBOX=false`. **Network deny** (egress policy) is a separate follow-up.
+This document describes how Multica constrains **Codex**, **Cursor**, **OpenCode**, **Claude Code** (`claude`), and **Antigravity** (`agy`) inside the Docker worker boundary. Codex, Cursor, and OpenCode also support the legacy bubblewrap backend; Claude Code and Antigravity require Docker because their per-task home is only mounted there. **By default** every daemon enables the sandbox (`MULTICA_TASK_SANDBOX` unset → Docker). Opt out with `MULTICA_TASK_SANDBOX=false`. **Network deny** (egress policy) is a separate follow-up.
 
 ## Defaults
 
@@ -14,12 +14,12 @@ This document describes how Multica constrains **Codex**, **Cursor**, and **Open
 
 | Layer | What it does |
 | --- | --- |
-| Provider gate | Only `codex`, `cursor`, and `opencode` may run when the sandbox is enabled (`server/internal/daemon/sandbox/providers.go`). |
-| Worker boundary | Agent CLI runs inside Docker or bwrap; Session IPC and git signing stay on controlled mounts. |
+| Provider gate | Only `codex`, `cursor`, `opencode`, `claude`, and `antigravity` may run when the sandbox is enabled (`server/internal/daemon/sandbox/providers.go`). `claude` and `antigravity` require the Docker backend; bwrap refuses them. |
+| Worker boundary | Agent CLI runs inside Docker (or bwrap for codex/cursor/opencode); Session IPC and git signing stay on controlled mounts. |
 | Repo cache mounts (Docker only) | Before launch, the daemon strictly fetches each `task.Repos` repo into the workspace bare cache and binds only those caches read-only at their host paths (`<cache>:<cache>:ro`). A read-only `repo-cache.json` manifest lists the allowed URLs, refs, resolved SHAs, and cache paths. Unrelated sibling repositories and shared checkouts are not mounted; a reused workdir may add read-only caches named by its own alternates, still under the workspace cache root. |
 | In-worker repo checkout (Docker only) | `multica repo checkout` reads the task manifest instead of the host daemon, creates a private `.git` in the task workdir with `objects/info/alternates` pointing at the mounted cache, sets `origin` to the real URL, and copies the cache's remote refs. The cache is never written or hardlinked. bwrap has no task manifest, so this path does not apply there. |
 | Worker CA bundle (Docker only) | The daemon builds `/home/agent/.multica/ca-bundle.pem` from the repo cache's Git trust plus `MULTICA_DOCKER_TASK_CA_BUNDLE`, mounts it read-only, and exports `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `REQUESTS_CA_BUNDLE`. bwrap receives no worker CA bundle. |
-| Docker agent CLI | For codex/cursor/opencode, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
+| Docker agent CLI | For codex/cursor/opencode/claude/antigravity, the daemon bind-mounts the resolved host binary read-only at `/usr/local/bin/<basename>` and rewrites `executable_path` in the worker manifest (`sandbox.DockerAgentBinaryBind`). |
 | Provider prep | `IsolatedToolBoundary` on execenv prepare/reuse copies provider secrets into the task env and fixes container identity paths. |
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
 
@@ -41,6 +41,22 @@ This document describes how Multica constrains **Codex**, **Cursor**, and **Open
 - **`--server` is forbidden** in the isolated boundary so the agent cannot attach to a host or shared background service.
 - **OpenCode 2.x** runs with **`--standalone`** so the service stays in the worker process tree (cancellation and tool execution remain inside the boundary).
 - **OpenCode 2.x + Multica-managed MCP** is still refused at launch (`ErrOpenCodeV2MCPUnsupported`) until MUL-7523 delivers env-backed MCP via standalone; use OpenCode 1.x or remove composed MCP servers for isolated 2.x tasks.
+
+## Claude Code (`claude`)
+
+- **Credentials and config** are copied into the task `home/` tree (`~/.claude`, `~/.claude.json`) before the worker starts. Bulky session/history trees that are not needed for auth (`projects`, `todos`, `stats`, `logs`, `shell-snapshots`, `file-history`, `session-env`, `downloads`, `cache`) are skipped so the copy stays small; a reused task home keeps its refreshed credentials because files are only copied when the target is missing. A missing host source is a warning (auth may fail), not a failed task.
+- The task-local `--settings` file (`env.ClaudeSettingsPath`) is bound read-only at `/home/agent/.multica/claude-settings.json` in Docker, and the manifest path is rewritten to that in-container path so the host layout never crosses the boundary. Claude is Docker-only; bwrap refuses it.
+- `CLAUDE_CONFIG_DIR`, when set, is rewritten to `/home/agent/.claude` to match the task-home copy; the host source is read from `CLAUDE_CONFIG_DIR` when absolute, otherwise `~/.claude`.
+- Session transcripts under `~/.claude/projects` are not copied. A resumed task whose transcript lived only in the host project store starts a fresh session (the backend's normal fresh-session fallback); the task home's own sessions persist across reuse.
+
+## Antigravity (`agy`)
+
+- **Docker only.** **Credentials and app data** are copied into the task `home/` tree (`~/.gemini`) before the worker starts. Top-level auth/config JSON files and `antigravity-cli/` app data — including `antigravity-cli/brain`, which `--conversation` resume reads — are copied; disposable `tmp`/`cache`/`history` trees are skipped. A missing host source is a warning, not a failed task.
+- No extra environment is set: `agy` resolves auth and app data under `HOME`, which the worker points at `/home/agent`.
+
+## Native-binary requirement
+
+Claude Code and Antigravity are supported only as **native CLI binaries**. A Node/npm shim whose resolved file is a script needs its interpreter (and `node_modules`), which the worker image does not bundle; bind-mounting only the resolved script is not enough for such an install. Credentials stored only in a system keyring that the CLI does not materialise under `~/.claude`/`~/.gemini` will not reach the worker, because the boundary mounts only copies in the task home and never the host home or a keyring socket.
 
 ## Environment signals
 
