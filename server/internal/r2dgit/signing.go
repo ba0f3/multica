@@ -71,6 +71,7 @@ type signingLease struct {
 type RunIdentity struct {
 	ProviderID  string
 	Host        string
+	Port        int
 	IdentityID  string
 	Generation  uint64
 	PublicKey   string
@@ -94,10 +95,10 @@ func (s *Service) ReadyIdentities(ctx context.Context, userID string) ([]RunIden
 	if err != nil {
 		return nil, err
 	}
-	hosts := make(map[string]string, len(providers))
+	byProvider := make(map[string]Provider, len(providers))
 	for _, provider := range providers {
 		if provider.Enabled {
-			hosts[provider.ID] = provider.Host
+			byProvider[provider.ID] = provider
 		}
 	}
 
@@ -120,7 +121,7 @@ func (s *Service) ReadyIdentities(ctx context.Context, userID string) ([]RunIden
 		if identity.Revoked || identity.ActiveGeneration == 0 {
 			continue
 		}
-		host, ok := hosts[identity.ProviderID]
+		provider, ok := byProvider[identity.ProviderID]
 		if !ok {
 			continue
 		}
@@ -130,7 +131,8 @@ func (s *Service) ReadyIdentities(ctx context.Context, userID string) ([]RunIden
 		}
 		out = append(out, RunIdentity{
 			ProviderID:  identity.ProviderID,
-			Host:        host,
+			Host:        provider.Host,
+			Port:        provider.Port,
 			IdentityID:  identity.ID,
 			Generation:  key.Generation,
 			PublicKey:   key.PublicKey,

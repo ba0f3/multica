@@ -8,15 +8,102 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/daemon/workercheckout"
 )
+
+func TestDockerRepoCacheUsesTaskSigningForNewPrivateRepo(t *testing.T) {
+	for _, tc := range []struct {
+		host string
+		port int
+	}{
+		{"github.com", 22},
+		{"git.r2d.dev", 2222},
+	} {
+		t.Run(tc.host, func(t *testing.T) { testDockerRepoCacheTaskSigning(t, tc.host, tc.port) })
+	}
+}
+
+func testDockerRepoCacheTaskSigning(t *testing.T, host string, port int) {
+	t.Helper()
+	if _, err := exec.LookPath("ssh-add"); err != nil {
+		t.Skip("ssh-add is required to inspect the task signing socket")
+	}
+	profile, err := os.MkdirTemp("", "git-auth-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(profile) })
+	t.Setenv("MULTICA_TASK_CONFIG_ROOT", profile)
+	remote := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main", remote},
+		{"-C", remote, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("seed private remote: %s: %v", out, err)
+		}
+	}
+	_, private, err := generateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/git-signing-lease") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"lease_id": "lease-test", "public_key": string(ssh.MarshalAuthorizedKey(signer.PublicKey())),
+			})
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+	sshScript := filepath.Join(t.TempDir(), "ssh")
+	socketRecord := filepath.Join(t.TempDir(), "socket")
+	writeTestExecutable(t, sshScript, []byte("#!/bin/sh\nset -eu\nif [ \"$1\" = -G ]; then exit 0; fi\nssh-add -L >/dev/null\nprintf '%s' \"$SSH_AUTH_SOCK\" > \"$TEST_SOCKET_RECORD\"\nprintf '%s\\n' \"$@\" > \"$TEST_SOCKET_RECORD.args\"\nexec git-upload-pack \"$TEST_PRIVATE_REMOTE\"\n"))
+	t.Setenv("GIT_SSH_COMMAND", sshScript)
+	t.Setenv("TEST_PRIVATE_REMOTE", remote)
+	t.Setenv("TEST_SOCKET_RECORD", socketRecord)
+	d, root, _ := newDockerTaskDaemon(t, nil)
+	d.client = NewClient(server.URL)
+	d.cfg.ServerBaseURL = server.URL
+	d.repoCache = repocache.New(filepath.Join(root, ".repos"), newDiscardLogger())
+	task := dockerTask("01a17196-8dad-7bc4-8d82-4b441e147f5e", []RepoData{{URL: "https://" + host + "/hai-tac/gms.git"}})
+	task.GitIdentities = []GitIdentityBinding{{ProviderID: "provider", Host: host, Port: port}}
+	result, err := d.runTask(context.Background(), task, "codex", 0, newDiscardLogger())
+	if err != nil {
+		t.Fatalf("cold private clone failed: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("task status = %s", result.Status)
+	}
+	socket, err := os.ReadFile(socketRecord)
+	if err != nil {
+		t.Fatalf("SSH transport did not use the task socket: %v", err)
+	}
+	if _, err := os.Stat(string(socket)); !os.IsNotExist(err) {
+		t.Fatalf("task socket was not cleaned up: %v", err)
+	}
+	if port != 22 {
+		args, err := os.ReadFile(socketRecord + ".args")
+		if err != nil || !strings.Contains(string(args), "\n-p\n"+fmt.Sprint(port)+"\n") {
+			t.Fatalf("SSH did not use the provider port: %q, %v", args, err)
+		}
+	}
+}
 
 // fakePrepareCache is a repoCacheBackend that also implements Prepare and
 // RecordDependents, recording calls for assertions.

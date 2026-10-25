@@ -134,7 +134,7 @@ func TestRunGitOutputTimesOut(t *testing.T) {
 }
 
 func TestNewGitCommandUsesStableWorkingDirectory(t *testing.T) {
-	cmd := newGitCommand("--version")
+	cmd := newGitCommand(context.Background(), "--version")
 	if cmd.Dir == "" {
 		t.Fatal("newGitCommand Dir is empty; Git would inherit the daemon working directory")
 	}

@@ -54,7 +54,10 @@ func claimForTask(t *testing.T, taskID string) AgentTaskResponse {
 
 func TestClaimBindsTheOriginatorAndTheirReadyIdentity(t *testing.T) {
 	installGitSigningService(t)
-	providerID := newGitTestProvider(t, "github", "github.com")
+	providerID := newGitTestProvider(t, "gitea", "git.r2d.dev")
+	if _, err := testPool.Exec(context.Background(), `UPDATE r2d_git_provider SET port = 2222 WHERE id = $1`, providerID); err != nil {
+		t.Fatalf("set provider SSH port: %v", err)
+	}
 	userID := newGitTestUser(t, "git-claim@multica.ai")
 	taskID := newGitSigningTask(t, userID)
 
@@ -82,6 +85,9 @@ func TestClaimBindsTheOriginatorAndTheirReadyIdentity(t *testing.T) {
 	}
 	if resp.GitIdentities[0].PublicKey == "" {
 		t.Fatal("the claim carried no public key")
+	}
+	if resp.GitIdentities[0].Port != 2222 {
+		t.Fatalf("provider SSH port = %d, want 2222", resp.GitIdentities[0].Port)
 	}
 }
 

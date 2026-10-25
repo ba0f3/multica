@@ -215,6 +215,22 @@ func TestReadyIdentitiesReturnsOnlyVerifiedKeys(t *testing.T) {
 	}
 }
 
+func TestReadyIdentitiesIncludesProviderSSHPort(t *testing.T) {
+	service, store, _, _ := signingTestService(t)
+	provider := store.providers["provider-1"]
+	provider.Host = "git.r2d.dev"
+	provider.Port = 2222
+	store.providers[provider.ID] = provider
+	readyIdentity(t, service, "user-a")
+	identities, err := service.ReadyIdentities(context.Background(), "user-a")
+	if err != nil || len(identities) != 1 {
+		t.Fatalf("ReadyIdentities = %+v, %v", identities, err)
+	}
+	if identities[0].Host != provider.Host || identities[0].Port != provider.Port {
+		t.Fatalf("provider transport = %s:%d, want %s:%d", identities[0].Host, identities[0].Port, provider.Host, provider.Port)
+	}
+}
+
 func TestReadyIdentitiesSkipsARevokedIdentity(t *testing.T) {
 	service, _, _, _ := signingTestService(t)
 	identity := readyIdentity(t, service, "user-a")

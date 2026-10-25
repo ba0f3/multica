@@ -7946,6 +7946,27 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	toSync := d.registerTaskRepos(task.WorkspaceID, task.ID, task.Repos)
 	defer d.clearTaskRepoRefs(task.WorkspaceID, task.ID)
 
+	// Git operations inside this run sign as the human who authorized it,
+	// through a per-attempt agent socket the daemon hosts. The private key
+	// stays on the server; the socket only lists the granted identity and
+	// forwards signatures.
+	//
+	// A run with no verified credential, no provable originator or no
+	// matching provider simply has no SSH_AUTH_SOCK, and the host's agent
+	// is never inherited.
+	gitSocketPath := ""
+	profileDir, profileErr := cli.ProfileDir(d.cfg.Profile)
+	if profileErr != nil {
+		taskLog.Warn("git: could not resolve the profile directory; the run has no Git credential", "error", profileErr)
+	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir, attemptID); socketPath != "" {
+		gitSocketPath = socketPath
+		defer stopGitAgent()
+	}
+	if err := validateGitCredentialForTask(task, gitSocketPath); err != nil {
+		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+	}
+	prepareCtx = repocache.WithGitEnvironment(prepareCtx, taskRepoGitEnvironment(task, gitSocketPath))
+
 	// A Docker-cache task receives its code from the prepared bare caches, so
 	// it must fetch and resolve them before launch — strictly, with no fallback
 	// to a stale snapshot. Every other task keeps the historical background
@@ -8819,25 +8840,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, err
 	}
 	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir)
-	// Git operations inside this run sign as the human who authorized it,
-	// through a per-attempt agent socket the daemon hosts. The private key
-	// stays on the server; the socket only lists the granted identity and
-	// forwards signatures.
-	//
-	// A run with no verified credential, no provable originator or no
-	// matching provider simply has no SSH_AUTH_SOCK, and the host's agent
-	// is never inherited.
-	gitSocketPath := ""
-	profileDir, profileErr := cli.ProfileDir(d.cfg.Profile)
-	if profileErr != nil {
-		taskLog.Warn("git: could not resolve the profile directory; the run has no Git credential", "error", profileErr)
-	} else if socketPath, stopGitAgent := d.startGitAgentSocket(ctx, task, profileDir, attemptID); socketPath != "" {
-		gitSocketPath = socketPath
-		agentEnv["SSH_AUTH_SOCK"] = socketPath
-		defer stopGitAgent()
-	}
-	if err := validateGitCredentialForTask(task, gitSocketPath); err != nil {
-		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+	if gitSocketPath != "" {
+		agentEnv["SSH_AUTH_SOCK"] = gitSocketPath
 	}
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode

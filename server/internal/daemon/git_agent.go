@@ -2,14 +2,59 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/gitagent"
+	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 )
+
+// taskRepoGitEnvironment supplies cache Git calls with the task's signing
+// lease and maps HTTP clone URLs to the provider's SSH endpoint.
+func taskRepoGitEnvironment(task Task, socketPath string) []string {
+	env := repocache.GitEnv()
+	// Never borrow the daemon owner's SSH agent for a task.
+	env = append(env, "SSH_AUTH_SOCK="+socketPath)
+	binding := pickGitIdentity(task)
+	if socketPath == "" || binding == nil {
+		return env
+	}
+	count := 0
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "GIT_CONFIG_COUNT="); ok {
+			count, _ = strconv.Atoi(value)
+		}
+	}
+	endpoint := url.URL{Scheme: "ssh", User: url.User("git"), Host: binding.Host, Path: "/"}
+	// Older servers omit the port; SSH's standard port remains the default.
+	if binding.Port != 0 && binding.Port != 22 {
+		endpoint.Host = net.JoinHostPort(binding.Host, strconv.Itoa(binding.Port))
+	}
+	seen := make(map[string]bool)
+	for _, repo := range task.Repos {
+		parsed, err := url.Parse(repo.URL)
+		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() != binding.Host {
+			continue
+		}
+		prefix := parsed.Scheme + "://" + parsed.Host + "/"
+		if seen[prefix] {
+			continue
+		}
+		seen[prefix] = true
+		env = append(env,
+			"GIT_CONFIG_KEY_"+strconv.Itoa(count)+"=url."+endpoint.String()+".insteadOf",
+			"GIT_CONFIG_VALUE_"+strconv.Itoa(count)+"="+prefix,
+		)
+		count++
+	}
+	return append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(count))
+}
 
 // serverGitSigner forwards signature requests to the server.
 //
@@ -106,7 +151,10 @@ func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot
 	if strings.TrimSpace(attemptID) == "" {
 		attemptID = task.ID
 	}
-	socketDir := filepath.Join(profileRoot, "git-agent", task.ID, attemptID)
+	// Two full UUIDs exceed the Unix socket path limit under a normal home.
+	// Hash both IDs to retain attempt isolation in a shorter directory name.
+	socketID := sha256.Sum256([]byte(task.ID + "\x00" + attemptID))
+	socketDir := filepath.Join(profileRoot, "git-agent", fmt.Sprintf("%x", socketID[:16]))
 	// A crash during an earlier attempt can leave the directory behind, and
 	// Serve refuses an existing path. Clearing it here keeps a re-delivered
 	// task from being unable to sign forever.
@@ -114,7 +162,7 @@ func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot
 		d.logger.Warn("git: could not clear a stale signing directory", "task_id", task.ID, "error", removeErr)
 	}
 	socket, err := gitagent.Serve(ctx, gitagent.Options{
-		SocketPath: filepath.Join(socketDir, "ssh-agent.sock"),
+		SocketPath: filepath.Join(socketDir, "agent.sock"),
 		PublicKey:  lease.PublicKey,
 		Signer: &serverGitSigner{
 			client:    d.client,

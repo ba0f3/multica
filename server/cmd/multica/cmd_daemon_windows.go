@@ -5,11 +5,9 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -114,81 +112,4 @@ func openLogForTail(path string) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(h), path), nil
-}
-
-func tailLogFile(logPath string, lines int, follow bool) error {
-	f, err := openLogForTail(logPath)
-	if err != nil {
-		return err
-	}
-	defer func() { f.Close() }()
-
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	size := fi.Size()
-
-	// Find start position for the last N lines by reverse-scanning from EOF.
-	var tailStart int64
-	if size > 0 {
-		scanBuf := make([]byte, 8192)
-		nlCount := 0
-		pos := size
-	scan:
-		for pos > 0 {
-			chunk := int64(len(scanBuf))
-			if chunk > pos {
-				chunk = pos
-			}
-			pos -= chunk
-			f.ReadAt(scanBuf[:chunk], pos)
-			for i := chunk - 1; i >= 0; i-- {
-				if scanBuf[i] == '\n' {
-					nlCount++
-					if nlCount > lines {
-						tailStart = pos + i + 1
-						break scan
-					}
-				}
-			}
-		}
-	}
-
-	if _, err := f.Seek(tailStart, io.SeekStart); err != nil {
-		return err
-	}
-	if _, err := io.Copy(os.Stdout, f); err != nil {
-		return err
-	}
-
-	if !follow {
-		return nil
-	}
-
-	offset, _ := f.Seek(0, io.SeekCurrent)
-	buf := make([]byte, 4096)
-	for {
-		time.Sleep(500 * time.Millisecond)
-		// Detect rotation: the rotator renamed our file away and created a
-		// fresh, smaller one at the same path. Our handle still points at the
-		// rotated-away file (EOF forever), so reopen by path and start over —
-		// mirrors the Unix `tail -F` behaviour and the Desktop tail's
-		// size-shrink reset.
-		if fi, statErr := os.Stat(logPath); statErr == nil && fi.Size() < offset {
-			if nf, reopenErr := openLogForTail(logPath); reopenErr == nil {
-				f.Close()
-				f = nf
-				offset = 0
-			}
-		}
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			os.Stdout.Write(buf[:n])
-			offset += int64(n)
-		}
-		if readErr != nil && readErr != io.EOF {
-			return readErr
-		}
-	}
 }

@@ -5,9 +5,7 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strconv"
 	"syscall"
 )
 
@@ -38,20 +36,6 @@ func notifyShutdownContext(parent context.Context) (context.Context, context.Can
 // handle (see the windows build for the rationale).
 func repointStdioToErrLog(_ string) {}
 
-func tailLogFile(logPath string, lines int, follow bool) error {
-	args := []string{"-n", strconv.Itoa(lines)}
-	if follow {
-		// -F (follow by name), not -f (follow by descriptor): after the rotator
-		// renames daemon.log out from under us and opens a fresh one, -F reopens
-		// the new file by path, whereas -f would stay glued to the rotated-away
-		// inode and silently stop showing new output. Both GNU and BSD/macOS
-		// tail support -F.
-		args = append(args, "-F")
-	}
-	args = append(args, logPath)
-
-	tail := exec.Command("tail", args...)
-	tail.Stdout = os.Stdout
-	tail.Stderr = os.Stderr
-	return tail.Run()
+func openLogForTail(path string) (*os.File, error) {
+	return os.Open(path)
 }

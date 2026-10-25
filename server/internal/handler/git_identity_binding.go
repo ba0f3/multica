@@ -10,6 +10,7 @@ package handler
 type GitIdentityBinding struct {
 	ProviderID  string `json:"provider_id"`
 	Host        string `json:"host"`
+	Port        int    `json:"port,omitempty"`
 	IdentityID  string `json:"identity_id"`
 	Generation  uint64 `json:"generation"`
 	PublicKey   string `json:"public_key"`

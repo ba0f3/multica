@@ -95,6 +95,17 @@ func newGitAgentTestDaemon(t *testing.T, baseURL, profile string) *Daemon {
 	return daemon
 }
 
+func gitAgentTestProfile(t *testing.T) string {
+	t.Helper()
+	// Test names in t.TempDir paths can exceed the Unix socket path limit.
+	profile, err := os.MkdirTemp("", "git-agent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(profile) })
+	return profile
+}
+
 func TestStartGitAgentSocketServesSignatures(t *testing.T) {
 	_, private, err := generateEd25519Key()
 	if err != nil {
@@ -105,7 +116,7 @@ func TestStartGitAgentSocketServesSignatures(t *testing.T) {
 		t.Fatalf("new signer: %v", err)
 	}
 	server := fakeGitSigningServer(t, signer)
-	profile := t.TempDir()
+	profile := gitAgentTestProfile(t)
 	daemon := newGitAgentTestDaemon(t, server.URL, profile)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,7 +125,7 @@ func TestStartGitAgentSocketServesSignatures(t *testing.T) {
 	if socketPath == "" {
 		t.Fatal("the daemon did not start a signing socket")
 	}
-	if !strings.HasPrefix(socketPath, filepath.Join(profile, "git-agent", "task-1")) {
+	if !strings.HasPrefix(socketPath, filepath.Join(profile, "git-agent")+string(os.PathSeparator)) {
 		t.Fatalf("socket path %q is not under the per-attempt directory", socketPath)
 	}
 
@@ -158,7 +169,7 @@ func TestStartGitAgentSocketIsPerAttempt(t *testing.T) {
 		t.Fatalf("new signer: %v", err)
 	}
 	server := fakeGitSigningServer(t, signer)
-	profile := t.TempDir()
+	profile := gitAgentTestProfile(t)
 	daemon := newGitAgentTestDaemon(t, server.URL, profile)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

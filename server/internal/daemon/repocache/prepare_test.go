@@ -8,6 +8,41 @@ import (
 	"testing"
 )
 
+func TestPrepareUsesTaskGitEnvironmentForColdCloneAndFetch(t *testing.T) {
+	t.Parallel()
+	remote := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	url := "https://private.example/acme/private.git"
+	env := append(GitEnv(),
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_1=url."+remote+".insteadOf",
+		"GIT_CONFIG_VALUE_1="+url,
+	)
+	ctx := WithGitEnvironment(context.Background(), env)
+	first, err := cache.Prepare(ctx, "ws-1", []RepoInfo{{URL: url}})
+	if err != nil {
+		t.Fatalf("cold clone with task credentials: %v", err)
+	}
+	if first[0].URL != url {
+		t.Fatalf("cache identity changed: %q", first[0].URL)
+	}
+	addEmptyCommit(t, remote, "fresh commit")
+	second, err := cache.Prepare(ctx, "ws-1", []RepoInfo{{URL: url}})
+	if err != nil {
+		t.Fatalf("fetch with task credentials: %v", err)
+	}
+	if second[0].CommitSHA != gitHead(t, remote) || second[0].CommitSHA == first[0].CommitSHA {
+		t.Fatal("task did not receive the latest remote commit")
+	}
+	config, err := runGitOutput("-C", second[0].BarePath, "config", "--local", "--list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(config), "insteadof") {
+		t.Fatalf("task authentication persisted in shared cache: %s", config)
+	}
+}
+
 func TestPrepareColdCache(t *testing.T) {
 	t.Parallel()
 	remote := createTestRepo(t)

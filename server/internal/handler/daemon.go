@@ -2823,6 +2823,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 				resp.GitIdentities = append(resp.GitIdentities, GitIdentityBinding{
 					ProviderID:  identity.ProviderID,
 					Host:        identity.Host,
+					Port:        identity.Port,
 					IdentityID:  identity.IdentityID,
 					Generation:  identity.Generation,
 					PublicKey:   identity.PublicKey,
