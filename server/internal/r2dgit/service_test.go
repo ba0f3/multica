@@ -2,8 +2,10 @@ package r2dgit
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -208,9 +210,26 @@ func (s *fakeStore) RevokeIdentity(_ context.Context, identityID, userID string)
 	return identity, nil
 }
 
-func (s *fakeStore) CreateKey(_ context.Context, key Key) (Key, error) {
+func (s *fakeStore) CreateKey(_ context.Context, key Key, identityEpoch uint64) (Key, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	identity, ok := s.identities[key.IdentityID]
+	if !ok || identity.Epoch != identityEpoch {
+		return Key{}, ErrConflict
+	}
+	if identity.Revoked {
+		for _, previous := range s.keys {
+			if previous.IdentityID == identity.ID && previous.State != Revoked {
+				return Key{}, ErrConflict
+			}
+		}
+		identity.Revoked = false
+		identity.Epoch++
+	}
+	if _, exists := s.keys[keySlot(key.IdentityID, key.Generation)]; exists {
+		return Key{}, ErrConflict
+	}
+	s.identities[identity.ID] = identity
 	s.keys[keySlot(key.IdentityID, key.Generation)] = key
 	return key, nil
 }
@@ -452,6 +471,82 @@ func TestGenerateIsIdempotentForTheSameRequest(t *testing.T) {
 	}
 	if len(store.keys) != 1 {
 		t.Fatalf("the store holds %d keys, want 1", len(store.keys))
+	}
+}
+
+func TestGenerateAfterRevokeCreatesAFreshPendingGeneration(t *testing.T) {
+	for _, verifyFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint("verified=", verifyFirst), func(t *testing.T) {
+			service, store, custody, _ := newTestService(t)
+			service.random = cryptorand.Reader
+			ctx := t.Context()
+			first, err := service.Generate(ctx, "user-a", "provider-1", "first", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verifyFirst {
+				if _, err := service.Verify(ctx, "user-a", first.ID, first.Generation); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := service.Revoke(ctx, "user-a", first.ID); err != nil {
+				t.Fatal(err)
+			}
+			next, err := service.Generate(ctx, "user-a", "provider-1", "replacement", nil)
+			if err != nil {
+				t.Fatalf("Generate after Revoke: %v", err)
+			}
+			if next.ID != first.ID || next.Generation != first.Generation+1 {
+				t.Fatalf("replacement = %+v, want next generation of %s", next, first.ID)
+			}
+			if next.Fingerprint == first.Fingerprint || next.State != PendingVerification || next.Active || next.VerifiedAt != nil || next.Login != "" {
+				t.Fatalf("replacement reused key or verification: %+v", next)
+			}
+			if _, err := service.Verify(ctx, "user-a", first.ID, first.Generation); !errors.Is(err, ErrRevoked) {
+				t.Fatalf("old key Verify = %v, want revoked", err)
+			}
+			retry, err := service.Generate(ctx, "user-a", "provider-1", "replacement", nil)
+			if err != nil || retry.Fingerprint != next.Fingerprint || retry.Generation != next.Generation {
+				t.Fatalf("retry = %+v, %v; want same replacement", retry, err)
+			}
+			oldRequest, err := service.Generate(ctx, "user-a", "provider-1", "first", nil)
+			if err != nil || oldRequest.State != Revoked || oldRequest.Active {
+				t.Fatalf("replay of revoked request = %+v, %v", oldRequest, err)
+			}
+			if len(custody.stored) != 1 || len(store.keys) != 2 {
+				t.Fatalf("secrets=%d keys=%d, want 1 and 2", len(custody.stored), len(store.keys))
+			}
+			if _, err := service.Verify(ctx, "user-a", next.ID, next.Generation); err != nil {
+				t.Fatalf("verify replacement: %v", err)
+			}
+			if err := service.Revoke(ctx, "user-a", next.ID); err != nil {
+				t.Fatal(err)
+			}
+			third, err := service.Generate(ctx, "user-a", "provider-1", "third", nil)
+			if err != nil || third.Generation != next.Generation+1 || third.State != PendingVerification {
+				t.Fatalf("second replacement = %+v, %v", third, err)
+			}
+		})
+	}
+}
+
+func TestSignGiteaTokenRemainsAvailableAfterSSHCheck(t *testing.T) {
+	service, store, custody, _ := newTestService(t)
+	custody.signing = true
+	store.providers["provider-1"] = Provider{ID: "provider-1", Kind: "gitea", Enabled: true}
+	identity, err := service.Generate(t.Context(), "user-a", "provider-1", "request", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Verify(t.Context(), "user-a", identity.ID, identity.Generation); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := service.SignGiteaSSHKeyVerification(t.Context(), "user-a", identity.ID, identity.Generation, "gitea-token")
+	if err != nil {
+		t.Fatalf("Sign token after SSH check: %v", err)
+	}
+	if err := sshsig.Verify(strings.NewReader("gitea-token"), []byte(signature), []byte(identity.PublicKey), giteaSSHVerifyNamespace); err != nil {
+		t.Fatalf("signature: %v", err)
 	}
 }
 

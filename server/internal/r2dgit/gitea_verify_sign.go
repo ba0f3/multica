@@ -45,7 +45,7 @@ func (s *Service) SignGiteaSSHKeyVerification(
 		return "", ErrScope
 	}
 	switch key.State {
-	case PendingVerification:
+	case PendingVerification, Ready:
 	case Revoked:
 		return "", ErrRevoked
 	default:

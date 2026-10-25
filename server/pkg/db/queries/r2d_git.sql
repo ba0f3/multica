@@ -94,10 +94,24 @@ WHERE id = $1 AND user_id = $2
 RETURNING id, user_id, provider_id, active_generation, epoch, revoked, created_at;
 
 -- name: CreateR2DGitKey :one
+-- Reopening an identity must commit together with its fresh generation.
+-- An intervening revoke changes the epoch and prevents this write.
+WITH writable_identity AS (
+    UPDATE r2d_git_identity
+    SET revoked = false,
+        epoch = epoch + CASE WHEN revoked THEN 1 ELSE 0 END
+    WHERE id = $1 AND epoch = $13
+      AND (revoked = false OR NOT EXISTS (
+          SELECT 1 FROM r2d_git_key
+          WHERE identity_id = $1 AND state <> 'revoked'
+      ))
+    RETURNING id
+)
 INSERT INTO r2d_git_key (identity_id, generation, public_key, fingerprint,
                           internal_secret_ref, state, account_id, login,
                           verified_at, cleanup_pending, diagnostic, consent_project_ids)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+SELECT id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+FROM writable_identity
 RETURNING identity_id, generation, public_key, fingerprint, internal_secret_ref,
           state, account_id, login, verified_at, cleanup_pending, diagnostic,
           consent_project_ids, created_at;

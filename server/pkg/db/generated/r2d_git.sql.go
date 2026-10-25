@@ -74,17 +74,29 @@ func (q *Queries) CreateR2DGitIdentity(ctx context.Context, arg CreateR2DGitIden
 }
 
 const createR2DGitKey = `-- name: CreateR2DGitKey :one
+WITH writable_identity AS (
+    UPDATE r2d_git_identity
+    SET revoked = false,
+        epoch = epoch + CASE WHEN revoked THEN 1 ELSE 0 END
+    WHERE id = $1 AND epoch = $13
+      AND (revoked = false OR NOT EXISTS (
+          SELECT 1 FROM r2d_git_key
+          WHERE identity_id = $1 AND state <> 'revoked'
+      ))
+    RETURNING id
+)
 INSERT INTO r2d_git_key (identity_id, generation, public_key, fingerprint,
                           internal_secret_ref, state, account_id, login,
                           verified_at, cleanup_pending, diagnostic, consent_project_ids)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+SELECT id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+FROM writable_identity
 RETURNING identity_id, generation, public_key, fingerprint, internal_secret_ref,
           state, account_id, login, verified_at, cleanup_pending, diagnostic,
           consent_project_ids, created_at
 `
 
 type CreateR2DGitKeyParams struct {
-	IdentityID        pgtype.UUID        `json:"identity_id"`
+	ID                pgtype.UUID        `json:"id"`
 	Generation        int64              `json:"generation"`
 	PublicKey         string             `json:"public_key"`
 	Fingerprint       string             `json:"fingerprint"`
@@ -96,11 +108,14 @@ type CreateR2DGitKeyParams struct {
 	CleanupPending    bool               `json:"cleanup_pending"`
 	Diagnostic        string             `json:"diagnostic"`
 	ConsentProjectIds []byte             `json:"consent_project_ids"`
+	Epoch             int64              `json:"epoch"`
 }
 
+// Reopening an identity must commit together with its fresh generation.
+// An intervening revoke changes the epoch and prevents this write.
 func (q *Queries) CreateR2DGitKey(ctx context.Context, arg CreateR2DGitKeyParams) (R2dGitKey, error) {
 	row := q.db.QueryRow(ctx, createR2DGitKey,
-		arg.IdentityID,
+		arg.ID,
 		arg.Generation,
 		arg.PublicKey,
 		arg.Fingerprint,
@@ -112,6 +127,7 @@ func (q *Queries) CreateR2DGitKey(ctx context.Context, arg CreateR2DGitKeyParams
 		arg.CleanupPending,
 		arg.Diagnostic,
 		arg.ConsentProjectIds,
+		arg.Epoch,
 	)
 	var i R2dGitKey
 	err := row.Scan(

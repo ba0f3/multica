@@ -2,6 +2,7 @@ package r2dgit
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"testing"
 	"time"
@@ -145,6 +146,40 @@ func TestSignStopsAfterTheKeyIsRevoked(t *testing.T) {
 	}
 	if _, err := service.OpenSigningLease(context.Background(), "task-1", "attempt-1", "provider-1", "daemon-1"); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("OpenSigningLease after revoke: err = %v, want %v", err, ErrRevoked)
+	}
+}
+
+func TestGenerateAfterRevokeDoesNotReviveExistingLeases(t *testing.T) {
+	service, store, _, _ := signingTestService(t)
+	service.random = cryptorand.Reader
+	store.originators["task-1"] = "user-a"
+	previous := readyIdentity(t, service, "user-a")
+	lease, err := service.OpenSigningLease(t.Context(), "task-1", "attempt-1", "provider-1", "daemon-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Revoke(t.Context(), "user-a", previous.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := service.Generate(t.Context(), "user-a", "provider-1", "replacement", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Verify(t.Context(), "user-a", replacement.ID, replacement.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Sign(t.Context(), lease.LeaseID, "daemon-1", []byte("payload")); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("old lease signed after regeneration: %v", err)
+	}
+	next, err := service.OpenSigningLease(t.Context(), "task-1", "attempt-2", "provider-1", "daemon-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.PublicKey != replacement.PublicKey || next.PublicKey == lease.PublicKey {
+		t.Fatal("new lease did not select the replacement key")
+	}
+	if _, err := service.Sign(t.Context(), next.LeaseID, "daemon-1", []byte("payload")); err != nil {
+		t.Fatalf("replacement lease: %v", err)
 	}
 }
 

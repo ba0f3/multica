@@ -267,6 +267,56 @@ func TestGenerateGitIdentityIsIdempotentPerRequest(t *testing.T) {
 	}
 }
 
+func TestGitCredentialCanGenerateAgainAfterRevoke(t *testing.T) {
+	custody := installGitService(t, &gitTestVerifier{login: "octocat"})
+	custody.signing = true
+	providerID := dbfx.Insert(t, "r2d_git_provider", testutil.Cols{
+		"label": "Regeneration test", "kind": "gitea", "host": uuid.NewString() + ".example.com",
+		"port": 22, "host_pins": `["SHA256:test-pin"]`, "enabled": true,
+	})
+	dbfx.Cleanup(t, `DELETE FROM r2d_git_identity WHERE user_id = $1 AND provider_id = $2`, testUserID, providerID)
+	dbfx.Cleanup(t, `DELETE FROM r2d_git_key WHERE identity_id IN (SELECT id FROM r2d_git_identity WHERE user_id = $1 AND provider_id = $2)`, testUserID, providerID)
+	dbfx.Cleanup(t, `DELETE FROM r2d_git_key_job WHERE identity_id IN (SELECT id FROM r2d_git_identity WHERE user_id = $1 AND provider_id = $2)`, testUserID, providerID)
+
+	var first r2dgit.PublicIdentity
+	testutil.Call(t, testHandler.GenerateGitIdentity, gitRequest(t, http.MethodPost, "/api/me/git-identities",
+		fmt.Sprintf(`{"provider_id":%q,"request_id":"initial"}`, providerID), testUserID)).Want(http.StatusCreated).JSON(&first)
+	if first.State != r2dgit.PendingVerification || first.Active || first.VerifiedAt != nil {
+		t.Fatalf("fresh key is already verified: %+v", first)
+	}
+	verifyReq := testutil.WithURLParams(gitRequest(t, http.MethodPost, "/verify", "", testUserID),
+		"identityId", first.ID, "generation", fmt.Sprint(first.Generation))
+	testutil.Call(t, testHandler.VerifyGitIdentity, verifyReq).Want(http.StatusOK)
+	var signed struct {
+		Signature string `json:"signature"`
+	}
+	signReq := testutil.WithURLParams(gitRequest(t, http.MethodPost, "/sign-token", `{"token":"gitea-token"}`, testUserID),
+		"identityId", first.ID, "generation", fmt.Sprint(first.Generation))
+	testutil.Call(t, testHandler.SignGiteaGitIdentityVerification, signReq).Want(http.StatusOK).JSON(&signed)
+	if !strings.HasPrefix(signed.Signature, "-----BEGIN SSH SIGNATURE-----") {
+		t.Fatal("SSH check prevented Gitea token signing")
+	}
+	revokeReq := testutil.WithURLParams(gitRequest(t, http.MethodDelete, "/revoke", "", testUserID), "identityId", first.ID)
+	testutil.Call(t, testHandler.RevokeGitIdentity, revokeReq).Want(http.StatusOK)
+
+	var next r2dgit.PublicIdentity
+	testutil.Call(t, testHandler.GenerateGitIdentity, gitRequest(t, http.MethodPost, "/api/me/git-identities",
+		fmt.Sprintf(`{"provider_id":%q,"request_id":"replacement"}`, providerID), testUserID)).Want(http.StatusCreated).JSON(&next)
+	if next.ID != first.ID || next.Generation != first.Generation+1 || next.Fingerprint == first.Fingerprint {
+		t.Fatalf("replacement key = %+v; previous = %+v", next, first)
+	}
+	if next.State != r2dgit.PendingVerification || next.Active || next.VerifiedAt != nil || next.Login != "" {
+		t.Fatalf("replacement inherited verification: %+v", next)
+	}
+	var profile r2dgit.Profile
+	testutil.Call(t, testHandler.ListGitIdentities, gitRequest(t, http.MethodGet, "/api/me/git-identities", "", testUserID)).Want(http.StatusOK).JSON(&profile)
+	for _, item := range profile.Identities {
+		if item.ID == first.ID && item.Generation == first.Generation && (item.State != r2dgit.Revoked || item.Active) {
+			t.Fatalf("old key revived: %+v", item)
+		}
+	}
+}
+
 func TestGitIdentityResponsesNeverCarryPrivateKeyMaterial(t *testing.T) {
 	installGitService(t, &gitTestVerifier{login: "octocat"})
 	providerID := newGitTestProvider(t, "github", "github.com")

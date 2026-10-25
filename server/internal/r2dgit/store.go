@@ -88,7 +88,9 @@ type Store interface {
 	CreateIdentity(ctx context.Context, identity Identity) (Identity, error)
 	SetActiveGeneration(ctx context.Context, identityID string, generation uint64) (Identity, error)
 	RevokeIdentity(ctx context.Context, identityID, userID string) (Identity, error)
-	CreateKey(ctx context.Context, key Key) (Key, error)
+	// CreateKey atomically stores a new generation and reopens a revoked
+	// identity. The epoch prevents an in-flight generation from undoing a revoke.
+	CreateKey(ctx context.Context, key Key, identityEpoch uint64) (Key, error)
 	MarkKeyReady(ctx context.Context, identityID string, generation uint64, accountID, login string, verifiedAt time.Time) (Key, error)
 	RevokeKey(ctx context.Context, identityID string, generation uint64) (Key, error)
 	ClearCleanupPending(ctx context.Context, identityID string, generation uint64) (Key, error)

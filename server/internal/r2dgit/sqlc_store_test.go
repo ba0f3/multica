@@ -2,12 +2,14 @@ package r2dgit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -60,7 +62,7 @@ func TestSQLCStoreRoundTripsAnIdentityAndItsKey(t *testing.T) {
 		InternalSecretRef: "r2d-git-" + identity.ID + "-1",
 		State:             PendingVerification,
 		ConsentProjectIDs: []string{"project-1"},
-	}); err != nil {
+	}, identity.Epoch); err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
 
@@ -132,6 +134,60 @@ func TestSQLCStoreKeepsUsersApart(t *testing.T) {
 	}
 	if _, err := store.GetIdentityForUser(ctx, owner, providerID); err != nil {
 		t.Fatalf("the owner's identity was not returned: %v", err)
+	}
+}
+
+func TestSQLCStoreReopensOnlyAfterRevocationAndWithTheCurrentEpoch(t *testing.T) {
+	store, pool := newDBStore(t)
+	ctx := t.Context()
+	userID := newRandomID()
+	fixture := testutil.New(pool, "", userID)
+	providerID := fixture.Insert(t, "r2d_git_provider", testutil.Cols{
+		"label": "Epoch test", "kind": "gitea", "host": newRandomID() + ".example.com",
+		"port": 22, "host_pins": `["SHA256:test-pin"]`, "enabled": true,
+	})
+	identity, err := store.CreateIdentity(ctx, Identity{ID: newRandomID(), UserID: userID, ProviderID: providerID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.Cleanup(t, "DELETE FROM r2d_git_identity WHERE id = $1", identity.ID)
+	fixture.Cleanup(t, "DELETE FROM r2d_git_key WHERE identity_id = $1", identity.ID)
+	key := Key{IdentityID: identity.ID, Generation: 1, PublicKey: "ssh-ed25519 test", Fingerprint: "SHA256:first", InternalSecretRef: secretRefFor(identity.ID, 1), State: PendingVerification}
+	if _, err := store.CreateKey(ctx, key, identity.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := store.RevokeIdentity(ctx, identity.ID, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key.Generation = 2
+	key.InternalSecretRef = secretRefFor(identity.ID, 2)
+	if _, err := store.CreateKey(ctx, key, revoked.Epoch); !errors.Is(err, ErrConflict) {
+		t.Fatalf("generation during revoke sweep = %v, want conflict", err)
+	}
+	if _, err := store.RevokeKey(ctx, identity.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateKey(ctx, key, identity.Epoch); !errors.Is(err, ErrConflict) {
+		t.Fatalf("generation with stale epoch = %v, want conflict", err)
+	}
+	stillRevoked, err := store.GetIdentityForUser(ctx, userID, providerID)
+	if err != nil || !stillRevoked.Revoked {
+		t.Fatalf("failed generation changed identity: %+v, %v", stillRevoked, err)
+	}
+	if _, err := store.GetKey(ctx, identity.ID, 2); !errors.Is(err, ErrScope) {
+		t.Fatalf("failed generation persisted a key: %v", err)
+	}
+	if _, err := store.CreateKey(ctx, key, revoked.Epoch); err != nil {
+		t.Fatalf("fresh generation: %v", err)
+	}
+	reopened, err := store.GetIdentityForUser(ctx, userID, providerID)
+	if err != nil || reopened.Revoked || reopened.ActiveGeneration != 0 || reopened.Epoch <= revoked.Epoch {
+		t.Fatalf("reopened identity = %+v, %v", reopened, err)
+	}
+	previous, err := store.GetKey(ctx, identity.ID, 1)
+	if err != nil || previous.State != Revoked {
+		t.Fatalf("old key revived: %+v, %v", previous, err)
 	}
 }
 

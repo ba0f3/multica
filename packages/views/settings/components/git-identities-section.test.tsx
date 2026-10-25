@@ -18,6 +18,11 @@ const mockVerify = vi.hoisted(() =>
 const mockRevoke = vi.hoisted(() =>
   vi.fn((_identityId: string) => Promise.resolve(undefined)),
 );
+const mockSign = vi.hoisted(() =>
+  vi.fn((_input: { identityId: string; generation: number; token: string }) =>
+    Promise.resolve({ signature: "-----BEGIN SSH SIGNATURE-----" }),
+  ),
+);
 const mockToastError = vi.hoisted(() => vi.fn());
 const profileRef = vi.hoisted(() => ({
   current: {
@@ -91,9 +96,7 @@ vi.mock("@multica/core/git-identities", () => ({
   useVerifyGitIdentity: () => mockUseMutation({ mutationFn: mockVerify }),
   useRevokeGitIdentity: () => mockUseMutation({ mutationFn: mockRevoke }),
   useSignGiteaGitIdentityVerification: () =>
-    mockUseMutation({
-      mutationFn: vi.fn(() => Promise.resolve({ signature: "-----BEGIN SSH SIGNATURE-----" })),
-    }),
+    mockUseMutation({ mutationFn: mockSign }),
 }));
 
 vi.mock("@multica/core/auth", () => ({
@@ -146,6 +149,7 @@ function identity(overrides: Partial<(typeof profileRef.current)["identities"][n
 describe("GitIdentitiesSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGenerate.mockResolvedValue({});
     profileRef.current = { providers: [], identities: [] };
   });
 
@@ -158,7 +162,7 @@ describe("GitIdentitiesSection", () => {
 
     expect(screen.getByText("GitHub")).toBeTruthy();
     expect(screen.getByText("SHA256:exampleFingerprint")).toBeTruthy();
-    expect(screen.getByText(/ready/i)).toBeTruthy();
+    expect(screen.getByText("SSH authenticated")).toBeTruthy();
   });
 
   it("hides generate when the provider already has a key", () => {
@@ -169,6 +173,32 @@ describe("GitIdentitiesSection", () => {
     renderSection();
 
     expect(screen.queryByRole("button", { name: /generate/i })).toBeNull();
+  });
+
+  it("keeps Gitea token signing available after the SSH connection is checked", async () => {
+    profileRef.current = {
+      providers: [{ ...provider(), kind: "gitea", label: "Gitea" }],
+      identities: [identity()],
+    };
+    renderSection();
+
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Gitea verification token" }),
+      "gitea-token",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Sign token" }));
+
+    await waitFor(() =>
+      expect(mockSign).toHaveBeenCalledWith({
+        identityId: "identity-1",
+        generation: 1,
+        token: "gitea-token",
+      }),
+    );
+    expect(screen.getByText("SSH authenticated")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Signature for Gitea" }),
+    ).toBeTruthy();
   });
 
   it("generates a key for a provider", async () => {

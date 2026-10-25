@@ -174,7 +174,7 @@ func (h *Handler) VerifyGitIdentity(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, r2dgit.ErrIdentity):
 			writeErrorCode(w, http.StatusConflict, "git_identity_unverified",
-				"Multica could not authenticate this key over SSH. On Gitea, finish key verification in the web UI (paste the signature), confirm the public key is on your account, wait a minute, then try again.")
+				"Multica could not authenticate this key over SSH. Add the public key to your Git provider account's SSH keys, confirm SSH access is enabled, then check connection again.")
 		case errors.Is(err, r2dgit.ErrProvider):
 			writeErrorCode(w, http.StatusBadGateway, "git_provider_unreachable",
 				"Multica could not reach that Git host over SSH. Ask an administrator to check MULTICA_GIT_PROVIDERS, host fingerprints, and that the API server can open the SSH port.")
@@ -215,7 +215,7 @@ func (h *Handler) SignGiteaGitIdentityVerification(w http.ResponseWriter, r *htt
 		switch {
 		case errors.Is(err, r2dgit.ErrScope):
 			writeErrorCode(w, http.StatusBadRequest, "git_invalid_request",
-				"Enter the verification token from Gitea and make sure this key is still pending verification.")
+				"Enter the verification token from Gitea and select a Gitea key that has not been revoked.")
 		case errors.Is(err, r2dgit.ErrRevoked):
 			writeErrorCode(w, http.StatusConflict, "git_grant_revoked", "This Git key was revoked.")
 		default:

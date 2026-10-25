@@ -193,9 +193,6 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 	identity, err := s.store.GetIdentityForUser(ctx, userID, providerID)
 	switch {
 	case err == nil:
-		if identity.Revoked {
-			return PublicIdentity{}, ErrRevoked
-		}
 	case errors.Is(err, ErrScope):
 		identity, err = s.store.CreateIdentity(ctx, Identity{
 			ID:         s.newID(),
@@ -210,6 +207,22 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 	}
 
 	generation := identity.ActiveGeneration + 1
+	keys, err := s.store.ListKeysForUser(ctx, userID)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	for _, key := range keys {
+		if key.IdentityID != identity.ID {
+			continue
+		}
+		if identity.Revoked && key.State != Revoked {
+			// A revoke still sweeping its generations must finish first.
+			return PublicIdentity{}, ErrConflict
+		}
+		if key.State == Revoked && key.Generation >= generation {
+			generation = key.Generation + 1
+		}
+	}
 	if existingKey, err := s.store.GetKey(ctx, identity.ID, generation); err == nil {
 		if err := s.ensureProvisionJobDone(ctx, userID, identity.ID, generation, idempotencyKey); err != nil {
 			return PublicIdentity{}, err
@@ -243,7 +256,7 @@ func (s *Service) Generate(ctx context.Context, userID, providerID, requestID st
 		InternalSecretRef: secretRef,
 		State:             PendingVerification,
 		ConsentProjectIDs: append([]string(nil), consentProjectIDs...),
-	})
+	}, identity.Epoch)
 	if err != nil {
 		// The secret exists but nothing points at it. Remove it again so a
 		// failed request cannot leave usable key material behind.

@@ -260,7 +260,8 @@ export function GitIdentitiesSection() {
                       ) : null}
 
                       {provider.kind === "gitea" &&
-                      identity.state === "pending_verification" ? (
+                      (identity.state === "pending_verification" ||
+                        identity.state === "ready") ? (
                         <GiteaVerificationTokenSign identity={identity} />
                       ) : null}
                     </li>

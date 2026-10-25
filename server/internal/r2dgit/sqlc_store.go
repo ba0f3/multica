@@ -339,7 +339,7 @@ func (s *SQLCStore) RevokeIdentity(ctx context.Context, identityID, userID strin
 	return identityFromRow(row), nil
 }
 
-func (s *SQLCStore) CreateKey(ctx context.Context, key Key) (Key, error) {
+func (s *SQLCStore) CreateKey(ctx context.Context, key Key, identityEpoch uint64) (Key, error) {
 	identity, err := util.ParseUUID(key.IdentityID)
 	if err != nil {
 		return Key{}, err
@@ -359,7 +359,7 @@ func (s *SQLCStore) CreateKey(ctx context.Context, key Key) (Key, error) {
 		verifiedAt = pgtype.Timestamptz{Time: key.VerifiedAt.UTC(), Valid: true}
 	}
 	row, err := s.queries.CreateR2DGitKey(ctx, db.CreateR2DGitKeyParams{
-		IdentityID:        identity,
+		ID:                identity,
 		Generation:        int64(key.Generation),
 		PublicKey:         key.PublicKey,
 		Fingerprint:       key.Fingerprint,
@@ -371,8 +371,12 @@ func (s *SQLCStore) CreateKey(ctx context.Context, key Key) (Key, error) {
 		CleanupPending:    key.CleanupPending,
 		Diagnostic:        key.Diagnostic,
 		ConsentProjectIds: encoded,
+		Epoch:             int64(identityEpoch),
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Key{}, ErrConflict
+		}
 		return Key{}, mapWriteError(err)
 	}
 	return keyFromRow(row), nil
