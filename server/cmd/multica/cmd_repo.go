@@ -55,7 +55,8 @@ var repoCheckoutCmd = &cobra.Command{
 		"Running it again where the repository is already checked out never silently discards work: a checkout " +
 		"that has uncommitted changes, untracked files, or unpushed commits, or is already on this task's branch, " +
 		"is kept as it is and only its remote refs are fetched. Pass --fresh to discard its uncommitted changes and " +
-		"untracked files and start over on a new branch; commits stay on the old branch, but push any you still need first.",
+		"untracked and ignored files. On the host path commits stay on the old branch; in an isolated worker the " +
+		"branch is re-pointed and unpushed commits are lost, so push anything you still need first.",
 	Args: exactArgs(1),
 	RunE: runRepoCheckout,
 }
@@ -76,7 +77,7 @@ func init() {
 	repoRemoveCmd.Flags().String("output", "json", "Output format: table or json")
 
 	repoCheckoutCmd.Flags().StringVar(&repoCheckoutRef, "ref", "", "branch, tag, or commit to check out instead of the remote default branch")
-	repoCheckoutCmd.Flags().BoolVar(&repoCheckoutFresh, "fresh", false, "discard an existing checkout's uncommitted changes and untracked files and start over on a new branch from the latest default branch (or --ref); commits stay on the old branch")
+	repoCheckoutCmd.Flags().BoolVar(&repoCheckoutFresh, "fresh", false, "discard an existing checkout's uncommitted changes and untracked and ignored files; on the host path commits stay on the old branch, but an isolated worker re-points the branch and drops unpushed commits (push them first)")
 
 	repoCmd.AddCommand(repoListCmd)
 	repoCmd.AddCommand(repoAddCmd)
@@ -533,7 +534,7 @@ func repoCheckoutIsolatedSummary(repoURL string, result workercheckout.Result) s
 		}
 		return fmt.Sprintf("Kept the existing checkout of %s at %s (branch: %s; %d commit%s ahead, %d commit%s behind, %d uncommitted file%s, %d unpushed commit%s): "+
 			"nothing was reset, cleaned, or switched.\n"+
-			"To discard local commits and uncommitted changes and start over from the latest default branch (or --ref), "+
+			"To discard local commits, uncommitted changes, and untracked and ignored files and start over from the latest default branch (or --ref), "+
 			"re-run with --fresh; push anything you still need first.",
 			repoURL, result.Path, branch,
 			result.Ahead, pluralS(result.Ahead),
