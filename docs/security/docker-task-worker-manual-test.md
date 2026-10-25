@@ -43,6 +43,34 @@ CLIs into the image for local dev.
 
 Record **image digest** in your test notes.
 
+### Bake the CA into the worker image
+
+Instead of mounting a host bundle per task, bake a self-signed/private CA into
+the worker image's system trust store so the daemon can leave the image's
+`/etc/ssl/certs` untouched:
+
+```bash
+make task-worker-image-ca CA_CERT=/home/tui/Projects/multica/.orca/drops/MUOI_TIEU_XANH.crt
+docker push ghcr.io/ba0f3/multica-task-worker:ca
+```
+
+Then point the daemon at that image:
+
+```bash
+export MULTICA_DOCKER_TASK_IMAGE=ghcr.io/ba0f3/multica-task-worker:ca
+```
+
+With a baked CA, leave `MULTICA_DOCKER_TASK_CA_BUNDLE` unset. When it is set (or
+the server sends extra CAs), the daemon mounts a bundle and sets
+`GIT_SSL_CAINFO`/`SSL_CERT_FILE`, which *replace* the image's system store — so
+that bundle must include every CA the worker needs, or the baked CA is lost.
+
+Verify the installed file and the merged bundle in the image:
+
+```bash
+docker run --rm --entrypoint sh <image> -c 'test -f /usr/local/share/ca-certificates/multica-extra-ca.crt && grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt'
+```
+
 ## Daemon environment
 
 ```bash
