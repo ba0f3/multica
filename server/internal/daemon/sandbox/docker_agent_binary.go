@@ -84,6 +84,34 @@ func DockerMcodeRuntimeBinds(hostExecutable string) ([]string, error) {
 	return binds, nil
 }
 
+// DockerMcodeContainerAgentBind maps a managed MCode install to a small
+// container launcher that uses the worker image's Node from PATH. MCode's
+// installed launcher embeds the host's absolute Node path, which is not
+// generally present in the worker image.
+func DockerMcodeContainerAgentBind(hostExecutable, shimPath string) (string, []string, bool, error) {
+	runtimeBinds, err := DockerMcodeRuntimeBinds(hostExecutable)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if len(runtimeBinds) == 0 {
+		return "", nil, false, nil
+	}
+	if strings.TrimSpace(shimPath) == "" {
+		return "", nil, false, fmt.Errorf("sandbox: MCode container launcher path is required")
+	}
+	shim := "#!/bin/sh\nset -eu\nrelease=$(tr -d '\\r\\n' < /usr/local/current)\ncase \"$release\" in \"\"|*[!0-9A-Za-z._-]*) echo \"Invalid MCode current release pointer.\" >&2; exit 1;; esac\nroot=\"/usr/local/releases/$release\"\nexec node \"$root/lib/node_modules/@minimax-ai/code/cli.js\" \"$@\"\n"
+	if err := os.WriteFile(shimPath, []byte(shim), 0o700); err != nil {
+		return "", nil, false, fmt.Errorf("sandbox: write MCode container launcher %q: %w", shimPath, err)
+	}
+	if err := os.Chmod(shimPath, 0o700); err != nil {
+		return "", nil, false, fmt.Errorf("sandbox: set MCode container launcher permissions: %w", err)
+	}
+	containerExec := filepath.Join(dockerAgentBinaryContainerDir, "mcode")
+	binds := []string{DockerBind(shimPath, containerExec, "ro")}
+	binds = append(binds, runtimeBinds...)
+	return containerExec, binds, true, nil
+}
+
 // ProviderUsesDockerAgentBinary reports whether the provider's CLI should be
 // bind-mounted for Docker-backed attempts. Every supported provider — a
 // Multica-supported backend or a built-in runtime — bind-mounts its resolved

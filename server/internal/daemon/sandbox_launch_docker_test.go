@@ -419,8 +419,8 @@ func TestDockerBackendBindsGenericProviderAndSamePathMounts(t *testing.T) {
 			t.Fatal(err)
 		}
 		joined := dockerBackendArgvForProvider(t, "mcode", agent.Config{TaskID: "task-1", ExecutablePath: mcode})
-		if !strings.Contains(joined, mcode+":/usr/local/bin/mcode:ro") {
-			t.Errorf("docker argv missing mcode binary bind:\n%s", joined)
+		if !strings.Contains(joined, "/mcode-container-launcher:/usr/local/bin/mcode:ro") {
+			t.Errorf("docker argv missing MCode container launcher bind:\n%s", joined)
 		}
 		for _, want := range []string{
 			filepath.Join(root, "current") + ":/usr/local/current:ro",

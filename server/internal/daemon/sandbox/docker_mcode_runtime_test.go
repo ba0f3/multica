@@ -55,3 +55,57 @@ func TestDockerMcodeRuntimeBindsIgnoreUnrelatedExecutable(t *testing.T) {
 		t.Fatalf("unrelated executable binds = %v, want none", binds)
 	}
 }
+
+func TestDockerMcodeContainerAgentBindUsesWorkerNodeFromPath(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(binDir, "mcode")
+	contents := "#!/bin/sh\nroot=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd -P)\nrelease=$(tr -d '\\r\\n' < \"$root/current\")\nexec \"$root/releases/$release/.mcode-launcher\" \"$@\"\n"
+	if err := os.WriteFile(launcher, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "releases", "1.2.3", "lib", "node_modules", "@minimax-ai", "code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "current"), []byte("1.2.3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "releases", "1.2.3", ".mcode-launcher"), []byte("#!/bin/sh\nnode='/host-only/node'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shimPath := filepath.Join(t.TempDir(), "mcode")
+
+	containerExec, binds, handled, err := DockerMcodeContainerAgentBind(launcher, shimPath)
+	if err != nil {
+		t.Fatalf("DockerMcodeContainerAgentBind: %v", err)
+	}
+	if !handled {
+		t.Fatal("managed MCode installation was not recognized")
+	}
+	if containerExec != "/usr/local/bin/mcode" {
+		t.Fatalf("container executable = %q", containerExec)
+	}
+	shim, err := os.ReadFile(shimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(shim), `exec node "$root/lib/node_modules/@minimax-ai/code/cli.js" "$@"`) {
+		t.Fatalf("container launcher does not use node from PATH:\n%s", shim)
+	}
+	if strings.Contains(string(shim), "/host-only/node") {
+		t.Fatalf("container launcher inherited host Node path:\n%s", shim)
+	}
+	joined := strings.Join(binds, "\n")
+	for _, want := range []string{
+		shimPath + ":/usr/local/bin/mcode:ro",
+		filepath.Join(root, "current") + ":/usr/local/current:ro",
+		filepath.Join(root, "releases") + ":/usr/local/releases:ro",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("MCode container binds missing %q:\n%s", want, joined)
+		}
+	}
+}

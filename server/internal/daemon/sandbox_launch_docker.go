@@ -90,19 +90,34 @@ func (d *Daemon) dockerBackend(
 
 	agentConfig := config
 	if sandbox.ProviderUsesDockerAgentBinary(provider) {
-		containerExec, agentBind, err := sandbox.DockerAgentBinaryBind(config.ExecutablePath)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
-		}
-		binds = append(binds, agentBind)
 		if strings.EqualFold(strings.TrimSpace(provider), "mcode") {
-			runtimeBinds, err := sandbox.DockerMcodeRuntimeBinds(config.ExecutablePath)
+			containerExec, mcodeBinds, handled, err := sandbox.DockerMcodeContainerAgentBind(
+				config.ExecutablePath,
+				filepath.Join(env.RootDir, "mcode-container-launcher"),
+			)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
 			}
-			binds = append(binds, runtimeBinds...)
+			if handled {
+				binds = append(binds, mcodeBinds...)
+				agentConfig.ExecutablePath = containerExec
+			}
+			if !handled {
+				containerExec, agentBind, err := sandbox.DockerAgentBinaryBind(config.ExecutablePath)
+				if err != nil {
+					return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+				}
+				binds = append(binds, agentBind)
+				agentConfig.ExecutablePath = containerExec
+			}
+		} else {
+			containerExec, agentBind, err := sandbox.DockerAgentBinaryBind(config.ExecutablePath)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+			}
+			binds = append(binds, agentBind)
+			agentConfig.ExecutablePath = containerExec
 		}
-		agentConfig.ExecutablePath = containerExec
 	}
 
 	// Per-task QwenPaw workspace: bind it read-write at its own absolute path
