@@ -56,7 +56,7 @@ func TestDockerMcodeRuntimeBindsIgnoreUnrelatedExecutable(t *testing.T) {
 	}
 }
 
-func TestDockerMcodeContainerAgentBindUsesWorkerNodeFromPath(t *testing.T) {
+func TestDockerMcodeContainerAgentBindSelectsCompatibleNode(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -92,11 +92,21 @@ func TestDockerMcodeContainerAgentBindUsesWorkerNodeFromPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(shim), `exec node "$root/lib/node_modules/@minimax-ai/code/cli.js" "$@"`) {
-		t.Fatalf("container launcher does not use node from PATH:\n%s", shim)
+	if !strings.Contains(string(shim), `exec "$node" "$cli" "$@"`) {
+		t.Fatalf("container launcher does not execute with the selected Node runtime:\n%s", shim)
 	}
 	if strings.Contains(string(shim), "/host-only/node") {
 		t.Fatalf("container launcher inherited host Node path:\n%s", shim)
+	}
+	for _, want := range []string{
+		"/usr/local/bin/node",
+		"/usr/local/lib/multica/node-runtimes/24/node",
+		"/usr/local/lib/multica/node-runtimes/26/node",
+		"new Database(\":memory:\")",
+	} {
+		if !strings.Contains(string(shim), want) {
+			t.Errorf("container launcher does not probe compatible Node runtimes with %q:\n%s", want, shim)
+		}
 	}
 	joined := strings.Join(binds, "\n")
 	for _, want := range []string{

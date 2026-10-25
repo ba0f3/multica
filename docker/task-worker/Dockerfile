@@ -11,10 +11,16 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o /out/multica ./cmd/multica
 
+FROM node:24-bookworm-slim AS mcode_node24
+FROM node:26-bookworm-slim AS mcode_node26
+
 # glibc-based runtime so host-discovered agent CLIs can be bind-mounted into
 # the worker at run time (see sandbox.DockerAgentBinaryBind). Node 22 is the
 # base so agents can build and test JS/TS projects without a host toolchain.
 FROM node:22-bookworm-slim
+RUN mkdir -p /usr/local/lib/multica/node-runtimes/24 /usr/local/lib/multica/node-runtimes/26
+COPY --from=mcode_node24 /usr/local/bin/node /usr/local/lib/multica/node-runtimes/24/node
+COPY --from=mcode_node26 /usr/local/bin/node /usr/local/lib/multica/node-runtimes/26/node
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates git git-lfs openssh-client bash ripgrep curl wget \

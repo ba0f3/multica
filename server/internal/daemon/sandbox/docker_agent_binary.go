@@ -84,10 +84,11 @@ func DockerMcodeRuntimeBinds(hostExecutable string) ([]string, error) {
 	return binds, nil
 }
 
-// DockerMcodeContainerAgentBind maps a managed MCode install to a small
-// container launcher that uses the worker image's Node from PATH. MCode's
-// installed launcher embeds the host's absolute Node path, which is not
-// generally present in the worker image.
+// DockerMcodeContainerAgentBind maps a managed MCode install to a container
+// launcher that selects a worker-bundled Node compatible with MCode's native
+// SQLite module. MCode's installed launcher embeds the host's absolute Node
+// path, which is not generally present in the worker image, and its native
+// modules may not match the worker image's default Node ABI.
 func DockerMcodeContainerAgentBind(hostExecutable, shimPath string) (string, []string, bool, error) {
 	runtimeBinds, err := DockerMcodeRuntimeBinds(hostExecutable)
 	if err != nil {
@@ -99,7 +100,22 @@ func DockerMcodeContainerAgentBind(hostExecutable, shimPath string) (string, []s
 	if strings.TrimSpace(shimPath) == "" {
 		return "", nil, false, fmt.Errorf("sandbox: MCode container launcher path is required")
 	}
-	shim := "#!/bin/sh\nset -eu\nrelease=$(tr -d '\\r\\n' < /usr/local/current)\ncase \"$release\" in \"\"|*[!0-9A-Za-z._-]*) echo \"Invalid MCode current release pointer.\" >&2; exit 1;; esac\nroot=\"/usr/local/releases/$release\"\nexec node \"$root/lib/node_modules/@minimax-ai/code/cli.js\" \"$@\"\n"
+	shim := `#!/bin/sh
+set -eu
+release=$(tr -d '\r\n' < /usr/local/current)
+case "$release" in ""|*[!0-9A-Za-z._-]*) echo "Invalid MCode current release pointer." >&2; exit 1;; esac
+root="/usr/local/releases/$release/lib/node_modules/@minimax-ai/code"
+sqlite="$root/node_modules/better-sqlite3"
+cli="$root/cli.js"
+for node in /usr/local/bin/node /usr/local/lib/multica/node-runtimes/24/node /usr/local/lib/multica/node-runtimes/26/node; do
+	if [ -x "$node" ] && "$node" -e 'const Database = require(process.argv[1]); const db = new Database(":memory:"); db.close()' "$sqlite" >/dev/null 2>&1; then
+		exec "$node" "$cli" "$@"
+	fi
+done
+echo "MCode's native SQLite module is incompatible with the Node runtimes bundled in this worker (22, 24, 26). Upgrade the worker image or reinstall MCode with a supported Node version." >&2
+exit 1
+`
+
 	if err := os.WriteFile(shimPath, []byte(shim), 0o700); err != nil {
 		return "", nil, false, fmt.Errorf("sandbox: write MCode container launcher %q: %w", shimPath, err)
 	}
