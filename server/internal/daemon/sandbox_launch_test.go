@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -39,6 +40,14 @@ func newSandboxTestEnv(t *testing.T) *execenv.Environment {
 func newSandboxTestDaemon(t *testing.T, bwrapPath string) *Daemon {
 	t.Helper()
 	daemon := &Daemon{logger: newDiscardLogger()}
+	t.Setenv("HOME", t.TempDir())
+	for _, key := range nativeSelectorKeys {
+		t.Setenv(key, "")
+	}
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	daemon.nativeScope = &fakeNativeScope{}
+	daemon.nativeResolver = sandbox.NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.163.0", nil })
+	daemon.cfg.TaskSandboxBackend = "bwrap"
 	daemon.cfg.SandboxEnabled = true
 	daemon.cfg.BwrapPath = bwrapPath
 	// The worker executable has to exist: it is mounted into the boundary.
@@ -54,7 +63,7 @@ func newSandboxTestDaemon(t *testing.T, bwrapPath string) *Daemon {
 
 func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 	daemon := &Daemon{logger: newDiscardLogger()}
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -65,7 +74,7 @@ func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 
 func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "bwrap"))
-	backend, err := daemon.sandboxedBackend("nonsense", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("nonsense", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err == nil {
 		t.Fatal("expected unsupported provider to be rejected")
 	}
@@ -83,7 +92,7 @@ func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 func TestSandboxBackendFailsClosedWhenBwrapIsMissing(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "no-such-bwrap"))
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err == nil {
 		t.Fatal("the daemon accepted a sandbox it cannot build")
 	}
@@ -110,7 +119,7 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, bwrap)
 	env := newSandboxTestEnv(t)
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1", ExecutablePath: daemon.cfg.SandboxSelfPath}, env, "", "", "attempt-1", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -141,7 +150,7 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 		"--unshare-uts",
 		"--die-with-parent",
 		"--clearenv",
-		"--chdir " + "/workspace/repo",
+		"--chdir " + env.WorkDir,
 		sandbox.WorkerArg,
 	} {
 		if !strings.Contains(joined, want) {
@@ -150,7 +159,7 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	}
 	// The host home must never be mounted: the whole point of the boundary.
 	if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
-		if strings.Contains(joined, "--bind "+home) {
+		if strings.Contains(joined, "--bind "+home+" ") {
 			t.Errorf("the host home is mounted into the sandbox:\n%s", joined)
 		}
 	}
@@ -185,7 +194,7 @@ func TestSandboxForbidsTheProfileTreeButAllowsANamedPerTaskPath(t *testing.T) {
 		t.Fatalf("write the fake bwrap: %v", err)
 	}
 	daemon := newSandboxTestDaemon(t, bwrap)
-	if _, err := daemon.sandboxedBackend("codex", agent.Config{}, env, profileRoot, "", "attempt-1", nil, nil); err != nil {
+	if _, err := daemon.sandboxedBackend("codex", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, env, profileRoot, "", "attempt-1", nil, nil); err != nil {
 		t.Fatalf("a named per-task path under the profile was refused: %v", err)
 	}
 }
@@ -208,7 +217,7 @@ func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 		t.Fatalf("create socket: %v", err)
 	}
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", socket, "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1", ExecutablePath: daemon.cfg.SandboxSelfPath}, env, "", socket, "attempt-1", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -249,64 +258,6 @@ func TestSandboxForbiddenRootsIncludesTheWorkspacesRootAndTheHome(t *testing.T) 
 	}
 	if !found {
 		t.Fatalf("the workspaces root is missing from %v", roots)
-	}
-}
-
-func TestSandboxAgentEnvNamesTheInSandboxPaths(t *testing.T) {
-	hostTmp := filepath.Join(t.TempDir(), "tmp")
-	env := sandboxAgentEnv(map[string]string{
-		"HOME":                "/home/someone",
-		"TMPDIR":              hostTmp,
-		"PATH":                "/home/someone/.nvm/versions/node/v20/bin:/usr/bin",
-		"CLAUDE_CODE_TMPDIR":  hostTmp,
-		"MULTICA_CONFIG_ROOT": "/host/config",
-	}, "/home/someone")
-
-	// The provider CLI keeps reading its configuration from the real home,
-	// which is mounted read-only; only the credential stores are hidden.
-	if env["HOME"] != "/home/someone" {
-		t.Errorf("HOME = %q, want the mounted read-only home", env["HOME"])
-	}
-	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"} {
-		if env[key] != sandbox.TempPath {
-			t.Errorf("%s = %q, want %q", key, env[key], sandbox.TempPath)
-		}
-	}
-	if strings.Contains(env["PATH"], "/home/") {
-		t.Errorf("PATH still points into the host home: %q", env["PATH"])
-	}
-	// A per-task config path is mounted at its original path, so it is not
-	// rewritten.
-	if env["MULTICA_CONFIG_ROOT"] != "/host/config" {
-		t.Errorf("MULTICA_CONFIG_ROOT = %q, want it unchanged", env["MULTICA_CONFIG_ROOT"])
-	}
-}
-
-func TestSandboxBinaryRootsIncludesTheSymlinkAndItsTarget(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "package", "cli.js")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatalf("create target: %v", err)
-	}
-	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-	linkDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(linkDir, 0o755); err != nil {
-		t.Fatalf("create link dir: %v", err)
-	}
-	link := filepath.Join(linkDir, "claude")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlinks are unavailable: %v", err)
-	}
-
-	roots := sandboxBinaryRoots(link)
-	if len(roots) != 2 {
-		t.Fatalf("roots = %v, want the link directory and the target directory", roots)
-	}
-	joined := strings.Join(roots, "\n")
-	if !strings.Contains(joined, linkDir) || !strings.Contains(joined, filepath.Dir(target)) {
-		t.Fatalf("roots = %v, want both %q and %q", roots, linkDir, filepath.Dir(target))
 	}
 }
 
@@ -356,7 +307,7 @@ func TestSandboxCredentialRootsHonourOperatorAdditions(t *testing.T) {
 func TestSandboxedBackendRejectsClaudeOnBwrap(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, "bwrap")
 	daemon.cfg.TaskSandboxBackend = "bwrap"
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err == nil {
 		t.Fatal("expected claude to be refused on the bwrap backend")
 	}

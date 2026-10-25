@@ -448,11 +448,14 @@ type repoCacheDependentRecorder interface {
 
 // Daemon is the local agent runtime that polls for and executes tasks.
 type Daemon struct {
-	cfg        Config
-	client     *Client
-	repoCache  repoCacheBackend
-	skillCache *SkillBundleCache
-	logger     *slog.Logger
+	nativeMu       sync.Mutex
+	nativeScope    nativeResourceScope
+	nativeResolver *sandbox.NativeRuntimeResolver
+	cfg            Config
+	client         *Client
+	repoCache      repoCacheBackend
+	skillCache     *SkillBundleCache
+	logger         *slog.Logger
 
 	// gitCALastErr is the last applyGitCACerts failure, so a persistent one
 	// (e.g. on Windows) is logged once rather than on every repo refresh.
@@ -3447,13 +3450,11 @@ func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, workspaceID stri
 	return err
 }
 
-// usesDockerRepoCache reports whether a task's repos should be prepared into
-// the workspace cache and bind-mounted read-only into a Docker worker. It is
-// true only when the sandbox is enabled with the docker backend and the
-// provider is one that runs inside the isolated tool boundary.
-func (d *Daemon) usesDockerRepoCache(provider string) bool {
+// usesWorkerRepoCache selects the common read-only cache checkout path for
+// Docker and supported native workers. Fetch/ref resolution is identical.
+func (d *Daemon) usesWorkerRepoCache(provider string) bool {
 	return d.cfg.SandboxEnabled &&
-		d.cfg.TaskSandboxBackend == "docker" &&
+		(d.cfg.TaskSandboxBackend == "docker" || (d.cfg.TaskSandboxBackend == "bwrap" && sandbox.ProviderSupportsNativeHost(provider))) &&
 		sandbox.ProviderSupportsIsolatedTools(provider)
 }
 
@@ -7911,6 +7912,9 @@ func qualifyTaskModel(
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
 	attemptID := uuid.NewString()
 	taskLog = taskLog.With("attempt_id", attemptID)
+	timing := newAttemptTiming(taskLog, task.ID, attemptID, provider, d.cfg.TaskSandboxBackend, time.Now)
+	defer timing.Mark("finished")
+	ctx = context.WithValue(ctx, attemptTimingContextKey{}, timing)
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	phaseRecorder.Mark(taskPhasePrepareStarted)
 	// A claim carries the task-row agent id both at the top level and inside
@@ -7980,9 +7984,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// to a stale snapshot. Every other task keeps the historical background
 	// sync (and `multica repo checkout` still clones on demand inside the
 	// boundary).
-	dockerRepoCache := d.usesDockerRepoCache(provider)
+	timing.Mark("repo_started")
+	workerRepoCache := d.usesWorkerRepoCache(provider)
 	var taskRepoCaches []workercheckout.Entry
-	if dockerRepoCache {
+	if workerRepoCache {
 		phaseRecorder.Mark(taskPhaseRepoCacheStarted)
 		prepared, prepareErr := d.prepareTaskRepoCaches(prepareCtx, task)
 		if prepareErr != nil {
@@ -7998,6 +8003,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	phaseRecorder.Mark(taskPhaseRepoCacheReady)
+	timing.Mark("repo_ready")
+	timing.Mark("runtime_started")
+	var nativeProfile *execenv.NativeProfile
 
 	entry, ok := d.agents()[provider]
 	// A custom runtime profile (MUL-3284) overrides the executable path: the
@@ -8019,6 +8027,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var usesCustomProfileCommand bool
 	if customSpec, isCustom := d.customProfileLaunchForRuntime(task.RuntimeID); isCustom {
 		usesCustomProfileCommand = true
+		if d.usesNativeSandbox() {
+			return TaskResult{}, fmt.Errorf("%w: custom runtime profiles are not validated for native execution", errSandboxUnavailable)
+		}
 		entry.Path = customSpec.path
 		resolvedVersion = customSpec.version
 		// Filter here rather than relying on agent.New doing it, so that the
@@ -8037,7 +8048,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// the launch, so a custom runtime's path is never second-guessed and a
 		// custom-only host pays no wasted re-resolution.
 		var resolveErr error
-		entry, resolvedVersion, resolveErr = d.resolveAgentEntryForLaunch(prepareCtx, provider, entry)
+		if d.usesNativeSandbox() {
+			entry, resolvedVersion, nativeProfile, resolveErr = d.resolveNativeAgentEntry(prepareCtx, provider, entry)
+		} else {
+			entry, resolvedVersion, resolveErr = d.resolveAgentEntryForLaunch(prepareCtx, provider, entry)
+		}
 		if resolveErr != nil {
 			return TaskResult{}, resolveErr
 		}
@@ -8047,6 +8062,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	phaseRecorder.Mark(taskPhaseRuntimeResolved)
+	timing.Mark("runtime_ready")
 
 	stopPrepareLease := d.startTaskPrepareLeaseExtender(prepareCtx, task, taskLog)
 	defer stopPrepareLease()
@@ -8185,6 +8201,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	defer envClaim.Release()
 
 	// Try to reuse the workdir from a previous task on the same (agent, issue) pair.
+	timing.Mark("environment_started")
 	var env *execenv.Environment
 	// For a built-in codex task, use the version paired with the resolved path
 	// so an in-place upgrade can't leave the sandbox policy on the old version
@@ -8197,7 +8214,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		codexVersion = resolvedVersion
 	}
 	openCodeBin := ""
-	if provider == "opencode" && dockerRepoCache {
+	if provider == "opencode" && d.cfg.TaskSandboxBackend == "docker" && workerRepoCache {
 		openCodeBin = entry.Path
 	}
 	openclawBin := ""
@@ -8416,6 +8433,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		var err error
 		env, err = d.reuseExecutionEnvironment(prepareCtx, execenv.ReuseParams{
+			NativeProfile:  nativeProfile,
 			WorkspacesRoot: d.cfg.WorkspacesRoot,
 			Profile:        d.cfg.Profile,
 			// The canonical path the lock was taken on. Handing Reuse the raw
@@ -8465,6 +8483,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env == nil {
 		var err error
 		prepParams := execenv.PrepareParams{
+			NativeProfile:   nativeProfile,
 			WorkspacesRoot:  d.cfg.WorkspacesRoot,
 			Profile:         d.cfg.Profile,
 			WorkspaceID:     task.WorkspaceID,
@@ -8582,7 +8601,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// failure to write or record fails the task: the cache lifecycle must not
 	// outlive the workdir's use of it.
 	var extraCachePaths []string
-	if dockerRepoCache {
+	if workerRepoCache {
 		reused, reusedErr := d.repoCachePathsForReusedWorkdir(task.WorkspaceID, env.WorkDir)
 		if reusedErr != nil {
 			return TaskResult{}, fmt.Errorf("resolve reused workdir repo cache paths: %w", reusedErr)
@@ -8954,8 +8973,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentEnv["MULTICA_DSH_SESSION_ROOT"] = dshSessionRoot
 		agentEnv["DSH_TELEMETRY_DISABLED"] = "1"
 	}
-	if err := configureCodexTaskShellEnvironment(provider, env.CodexHome, os.Environ(), agentEnv, agentCustomEnv, d.logger); err != nil {
-		return TaskResult{}, err
+	if nativeProfile == nil {
+		if err := configureCodexTaskShellEnvironment(provider, env.CodexHome, os.Environ(), agentEnv, agentCustomEnv, d.logger); err != nil {
+			return TaskResult{}, err
+		}
+	} else {
+		for _, key := range nativeSelectorKeys {
+			delete(agentEnv, key)
+		}
+		for key, value := range nativeProfile.Env {
+			agentEnv[key] = value
+		}
+		agentEnv["HOME"] = nativeProfile.Home
 	}
 	// The overlay is authoritative once built, so nothing on the command line
 	// may re-point HERMES_HOME out of it. Both argv regions are stripped
@@ -9017,9 +9046,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		prompt = BuildPrompt(task, provider, promptOptions...)
 	}
-	backend, err := agent.ResolveBackend(provider, backendConfig)
-	if err != nil {
-		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
+	var backend agent.Backend
+	if !d.usesNativeSandbox() {
+		var backendErr error
+		backend, backendErr = agent.ResolveBackend(provider, backendConfig)
+		if backendErr != nil {
+			return TaskResult{}, fmt.Errorf("create agent backend: %w", backendErr)
+		}
 	}
 
 	// When the deployment enabled the sandbox, the adapter and everything it
@@ -9037,7 +9070,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Task 7: hand the Docker worker the CA bundle its git/curl/node/python
 	// must trust for private Git hosts. A configured-but-invalid extra bundle
 	// fails the task rather than silently dropping trust.
-	if dockerRepoCache {
+	if workerRepoCache {
 		bundlePath, bundleErr := d.writeWorkerCABundle(env.RootDir, d.cfg.DockerTaskCABundle)
 		if bundleErr != nil {
 			return TaskResult{}, fmt.Errorf("write worker CA bundle: %w", bundleErr)
@@ -9051,7 +9084,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if sandboxed != nil {
 		backend = sandboxed
+		if native, ok := sandboxed.(*nativeAttemptBackend); ok {
+			native.worker.OnWorkerReady = func() { timing.Mark("worker_ready") }
+			native.worker.OnCLIStarted = func() { timing.Mark("cli_started") }
+			native.onSpawn = func() { timing.Mark("sandbox_spawn") }
+		}
 	}
+
+	timing.Mark("environment_ready")
 
 	// Two-tier model resolution: an explicit agent.model wins,
 	// then the daemon-wide MULTICA_<PROVIDER>_MODEL env var. If
@@ -9110,9 +9150,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		thinkingLevel = task.Agent.ThinkingLevel
 		serviceTier = task.Agent.ServiceTier
 	}
-	selection := resolveTaskModelSelection(ctx, provider, agent.NewCommand(entry.Path, profileFixedArgs),
-		taskModelSelection{Model: model, ThinkingLevel: thinkingLevel, ServiceTier: serviceTier}, taskLog)
-	model, thinkingLevel, serviceTier = selection.Model, selection.ThinkingLevel, selection.ServiceTier
+	selection := taskModelSelection{Model: model, ThinkingLevel: thinkingLevel, ServiceTier: serviceTier}
+	if !d.usesNativeSandbox() {
+		selection = resolveTaskModelSelection(ctx, provider, agent.NewCommand(entry.Path, profileFixedArgs),
+			taskModelSelection{Model: model, ThinkingLevel: thinkingLevel, ServiceTier: serviceTier}, taskLog)
+		model, thinkingLevel, serviceTier = selection.Model, selection.ThinkingLevel, selection.ServiceTier
+
+	}
 
 	var idleWatchdogTimeout time.Duration
 	if provider == "opencode" || provider == "codearts" {
@@ -10087,6 +10131,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 				}
 				if isTaskOutputReceived(msg) {
 					phaseRecorder.Mark(taskPhaseFirstOutputReceived)
+					attemptTimingFromContext(ctx).Mark("first_output")
 					outputObserver.markOutput()
 				}
 				if isTaskToolUse(msg) {

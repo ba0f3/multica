@@ -117,3 +117,52 @@ func isTaskOutputReceived(msg agent.Message) bool {
 func isTaskToolUse(msg agent.Message) bool {
 	return msg.Type == agent.MessageToolUse
 }
+
+// attemptTiming uses independent anchors: intervening diagnostic phases cannot
+// change the meaning of a metric, and every timestamp retains its monotonic part.
+type attemptTiming struct {
+	mu     sync.Mutex
+	logger *slog.Logger
+	now    func() time.Time
+	points map[string]time.Time
+}
+
+func newAttemptTiming(logger *slog.Logger, task, attempt, provider, backend string, now func() time.Time) *attemptTiming {
+	if now == nil {
+		now = time.Now
+	}
+	if logger != nil {
+		logger = logger.With("task_id", task, "attempt_id", attempt, "provider", provider, "backend", backend)
+	}
+	return &attemptTiming{logger: logger, now: now, points: map[string]time.Time{"started": now()}}
+}
+func (t *attemptTiming) Mark(point string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.points[point]; ok {
+		return
+	}
+	now := t.now()
+	t.points[point] = now
+	for _, metric := range []struct{ name, start, end string }{
+		{"repo_prepare_ms", "repo_started", "repo_ready"}, {"runtime_resolve_ms", "runtime_started", "runtime_ready"}, {"environment_prepare_ms", "environment_started", "environment_ready"}, {"sandbox_launch_ms", "sandbox_spawn", "worker_ready"}, {"cli_start_ms", "worker_ready", "cli_started"}, {"first_output_ms", "cli_started", "first_output"}, {"turn_total_ms", "started", "finished"},
+	} {
+		if metric.end != point {
+			continue
+		}
+		start, ok := t.points[metric.start]
+		if ok && t.logger != nil {
+			t.logger.Info("task attempt timing", metric.name, now.Sub(start).Milliseconds())
+		}
+	}
+}
+
+type attemptTimingContextKey struct{}
+
+func attemptTimingFromContext(ctx context.Context) *attemptTiming {
+	value, _ := ctx.Value(attemptTimingContextKey{}).(*attemptTiming)
+	return value
+}

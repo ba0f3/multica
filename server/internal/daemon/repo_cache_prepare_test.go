@@ -459,8 +459,11 @@ func TestRunTaskFailsWhenRecordDependentsFails(t *testing.T) {
 	}
 }
 
-func TestRunTaskSkipsRepoCacheForBwrap(t *testing.T) {
-	cache := &fakePrepareCache{}
+func TestRunTaskPreparesRepoCacheForBwrap(t *testing.T) {
+	expected := errors.New("native fetch fixture failed")
+	cache := &fakePrepareCache{prepareFn: func(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+		return nil, expected
+	}}
 	d := &Daemon{
 		cfg: Config{
 			WorkspacesRoot:     t.TempDir(),
@@ -481,21 +484,18 @@ func TestRunTaskSkipsRepoCacheForBwrap(t *testing.T) {
 		Repos:       []RepoData{{URL: "https://example.com/a"}},
 	}
 
-	// No codex agent is configured, so runTask returns early with a "no agent"
-	// error — but only AFTER the registerTaskRepos + prepare/bg-sync branch has
-	// decided to take the background-sync path.
+	if err := os.MkdirAll(filepath.Join(d.cfg.WorkspacesRoot, ".repos"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	_, err := d.runTask(context.Background(), task, "codex", 0, newDiscardLogger())
-	if err == nil || !strings.Contains(err.Error(), "no agent configured") {
-		t.Fatalf("err = %v, want a no-agent-configured error", err)
+	if !errors.Is(err, expected) {
+		t.Fatalf("native fetch did not fail before agent execution: %v", err)
 	}
 	d.waitBackgroundSyncs()
+	if cache.prepareCount() != 1 || cache.syncCount() != 0 {
+		t.Fatalf("native cache prepare=%d, sync=%d", cache.prepareCount(), cache.syncCount())
+	}
 
-	if cache.prepareCount() != 0 {
-		t.Fatalf("Prepare called %d times for a bwrap task, want 0", cache.prepareCount())
-	}
-	if cache.syncCount() == 0 {
-		t.Fatal("background repo sync should still run for a bwrap task")
-	}
 }
 
 func TestLocalDirectoryTaskKeepsCurrentFlow(t *testing.T) {

@@ -60,6 +60,7 @@ func runManifest(ctx context.Context, manifest Manifest, out io.Writer, logger *
 		Env:            manifest.Config.Env,
 		Logger:         logger,
 		TaskID:         manifest.Config.TaskID,
+		AttemptID:      manifest.AttemptID,
 		RuntimeID:      manifest.Config.RuntimeID,
 		DaemonVersion:  manifest.Config.DaemonVersion,
 		CodexVersion:   manifest.Config.CodexVersion,

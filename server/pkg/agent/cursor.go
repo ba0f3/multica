@@ -1087,6 +1087,12 @@ func buildCursorArgs(opts ExecOptions, logger *slog.Logger) []string {
 		"--output-format", "stream-json",
 		"--yolo",
 	}
+	if opts.NativeProfile {
+		args = append(args, "--trust")
+		if hasManagedMcpConfig(opts.McpConfig) {
+			args = append(args, "--approve-mcps")
+		}
+	}
 	if opts.Cwd != "" {
 		args = append(args, "--workspace", opts.Cwd)
 	}

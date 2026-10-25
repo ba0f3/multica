@@ -29,23 +29,11 @@ func TestProviderSupportsIsolatedTools(t *testing.T) {
 	}
 }
 
-func TestProviderRequiresDockerBackend(t *testing.T) {
-	bwrap := map[string]bool{"codex": true, "cursor": true, "opencode": true}
-	for _, provider := range allSupportedProviders() {
-		want := !bwrap[provider]
-		if got := ProviderRequiresDockerBackend(provider); got != want {
-			t.Fatalf("ProviderRequiresDockerBackend(%q) = %v, want %v", provider, got, want)
-		}
-		if got := ProviderRequiresDockerBackend(strings.ToUpper(provider)); got != want {
-			t.Fatalf("ProviderRequiresDockerBackend(%q uppercased) = %v, want %v", provider, got, want)
-		}
-	}
-}
-
-func TestProviderRequiresDockerBackendRejectsUnknown(t *testing.T) {
-	for _, provider := range []string{"", "nonsense"} {
-		if ProviderRequiresDockerBackend(provider) {
-			t.Fatalf("expected unknown provider %q not to require docker", provider)
+func TestProviderSupportsNativeHost(t *testing.T) {
+	admitted := map[string]bool{"codex": true, "cursor": true, "opencode": true, "mcode": true}
+	for _, provider := range append(allSupportedProviders(), "", "nonsense") {
+		if got := ProviderSupportsNativeHost(provider); got != admitted[provider] {
+			t.Fatalf("native %q=%v", provider, got)
 		}
 	}
 }

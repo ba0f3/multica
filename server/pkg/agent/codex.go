@@ -1106,7 +1106,12 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	// Writing through config.toml at 0o600 keeps the secret values out of argv
 	// entirely.
 	codexHome := strings.TrimSpace(b.cfg.Env["CODEX_HOME"])
-	if codexHome != "" {
+	if opts.NativeProfile {
+		if err := applyNativeCodexThreadConfig(map[string]any{}, opts, b.cfg.Env); err != nil {
+			cancel()
+			return nil, fmt.Errorf("native codex task settings: %w", err)
+		}
+	} else if codexHome != "" {
 		if err := ensureCodexMcpConfig(filepath.Join(codexHome, "config.toml"), opts.McpConfig, b.cfg.Logger); err != nil {
 			// Fail closed when we can't materialise the managed config.
 			// Warning-and-launching would silently fall back to the
@@ -2040,6 +2045,9 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 			"active_launches", c.activeLaunches,
 			"method", c.threadSetupMethod,
 		)
+		if err := applyNativeCodexThreadConfig(resumeParams, opts, c.cfg.Env); err != nil {
+			return "", false, err
+		}
 		resumeResult, err := c.request(ctx, "thread/resume", resumeParams)
 		if err == nil {
 			if threadID := extractThreadID(resumeResult); threadID != "" {
@@ -2100,6 +2108,9 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 		"active_launches", c.activeLaunches,
 		"method", c.threadSetupMethod,
 	)
+	if err := applyNativeCodexThreadConfig(startParams, opts, c.cfg.Env); err != nil {
+		return "", false, err
+	}
 	startResult, err := c.request(ctx, "thread/start", startParams)
 	if err != nil {
 		return "", false, fmt.Errorf("codex thread/start failed: %w", err)

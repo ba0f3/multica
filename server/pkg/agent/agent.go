@@ -24,6 +24,8 @@ type Backend interface {
 
 // ExecOptions configures a single execution.
 type ExecOptions struct {
+	// NativeProfile keeps shared provider state at its original path.
+	NativeProfile bool
 	// OnCLIStarted runs once after a successful task CLI spawn, before its output.
 	OnCLIStarted func()
 	// EnableTaskSupplement installs provider hooks only for runs whose daemon/server

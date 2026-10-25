@@ -36,6 +36,8 @@ type Policy struct {
 	TempDir           string
 	OutputDir         string
 	CheckoutDir       string
+	CheckoutTarget    string
+	Command           []string
 	RuntimeRoots      []string
 	ExtraMounts       []Mount
 	Links             []NativeLink
@@ -81,7 +83,14 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		}
 		args = append(args, "--ro-bind", path, path)
 	}
-	for _, mount := range []Mount{{Source: policy.TempDir, Target: sandboxTemp}, {Source: policy.CheckoutDir, Target: sandboxRepo}, {Source: policy.HomeDir, Target: homeTarget}} {
+	checkoutTarget := policy.CheckoutTarget
+	if checkoutTarget == "" {
+		checkoutTarget = sandboxRepo
+	}
+	if err := nativeAbsolutePath(checkoutTarget); err != nil {
+		return nil, err
+	}
+	for _, mount := range []Mount{{Source: policy.TempDir, Target: sandboxTemp}, {Source: policy.HomeDir, Target: homeTarget}, {Source: policy.CheckoutDir, Target: checkoutTarget}} {
 		if err := checkMountSource(mount.Source, policy, allowedExact); err != nil {
 			return nil, err
 		}
@@ -152,7 +161,11 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	for _, key := range sortedKeys(env) {
 		args = append(args, "--setenv", key, env[key])
 	}
-	return append(args, "--chdir", sandboxRepo, "--", sandboxWorker, WorkerArg), nil
+	command := policy.Command
+	if len(command) == 0 {
+		command = []string{sandboxWorker, WorkerArg}
+	}
+	return append(append(args, "--chdir", checkoutTarget, "--"), command...), nil
 }
 
 func checkMountSource(source string, policy Policy, allowedExact map[string]struct{}) error {

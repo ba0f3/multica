@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -71,107 +70,17 @@ func (d *Daemon) sandboxedBackend(
 	}
 	backend := strings.TrimSpace(d.cfg.TaskSandboxBackend)
 	if backend == "" {
-		backend = "bwrap"
+		backend = "docker"
 	}
-	if backend == "bwrap" && sandbox.ProviderRequiresDockerBackend(provider) {
-		// Every provider except codex/cursor/opencode is seeded into the
-		// per-task home, which only the Docker backend mounts as HOME. Refuse
-		// them on bwrap instead of launching without auth under the host-home
-		// policy.
-		return nil, fmt.Errorf("%w: provider %q requires the docker backend", errSandboxUnavailable, provider)
-	}
+
 	switch backend {
 	case "docker":
 		return d.dockerBackend(provider, config, env, agentSocket, attemptID, repos, extraCachePaths)
 	case "bwrap":
-		return d.bwrapBackend(provider, config, env, profileDir, agentSocket, attemptID)
+		return d.bwrapBackend(provider, config, env, profileDir, agentSocket, attemptID, repos, extraCachePaths)
 	default:
 		return nil, fmt.Errorf("%w: unknown sandbox backend %q", errSandboxUnavailable, backend)
 	}
-}
-
-func (d *Daemon) bwrapBackend(
-	provider string,
-	config agent.Config,
-	env *execenv.Environment,
-	profileDir string,
-	agentSocket string,
-	attemptID string,
-) (agent.Backend, error) {
-	if env == nil {
-		return nil, fmt.Errorf("%w: no execution environment", errSandboxUnavailable)
-	}
-
-	bwrapPath := d.cfg.BwrapPath
-	if bwrapPath == "" {
-		bwrapPath = "bwrap"
-	}
-	resolvedBwrap, err := exec.LookPath(bwrapPath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: bwrap is not installed (%s)", errSandboxUnavailable, bwrapPath)
-	}
-
-	self := d.cfg.SandboxSelfPath
-	if self == "" {
-		self, err = os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("%w: resolve the worker executable: %w", errSandboxUnavailable, err)
-		}
-	}
-
-	homeDir := filepath.Join(env.RootDir, "home")
-	tempDir := filepath.Join(env.RootDir, "tmp")
-	outputDir := filepath.Join(env.RootDir, "output")
-	for _, dir := range []string{homeDir, tempDir, outputDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("%w: create %s: %w", errSandboxUnavailable, dir, err)
-		}
-	}
-
-	binaryRoots := sandboxBinaryRoots(config.ExecutablePath)
-	hostHome, _ := os.UserHomeDir()
-	extras := sandboxExtraMounts(env)
-	for _, root := range binaryRoots {
-		extras = append(extras, sandbox.Mount{Source: root, Target: root, ReadOnly: true})
-	}
-	policy := sandbox.Policy{
-		TaskRoot:     env.RootDir,
-		HomeDir:      homeDir,
-		HostHome:     hostHome,
-		TempDir:      tempDir,
-		OutputDir:    outputDir,
-		CheckoutDir:  env.WorkDir,
-		RuntimeRoots: sandboxRuntimeRoots(),
-		ExtraMounts:  extras,
-		AgentSocket:  agentSocket,
-		// Code grants are installed after the private home mount.
-		AllowedRoots:   append([]string{env.RootDir}, binaryRoots...),
-		ForbiddenRoots: append(sandboxForbiddenRoots(d.cfg.WorkspacesRoot, profileDir), sandboxCredentialRoots(hostHome, profileDir)...),
-		// Per-task config paths and the signing socket live under roots the
-		// boundary forbids as trees. Naming each exact path grants that path
-		// and nothing around it.
-		AllowedExactPaths: append([]string{agentSocket}, extraMountSources(extras)...),
-		Env: map[string]string{
-			"PATH": sandboxPath(),
-		},
-	}
-	args, err := sandbox.BuildArgs(policy, self)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
-	}
-
-	sandboxConfig := sandbox.ConfigFromAgent(config)
-	sandboxConfig.AttemptID = attemptID
-	sandboxConfig.Env = sandboxAgentEnv(config.Env, hostHome)
-	backend := &sandbox.IPCBackend{
-		Provider:      provider,
-		Config:        sandboxConfig,
-		KeepStdinOpen: true,
-		Launch: func() (*exec.Cmd, error) {
-			return exec.Command(resolvedBwrap, args...), nil
-		},
-	}
-	return backend, nil
 }
 
 // sandboxRuntimeRoots lists the read-only system roots the agent CLI needs to
@@ -186,31 +95,6 @@ func sandboxRuntimeRoots() []string {
 		}
 	}
 	return roots
-}
-
-// sandboxExtraMounts lists the per-task paths the daemon built for this
-// attempt.
-//
-// Each of these is a path the daemon created or validated for THIS task: a
-// private config root, a per-task CODEX_HOME, a settings file. None of them is
-// an inherited home directory, which is what keeps one task's credentials out
-// of another's sandbox.
-func sandboxExtraMounts(env *execenv.Environment) []sandbox.Mount {
-	var mounts []sandbox.Mount
-	appendMount := func(source string, readOnly bool) {
-		if source == "" {
-			return
-		}
-		mounts = append(mounts, sandbox.Mount{Source: source, Target: source, ReadOnly: readOnly})
-	}
-	appendMount(env.MulticaConfigRoot, false)
-	appendMount(env.CodexHome, false)
-	appendMount(env.CursorDataDir, false)
-	appendMount(env.HermesHome, false)
-	appendMount(env.QwenpawWorkspace, false)
-	appendMount(env.OpenclawConfigPath, true)
-	appendMount(env.ClaudeSettingsPath, true)
-	return mounts
 }
 
 // extraMountSources lists the sources of the per-task extra mounts.
@@ -250,34 +134,6 @@ func sandboxForbiddenRoots(workspacesRoot, profileDir string) []string {
 	return roots
 }
 
-// sandboxAgentEnv rewrites the agent environment for the boundary.
-//
-// The daemon builds the environment around host paths under the task root. The
-// private temp and HOME are mounted at fixed in-sandbox paths, so the variables
-// that name them would point at directories that do not exist in there. The
-// keys that point at per-task config the sandbox mounts unchanged are left
-// alone.
-func sandboxAgentEnv(env map[string]string, home string) map[string]string {
-	rewritten := make(map[string]string, len(env))
-	for key, value := range env {
-		rewritten[key] = value
-	}
-	if home == "" {
-		home = sandbox.HomePath
-	}
-	rewritten["HOME"] = home
-	rewritten["TMPDIR"] = sandbox.TempPath
-	rewritten["TMP"] = sandbox.TempPath
-	rewritten["TEMP"] = sandbox.TempPath
-	// The sandbox does not mount the user's home, so a PATH that points into
-	// it would resolve to nothing.
-	rewritten["PATH"] = sandboxPath()
-	if _, ok := rewritten["CLAUDE_CODE_TMPDIR"]; ok {
-		rewritten["CLAUDE_CODE_TMPDIR"] = sandbox.TempPath
-	}
-	return rewritten
-}
-
 // sandboxCredentialRoots rejects explicit native grants that would expose
 // Git or daemon credentials. The rest of HOME is absent by construction.
 func sandboxCredentialRoots(home, profileDir string) []string {
@@ -311,35 +167,6 @@ func isUnderPath(path, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(path, root+string(filepath.Separator))
-}
-
-// sandboxBinaryRoots lists the directories that hold the agent CLI.
-//
-// A symlinked launcher is common (an npm shim in ~/.local/bin pointing at a
-// package directory), so both the link's directory and the resolved target's
-// directory are mounted. Mounting one directory too many is still code, not
-// user data; failing to mount the real one would make the run unable to start.
-func sandboxBinaryRoots(executablePath string) []string {
-	if executablePath == "" {
-		return nil
-	}
-	roots := make([]string, 0, 2)
-	seen := map[string]struct{}{}
-	add := func(dir string) {
-		if dir == "" || dir == "." || dir == "/" {
-			return
-		}
-		if _, ok := seen[dir]; ok {
-			return
-		}
-		seen[dir] = struct{}{}
-		roots = append(roots, dir)
-	}
-	add(filepath.Dir(executablePath))
-	if resolved, err := filepath.EvalSymlinks(executablePath); err == nil {
-		add(filepath.Dir(resolved))
-	}
-	return roots
 }
 
 // sandboxPath is the PATH the sandboxed worker passes to the agent.
