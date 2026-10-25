@@ -37,6 +37,7 @@ type ProjectResourceForEnv struct {
 
 // PrepareParams holds all inputs needed to set up an execution environment.
 type PrepareParams struct {
+	NativeProfile   *NativeProfile
 	WorkspacesRoot  string // base path for all envs (e.g., ~/multica_workspaces)
 	WorkspaceID     string // workspace UUID — stable identity and path suffix
 	WorkspaceSlug   string // human-readable workspace path prefix
@@ -58,7 +59,7 @@ type PrepareParams struct {
 	Profile      string
 	Provider     string // agent provider (determines runtime config and skill injection paths)
 	CodexVersion string // detected Codex CLI version (only used when Provider == "codex")
-	// IsolatedToolBoundary prepares provider state for Docker/bwrap workers
+	// IsolatedToolBoundary prepares private provider state for Docker workers
 	// (private auth paths, container cwd identity for Cursor/OpenCode).
 	IsolatedToolBoundary bool
 	OpenCodeBin          string // Docker credential export executable; empty for other runtimes.
@@ -267,6 +268,7 @@ type SkillFileContextForEnv struct {
 
 // Environment represents a prepared, isolated execution environment.
 type Environment struct {
+	NativeProfile *NativeProfile
 	// RootDir is the top-level env directory ({workspacesRoot}/{task_id_short}/).
 	RootDir string
 	// WorkDir is the directory to pass as Cwd to the agent. Normally
@@ -637,138 +639,145 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		}
 	}
 
-	// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
-	if params.Provider == "codex" {
-		codexHome := filepath.Join(envRoot, codexHomeDirName)
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, IsLocalDirectory: params.LocalWorkDir != "" || params.LocalWorktree != nil, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs, IsolatedToolBoundary: params.IsolatedToolBoundary}, logger); err != nil {
-			return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
+	if params.NativeProfile != nil {
+		if err := prepareNativeTask(env, params.NativeProfile, params.Provider, params.Task, params.McpConfig, manifest); err != nil {
+			return nil, err
 		}
-		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
-			return nil, fmt.Errorf("execenv: hydrate codex skills: %w", err)
+	} else {
+		// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
+		if params.Provider == "codex" {
+			codexHome := filepath.Join(envRoot, codexHomeDirName)
+			if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, IsLocalDirectory: params.LocalWorkDir != "" || params.LocalWorktree != nil, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs, IsolatedToolBoundary: params.IsolatedToolBoundary}, logger); err != nil {
+				return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
+			}
+			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
+				return nil, fmt.Errorf("execenv: hydrate codex skills: %w", err)
+			}
+			env.CodexHome = codexHome
 		}
-		env.CodexHome = codexHome
-	}
 
-	if params.Provider == "claude" {
-		settingsPath, err := prepareClaudeSkillSettings(envRoot, params.Task.DisabledRuntimeSkills, params.Task.AgentSkills)
-		if err != nil {
-			return nil, fmt.Errorf("execenv: prepare claude skill settings: %w", err)
+		if params.Provider == "claude" {
+			settingsPath, err := prepareClaudeSkillSettings(envRoot, params.Task.DisabledRuntimeSkills, params.Task.AgentSkills)
+			if err != nil {
+				return nil, fmt.Errorf("execenv: prepare claude skill settings: %w", err)
+			}
+			env.ClaudeSettingsPath = settingsPath
 		}
-		env.ClaudeSettingsPath = settingsPath
-	}
 
-	// For Hermes, redirect HERMES_HOME to a per-task compatibility overlay ONLY
-	// when the agent has skills bound. A skill-less Hermes task keeps the user's
-	// real home and its original behavior untouched. The overlay makes the bound
-	// skills visible — Hermes discovers skills only from its home, so the old
-	// .agent_context/skills/ fallback was never read (issue #5242). See
-	// hermes_home.go.
-	//
-	// Note this is a local contract, not an observable product behaviour: the
-	// server appends the platform's built-in skills to every agent's skill set
-	// (service.LoadAgentSkillBundles), so a claimed task's AgentSkills is never
-	// empty and the skill-less branch is effectively unreachable in production.
-	// Emptying an agent's own skill list is NOT a way to opt out of the overlay.
-	if params.Provider == "hermes" && len(params.Task.AgentSkills) > 0 {
-		hermesHome := filepath.Join(envRoot, "hermes-home")
-		sessions, err := prepareHermesHome(hermesHome, params.HermesSourceHome, params.HermesSourceMustExist, params.Task.AgentSkills, params.HermesEnv, params.HermesMemoryStore, params.HermesSessionStore, logger)
-		if err != nil {
-			return nil, fmt.Errorf("execenv: prepare hermes-home: %w", err)
+		// For Hermes, redirect HERMES_HOME to a per-task compatibility overlay ONLY
+		// when the agent has skills bound. A skill-less Hermes task keeps the user's
+		// real home and its original behavior untouched. The overlay makes the bound
+		// skills visible — Hermes discovers skills only from its home, so the old
+		// .agent_context/skills/ fallback was never read (issue #5242). See
+		// hermes_home.go.
+		//
+		// Note this is a local contract, not an observable product behaviour: the
+		// server appends the platform's built-in skills to every agent's skill set
+		// (service.LoadAgentSkillBundles), so a claimed task's AgentSkills is never
+		// empty and the skill-less branch is effectively unreachable in production.
+		// Emptying an agent's own skill list is NOT a way to opt out of the overlay.
+		if params.Provider == "hermes" && len(params.Task.AgentSkills) > 0 {
+			hermesHome := filepath.Join(envRoot, "hermes-home")
+			sessions, err := prepareHermesHome(hermesHome, params.HermesSourceHome, params.HermesSourceMustExist, params.Task.AgentSkills, params.HermesEnv, params.HermesMemoryStore, params.HermesSessionStore, logger)
+			if err != nil {
+				return nil, fmt.Errorf("execenv: prepare hermes-home: %w", err)
+			}
+			env.HermesHome = hermesHome
+			if sessions.Mounted {
+				env.HermesSessionStore = params.HermesSessionStore
+				env.HermesSessionHistoryPresent = sessions.HistoryPresent
+			}
 		}
-		env.HermesHome = hermesHome
-		if sessions.Mounted {
-			env.HermesSessionStore = params.HermesSessionStore
-			env.HermesSessionHistoryPresent = sessions.HistoryPresent
+		if params.Provider == "qwenpaw" {
+			qwenpawWorkspace := filepath.Join(envRoot, "qwenpaw-workspace")
+			if err := prepareQwenpawWorkspace(qwenpawWorkspace, params.Task.AgentSkills, logger); err != nil {
+				return nil, fmt.Errorf("execenv: prepare qwenpaw workspace: %w", err)
+			}
+			env.QwenpawWorkspace = qwenpawWorkspace
 		}
-	}
-	if params.Provider == "qwenpaw" {
-		qwenpawWorkspace := filepath.Join(envRoot, "qwenpaw-workspace")
-		if err := prepareQwenpawWorkspace(qwenpawWorkspace, params.Task.AgentSkills, logger); err != nil {
-			return nil, fmt.Errorf("execenv: prepare qwenpaw workspace: %w", err)
-		}
-		env.QwenpawWorkspace = qwenpawWorkspace
-	}
 
-	// For Reasonix, deny the `ask` tool for this task through a project-scoped
-	// reasonix.toml. Degraded, not fatal: without it the task still runs under
-	// the backend's fail-closed question handling.
-	if params.Provider == "reasonix" {
-		if err := writeReasonixProjectConfig(workDir, params.ReasonixEnv, manifest, logger); err != nil {
-			logger.Warn("execenv: write reasonix project config failed", "error", err)
+		// For Reasonix, deny the `ask` tool for this task through a project-scoped
+		// reasonix.toml. Degraded, not fatal: without it the task still runs under
+		// the backend's fail-closed question handling.
+		if params.Provider == "reasonix" {
+			if err := writeReasonixProjectConfig(workDir, params.ReasonixEnv, manifest, logger); err != nil {
+				logger.Warn("execenv: write reasonix project config failed", "error", err)
+			}
 		}
-	}
 
-	// For Cursor, materialize managed MCP into project-local config and use
-	// an isolated CURSOR_DATA_DIR for the per-workdir approval sidecar. Cursor
-	// still reads ~/.cursor/mcp.json, but only servers with approval entries in
-	// this per-task data dir can load, so user-global MCP servers do not leak
-	// into managed-MCP runs.
-	if params.Provider == "cursor" {
-		if params.IsolatedToolBoundary {
+		// For Cursor, materialize managed MCP into project-local config and use
+		// an isolated CURSOR_DATA_DIR for the per-workdir approval sidecar. Cursor
+		// still reads ~/.cursor/mcp.json, but only servers with approval entries in
+		// this per-task data dir can load, so user-global MCP servers do not leak
+		// into managed-MCP runs.
+		if params.Provider == "cursor" {
+			if params.IsolatedToolBoundary {
+				taskHome := filepath.Join(envRoot, "home")
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					return nil, fmt.Errorf("execenv: create task home: %w", err)
+				}
+				if err := prepareCursorIsolatedHome(taskHome, logger); err != nil {
+					return nil, fmt.Errorf("execenv: prepare cursor isolated home: %w", err)
+				}
+			}
+			cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, params.McpConfig, params.CursorMcpAuthSource, params.IsolatedToolBoundary, manifest)
+			if err != nil {
+				return nil, fmt.Errorf("execenv: prepare cursor mcp config: %w", err)
+			}
+			env.CursorDataDir = cursorDataDir
+		}
+
+		if params.Provider == "opencode" && params.IsolatedToolBoundary {
 			taskHome := filepath.Join(envRoot, "home")
 			if err := os.MkdirAll(taskHome, 0o700); err != nil {
 				return nil, fmt.Errorf("execenv: create task home: %w", err)
 			}
-			if err := prepareCursorIsolatedHome(taskHome, logger); err != nil {
-				return nil, fmt.Errorf("execenv: prepare cursor isolated home: %w", err)
+			if err := prepareOpenCodeIsolatedHome(taskHome, params.OpenCodeBin, logger); err != nil {
+				return nil, fmt.Errorf("execenv: prepare opencode isolated home: %w", err)
 			}
 		}
-		cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, params.McpConfig, params.CursorMcpAuthSource, params.IsolatedToolBoundary, manifest)
-		if err != nil {
-			return nil, fmt.Errorf("execenv: prepare cursor mcp config: %w", err)
-		}
-		env.CursorDataDir = cursorDataDir
-	}
 
-	if params.Provider == "opencode" && params.IsolatedToolBoundary {
-		taskHome := filepath.Join(envRoot, "home")
-		if err := os.MkdirAll(taskHome, 0o700); err != nil {
-			return nil, fmt.Errorf("execenv: create task home: %w", err)
+		if params.Provider == "opencode" && params.OpenCodeBin != "" {
+			env.OpenCodeCredentialsPath = filepath.Join(envRoot, "opencode-credentials.json")
 		}
-		if err := prepareOpenCodeIsolatedHome(taskHome, params.OpenCodeBin, logger); err != nil {
-			return nil, fmt.Errorf("execenv: prepare opencode isolated home: %w", err)
-		}
-	}
 
-	if params.Provider == "opencode" && params.OpenCodeBin != "" {
-		env.OpenCodeCredentialsPath = filepath.Join(envRoot, "opencode-credentials.json")
-	}
-
-	if params.IsolatedToolBoundary {
-		taskHome := filepath.Join(envRoot, "home")
-		switch params.Provider {
-		case "claude":
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				return nil, fmt.Errorf("execenv: create task home: %w", err)
-			}
-			if err := prepareClaudeIsolatedHome(taskHome, logger); err != nil {
-				return nil, fmt.Errorf("execenv: prepare claude isolated home: %w", err)
-			}
-		case "antigravity":
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				return nil, fmt.Errorf("execenv: create task home: %w", err)
-			}
-			if err := prepareAntigravityIsolatedHome(taskHome, logger); err != nil {
-				return nil, fmt.Errorf("execenv: prepare antigravity isolated home: %w", err)
-			}
-		default:
-			if _, ok := genericProviderHomeDirs(params.Provider); !ok {
-				break
-			}
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				return nil, fmt.Errorf("execenv: create task home: %w", err)
-			}
-			if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
-				return nil, fmt.Errorf("execenv: prepare generic provider home: %w", err)
+		if params.IsolatedToolBoundary {
+			taskHome := filepath.Join(envRoot, "home")
+			switch params.Provider {
+			case "claude":
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					return nil, fmt.Errorf("execenv: create task home: %w", err)
+				}
+				if err := prepareClaudeIsolatedHome(taskHome, logger); err != nil {
+					return nil, fmt.Errorf("execenv: prepare claude isolated home: %w", err)
+				}
+			case "antigravity":
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					return nil, fmt.Errorf("execenv: create task home: %w", err)
+				}
+				if err := prepareAntigravityIsolatedHome(taskHome, logger); err != nil {
+					return nil, fmt.Errorf("execenv: prepare antigravity isolated home: %w", err)
+				}
+			default:
+				if _, ok := genericProviderHomeDirs(params.Provider); !ok {
+					break
+				}
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					return nil, fmt.Errorf("execenv: create task home: %w", err)
+				}
+				if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
+					return nil, fmt.Errorf("execenv: prepare generic provider home: %w", err)
+				}
 			}
 		}
-	}
 
-	if params.Provider == "mcode" && params.IsolatedToolBoundary {
-		env.McodeDataDir, err = resolveMcodeDataDir()
-		if err != nil {
-			return nil, err
+		if params.Provider == "mcode" && params.IsolatedToolBoundary {
+			env.McodeDataDir, err = resolveMcodeDataDir()
+			if err != nil {
+				return nil, err
+			}
 		}
+
 	}
 
 	if err := writeSidecarManifest(envRoot, manifest); err != nil {
@@ -816,6 +825,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 // the per-provider knobs (CodexVersion, OpenclawBin) so callers can pass
 // the same resolved binary path on both first-run and reuse paths.
 type ReuseParams struct {
+	NativeProfile *NativeProfile
 	// WorkspacesRoot is the daemon-owned root under which all task envs live.
 	// Passed on reuse so the root-level fail-closed marker is self-healed here
 	// too — a marker removed while the daemon runs is restored before a reused
@@ -979,169 +989,177 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		return nil
 	}
 
-	// Restore CodexHome for Codex provider — the per-task codex-home directory
-	// lives alongside the workdir. Re-run prepareCodexHomeWithOpts to ensure
-	// config (especially sandbox/network access) is up to date.
-	if params.Provider == "codex" {
-		codexHome := filepath.Join(env.RootDir, codexHomeDirName)
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, ResumeSessionID: params.ResumeSessionID, IsLocalDirectory: params.LocalDirectory, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs, IsolatedToolBoundary: params.IsolatedToolBoundary}, logger); err != nil {
-			// Leaving env.CodexHome empty does not launch Codex against an
-			// ambient home: configureCodexTaskShellEnvironment rejects the empty
-			// value ("task CODEX_HOME is missing") and the run fails before
-			// launch. Decline the reuse instead, so the caller falls back to
-			// Prepare and the task still gets a usable task-local home. The
-			// prior session is not carried over, and a fresh Prepare that fails
-			// the same way still stops the task.
-			logger.Warn("execenv: refresh codex-home failed; forcing fresh prepare", "error", err)
+	if params.NativeProfile != nil {
+		if err := prepareNativeTask(env, params.NativeProfile, params.Provider, params.Task, params.McpConfig, manifest); err != nil {
+			logger.Warn("execenv: native task preparation failed", "error", err)
 			return nil
-		} else {
-			env.CodexHome = codexHome
-			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
-				logger.Warn("execenv: refresh codex skills failed", "error", err)
+		}
+	} else {
+		// Restore CodexHome for Codex provider — the per-task codex-home directory
+		// lives alongside the workdir. Re-run prepareCodexHomeWithOpts to ensure
+		// config (especially sandbox/network access) is up to date.
+		if params.Provider == "codex" {
+			codexHome := filepath.Join(env.RootDir, codexHomeDirName)
+			if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, ResumeSessionID: params.ResumeSessionID, IsLocalDirectory: params.LocalDirectory, SessionStoreKey: codexSessionStoreKey(params.Profile, params.Task), CodexCustomArgs: params.CodexCustomArgs, IsolatedToolBoundary: params.IsolatedToolBoundary}, logger); err != nil {
+				// Leaving env.CodexHome empty does not launch Codex against an
+				// ambient home: configureCodexTaskShellEnvironment rejects the empty
+				// value ("task CODEX_HOME is missing") and the run fails before
+				// launch. Decline the reuse instead, so the caller falls back to
+				// Prepare and the task still gets a usable task-local home. The
+				// prior session is not carried over, and a fresh Prepare that fails
+				// the same way still stops the task.
+				logger.Warn("execenv: refresh codex-home failed; forcing fresh prepare", "error", err)
+				return nil
+			} else {
+				env.CodexHome = codexHome
+				if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.Task.DisabledRuntimeSkills, logger); err != nil {
+					logger.Warn("execenv: refresh codex skills failed", "error", err)
+				}
 			}
 		}
-	}
 
-	if params.Provider == "claude" && env.RootDir != "" {
-		settingsPath, err := prepareClaudeSkillSettings(env.RootDir, params.Task.DisabledRuntimeSkills, params.Task.AgentSkills)
-		if err != nil {
-			logger.Warn("execenv: refresh claude skill settings failed", "error", err)
-		} else {
-			env.ClaudeSettingsPath = settingsPath
-		}
-	}
-
-	// Re-deny Reasonix's `ask` tool on reuse: CleanupSidecars above removed the
-	// prior run's reasonix.toml, so without this the next turn would run with
-	// the tool available again.
-	if params.Provider == "reasonix" {
-		if err := writeReasonixProjectConfig(params.WorkDir, params.ReasonixEnv, manifest, logger); err != nil {
-			logger.Warn("execenv: refresh reasonix project config failed", "error", err)
-		}
-	}
-
-	// Refresh (or tear down) the per-task QwenPaw workspace on reuse.
-	// Rebuild the workspace so an added/removed/edited skill is reflected.
-	if params.Provider == "qwenpaw" && env.RootDir != "" {
-		qwenpawWorkspace := filepath.Join(env.RootDir, "qwenpaw-workspace")
-		if err := prepareQwenpawWorkspace(qwenpawWorkspace, params.Task.AgentSkills, logger); err != nil {
-			logger.Warn("execenv: refresh qwenpaw workspace failed; forcing fresh prepare", "error", err)
-			return nil
-		}
-		env.QwenpawWorkspace = qwenpawWorkspace
-	}
-
-	// Refresh (or tear down) the per-task HERMES_HOME on reuse. With skills
-	// bound, rebuild the overlay so an added/removed/edited skill and the
-	// mirrored home/config track the user's current ~/.hermes/ before the next
-	// hermes process starts. With no skills bound, drop the redirect entirely so
-	// the task reverts to the user's real home — matching a fresh Prepare for a
-	// skill-less agent.
-	if params.Provider == "hermes" && env.RootDir != "" {
-		hermesHome := filepath.Join(env.RootDir, "hermes-home")
-		if len(params.Task.AgentSkills) > 0 {
-			sessions, err := prepareHermesHome(hermesHome, params.HermesSourceHome, params.HermesSourceMustExist, params.Task.AgentSkills, params.HermesEnv, params.HermesMemoryStore, params.HermesSessionStore, logger)
+		if params.Provider == "claude" && env.RootDir != "" {
+			settingsPath, err := prepareClaudeSkillSettings(env.RootDir, params.Task.DisabledRuntimeSkills, params.Task.AgentSkills)
 			if err != nil {
-				// Fail closed: a half-built overlay must not run. Returning nil
-				// makes the daemon fall back to a fresh Prepare, whose error
-				// then blocks dispatch rather than silently dropping the bound
-				// skill.
-				logger.Warn("execenv: refresh hermes-home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-			env.HermesHome = hermesHome
-			env.HermesSessionStore = ""
-			env.HermesSessionHistoryPresent = false
-			if sessions.Mounted {
-				env.HermesSessionStore = params.HermesSessionStore
-				env.HermesSessionHistoryPresent = sessions.HistoryPresent
-			}
-		} else {
-			env.HermesHome = ""
-			env.HermesSessionStore = ""
-			env.HermesSessionHistoryPresent = false
-			if err := os.RemoveAll(hermesHome); err != nil {
-				logger.Warn("execenv: remove stale hermes-home failed", "error", err)
+				logger.Warn("execenv: refresh claude skill settings failed", "error", err)
+			} else {
+				env.ClaudeSettingsPath = settingsPath
 			}
 		}
-	}
 
-	// Refresh Cursor's managed MCP sidecars on reuse. A newly saved agent
-	// mcp_config must replace the prior run's .cursor/mcp.json and isolated
-	// approvals before the next cursor-agent process starts.
-	if params.Provider == "cursor" && env.RootDir != "" {
-		if params.IsolatedToolBoundary {
+		// Re-deny Reasonix's `ask` tool on reuse: CleanupSidecars above removed the
+		// prior run's reasonix.toml, so without this the next turn would run with
+		// the tool available again.
+		if params.Provider == "reasonix" {
+			if err := writeReasonixProjectConfig(params.WorkDir, params.ReasonixEnv, manifest, logger); err != nil {
+				logger.Warn("execenv: refresh reasonix project config failed", "error", err)
+			}
+		}
+
+		// Refresh (or tear down) the per-task QwenPaw workspace on reuse.
+		// Rebuild the workspace so an added/removed/edited skill is reflected.
+		if params.Provider == "qwenpaw" && env.RootDir != "" {
+			qwenpawWorkspace := filepath.Join(env.RootDir, "qwenpaw-workspace")
+			if err := prepareQwenpawWorkspace(qwenpawWorkspace, params.Task.AgentSkills, logger); err != nil {
+				logger.Warn("execenv: refresh qwenpaw workspace failed; forcing fresh prepare", "error", err)
+				return nil
+			}
+			env.QwenpawWorkspace = qwenpawWorkspace
+		}
+
+		// Refresh (or tear down) the per-task HERMES_HOME on reuse. With skills
+		// bound, rebuild the overlay so an added/removed/edited skill and the
+		// mirrored home/config track the user's current ~/.hermes/ before the next
+		// hermes process starts. With no skills bound, drop the redirect entirely so
+		// the task reverts to the user's real home — matching a fresh Prepare for a
+		// skill-less agent.
+		if params.Provider == "hermes" && env.RootDir != "" {
+			hermesHome := filepath.Join(env.RootDir, "hermes-home")
+			if len(params.Task.AgentSkills) > 0 {
+				sessions, err := prepareHermesHome(hermesHome, params.HermesSourceHome, params.HermesSourceMustExist, params.Task.AgentSkills, params.HermesEnv, params.HermesMemoryStore, params.HermesSessionStore, logger)
+				if err != nil {
+					// Fail closed: a half-built overlay must not run. Returning nil
+					// makes the daemon fall back to a fresh Prepare, whose error
+					// then blocks dispatch rather than silently dropping the bound
+					// skill.
+					logger.Warn("execenv: refresh hermes-home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+				env.HermesHome = hermesHome
+				env.HermesSessionStore = ""
+				env.HermesSessionHistoryPresent = false
+				if sessions.Mounted {
+					env.HermesSessionStore = params.HermesSessionStore
+					env.HermesSessionHistoryPresent = sessions.HistoryPresent
+				}
+			} else {
+				env.HermesHome = ""
+				env.HermesSessionStore = ""
+				env.HermesSessionHistoryPresent = false
+				if err := os.RemoveAll(hermesHome); err != nil {
+					logger.Warn("execenv: remove stale hermes-home failed", "error", err)
+				}
+			}
+		}
+
+		// Refresh Cursor's managed MCP sidecars on reuse. A newly saved agent
+		// mcp_config must replace the prior run's .cursor/mcp.json and isolated
+		// approvals before the next cursor-agent process starts.
+		if params.Provider == "cursor" && env.RootDir != "" {
+			if params.IsolatedToolBoundary {
+				taskHome := filepath.Join(env.RootDir, "home")
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					logger.Warn("execenv: refresh cursor task home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+				if err := prepareCursorIsolatedHome(taskHome, logger); err != nil {
+					logger.Warn("execenv: refresh cursor isolated home failed", "error", err)
+					return nil
+				}
+			}
+			cursorDataDir, err := prepareCursorMcpConfig(env.RootDir, params.WorkDir, params.McpConfig, params.CursorMcpAuthSource, params.IsolatedToolBoundary, manifest)
+			if err != nil {
+				logger.Warn("execenv: refresh cursor mcp config failed", "error", err)
+				return nil
+			}
+			env.CursorDataDir = cursorDataDir
+		}
+
+		// Refresh provider state on reuse, preserving task sessions while picking
+		// up current host authentication.
+		if params.IsolatedToolBoundary && env.RootDir != "" {
 			taskHome := filepath.Join(env.RootDir, "home")
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				logger.Warn("execenv: refresh cursor task home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-			if err := prepareCursorIsolatedHome(taskHome, logger); err != nil {
-				logger.Warn("execenv: refresh cursor isolated home failed", "error", err)
-				return nil
+			switch params.Provider {
+			case "opencode":
+				if params.OpenCodeBin != "" {
+					env.OpenCodeCredentialsPath = filepath.Join(env.RootDir, "opencode-credentials.json")
+				}
+				if err := prepareOpenCodeIsolatedHome(taskHome, params.OpenCodeBin, logger); err != nil {
+					logger.Warn("execenv: refresh opencode isolated home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+			case "claude":
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+				if err := prepareClaudeIsolatedHome(taskHome, logger); err != nil {
+					logger.Warn("execenv: refresh claude isolated home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+			case "antigravity":
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+				if err := prepareAntigravityIsolatedHome(taskHome, logger); err != nil {
+					logger.Warn("execenv: refresh antigravity isolated home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+			default:
+				if _, ok := genericProviderHomeDirs(params.Provider); !ok {
+					break
+				}
+				if err := os.MkdirAll(taskHome, 0o700); err != nil {
+					logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
+				if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
+					logger.Warn("execenv: refresh generic provider home failed; forcing fresh prepare", "error", err)
+					return nil
+				}
 			}
 		}
-		cursorDataDir, err := prepareCursorMcpConfig(env.RootDir, params.WorkDir, params.McpConfig, params.CursorMcpAuthSource, params.IsolatedToolBoundary, manifest)
-		if err != nil {
-			logger.Warn("execenv: refresh cursor mcp config failed", "error", err)
-			return nil
-		}
-		env.CursorDataDir = cursorDataDir
-	}
 
-	// Refresh provider state on reuse, preserving task sessions while picking
-	// up current host authentication.
-	if params.IsolatedToolBoundary && env.RootDir != "" {
-		taskHome := filepath.Join(env.RootDir, "home")
-		switch params.Provider {
-		case "opencode":
-			if params.OpenCodeBin != "" {
-				env.OpenCodeCredentialsPath = filepath.Join(env.RootDir, "opencode-credentials.json")
-			}
-			if err := prepareOpenCodeIsolatedHome(taskHome, params.OpenCodeBin, logger); err != nil {
-				logger.Warn("execenv: refresh opencode isolated home failed; forcing fresh prepare", "error", err)
+		if params.Provider == "mcode" && params.IsolatedToolBoundary {
+			source, err := resolveMcodeDataDir()
+			if err != nil {
+				logger.Warn("execenv: resolve MCode profile", "error", err)
 				return nil
 			}
-		case "claude":
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-			if err := prepareClaudeIsolatedHome(taskHome, logger); err != nil {
-				logger.Warn("execenv: refresh claude isolated home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-		case "antigravity":
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-			if err := prepareAntigravityIsolatedHome(taskHome, logger); err != nil {
-				logger.Warn("execenv: refresh antigravity isolated home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-		default:
-			if _, ok := genericProviderHomeDirs(params.Provider); !ok {
-				break
-			}
-			if err := os.MkdirAll(taskHome, 0o700); err != nil {
-				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-			if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
-				logger.Warn("execenv: refresh generic provider home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
+			env.McodeDataDir = source
 		}
-	}
 
-	if params.Provider == "mcode" && params.IsolatedToolBoundary {
-		source, err := resolveMcodeDataDir()
-		if err != nil {
-			logger.Warn("execenv: resolve MCode profile", "error", err)
-			return nil
-		}
-		env.McodeDataDir = source
 	}
 
 	if env.RootDir != "" {
