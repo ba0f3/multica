@@ -181,9 +181,15 @@ func TestWriteWorkerCABundleFailsOnInvalidExtra(t *testing.T) {
 	}
 }
 
-func TestWriteWorkerCABundleWithoutExtraKeepsMachineTrust(t *testing.T) {
-	machinePEM := seedMachineTrust(t)
+func TestWriteWorkerCABundleServerCAOnly(t *testing.T) {
+	seedMachineTrust(t)
 	cache := repocache.New(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = cache.SetExtraCACerts("") })
+
+	serverPEM := newTestCertPEM(t, "server-ca")
+	if err := cache.SetExtraCACerts(serverPEM); err != nil {
+		t.Fatalf("SetExtraCACerts: %v", err)
+	}
 
 	envRoot := t.TempDir()
 	d := newWorkerCATestDaemon(t, cache)
@@ -199,10 +205,28 @@ func TestWriteWorkerCABundleWithoutExtraKeepsMachineTrust(t *testing.T) {
 		t.Fatalf("read bundle: %v", err)
 	}
 	subjects := pemCertificateSubjects(t, data)
-	if len(subjects) != 1 || subjects[0] != "machine-ca" {
-		t.Fatalf("subjects = %v, want [machine-ca]", subjects)
+	joined := strings.Join(subjects, ",")
+	for _, want := range []string{"machine-ca", "server-ca"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("bundle subjects %q missing %q", joined, want)
+		}
 	}
-	if string(data) != machinePEM {
-		t.Fatal("bundle must hold the machine trust verbatim")
+}
+
+func TestWriteWorkerCABundleNoExtraAndNoServerCA(t *testing.T) {
+	seedMachineTrust(t)
+	cache := repocache.New(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	envRoot := t.TempDir()
+	d := newWorkerCATestDaemon(t, cache)
+	got, err := d.writeWorkerCABundle(envRoot, "")
+	if err != nil {
+		t.Fatalf("writeWorkerCABundle: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("bundle path = %q, want empty", got)
+	}
+	if _, err := os.Stat(filepath.Join(envRoot, "ca-bundle.pem")); !os.IsNotExist(err) {
+		t.Fatalf("no bundle file should be left behind (err=%v)", err)
 	}
 }

@@ -40,6 +40,15 @@ func activeCABundle() string {
 	return ""
 }
 
+// ExtraCACertsActive reports whether the server has sent extra CA certificates
+// that are currently active. Callers that write a worker CA bundle use it to
+// decide whether they must hand the worker a bundle at all: when no extra CA
+// is configured, the worker image's own system trust store is left untouched.
+func (c *Cache) ExtraCACertsActive() bool {
+	st := caState.Load()
+	return st != nil && st.active
+}
+
 // systemCABundleFiles mirrors crypto/x509's certFiles on Linux plus the
 // macOS/BSD location: the bundle libcurl uses by default on these systems.
 var systemCABundleFiles = []string{

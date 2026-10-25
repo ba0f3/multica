@@ -17,16 +17,31 @@ type caBundleSource interface {
 	CABundlePEM() ([]byte, error)
 }
 
+// extraCAActiveSource is implemented by repocache.Cache. It is optional so
+// test doubles of repoCacheBackend do not have to implement it; when the cache
+// cannot report active extra CAs, writeWorkerCABundle treats them as inactive.
+type extraCAActiveSource interface {
+	ExtraCACertsActive() bool
+}
+
 // writeWorkerCABundle writes the CA bundle a Docker worker must trust to
 // <envRoot>/ca-bundle.pem and returns its host path. It combines the repo
 // cache's bundle (the machine trust plus any server-provided CAs) with the
 // valid CERTIFICATE blocks of extraPath, so git/curl/node/python in the worker
 // trust both the host's existing Git trust and the extra CA.
 //
-// It returns "" when neither source produced a bundle. A configured extraPath
-// that is missing, unreadable, or holds no valid certificate is an error: a
-// bundle the operator asked for must never be silently dropped.
+// It returns "" when neither source produced a bundle. When no extra CA is
+// configured at all — no extraPath and no active server CAs — it returns ""
+// without writing anything, so the worker image's own /etc/ssl/certs system
+// store stays in effect rather than being replaced by a mounted bundle. A
+// configured extraPath that is missing, unreadable, or holds no valid
+// certificate is an error: a bundle the operator asked for must never be
+// silently dropped.
 func (d *Daemon) writeWorkerCABundle(envRoot, extraPath string) (string, error) {
+	if extraPath == "" && !d.extraCACertsActive() {
+		return "", nil
+	}
+
 	var bundle bytes.Buffer
 	if cache, ok := d.repoCache.(caBundleSource); ok {
 		pem, err := cache.CABundlePEM()
@@ -123,4 +138,12 @@ func dockerTaskCABundleExists(path string) bool {
 	}
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// extraCACertsActive reports whether the repo cache currently has active
+// server-provided extra CAs. A cache that does not implement the optional
+// extraCAActiveSource is treated as having none.
+func (d *Daemon) extraCACertsActive() bool {
+	cache, ok := d.repoCache.(extraCAActiveSource)
+	return ok && cache.ExtraCACertsActive()
 }
