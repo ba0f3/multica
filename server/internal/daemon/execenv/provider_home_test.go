@@ -271,7 +271,12 @@ func TestPrepareGenericProviderHomeSkipsSockets(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix sockets are not available on windows")
 	}
-	home := t.TempDir()
+	// t.TempDir includes the test name and can exceed Unix socket path limits.
+	home, err := os.MkdirTemp("", "mcode-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 	minimax := filepath.Join(home, ".minimax")
 	runDir := filepath.Join(minimax, "run")

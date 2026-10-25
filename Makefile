@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon task-worker-image cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon task-worker-image test-agent-workers cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -321,6 +321,10 @@ task-worker-image: ## Build Docker task worker; tag local name and daemon defaul
 		--build-arg VERSION=dev --build-arg COMMIT=$(COMMIT) \
 		.
 	docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
+
+test-agent-workers: task-worker-image ## Test Codex, Cursor, OpenCode and MCode workers using your authenticated accounts
+	cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 MULTICA_REAL_AGENT_HOME="$(HOME)" \
+		go test -tags=agentintegration ./internal/daemon -run '^(TestRealProviderDockerWorkers|TestRealMcodeDockerInitialize)$$' -count=1 -v -timeout 35m
 
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"

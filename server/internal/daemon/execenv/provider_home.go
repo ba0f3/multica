@@ -12,11 +12,10 @@ import (
 // mirrorProviderTree copies src into dst for an isolated worker's task home.
 //
 // It is the shared implementation behind the provider-specific isolated-home
-// seeders (Claude, Antigravity). The rules match prepareOpenCodeIsolatedHome:
+// seeders (Claude, Antigravity, Cursor, OpenCode):
 // walk the source, never follow host symlinks, create directories 0700, and
-// copy regular files preserving their host mode (0600 by default). The one
-// difference is the destination policy: files and directories are created only
-// when missing, so a reused task home keeps whatever a prior run refreshed and
+// copy regular files preserving their host mode (0600 by default). Files and
+// directories are created only when missing, so a reused task home keeps whatever a prior run refreshed and
 // a second prepare never overwrites it.
 //
 // A missing source is not an error: the caller logs a warning that auth may
@@ -294,6 +293,7 @@ func genericProviderHomeDirs(provider string) ([]string, bool) {
 // (Claude, Antigravity, OpenCode, Codex, Cursor, Hermes, OpenClaw): each
 // listed directory is copied with the same missing-only, no-symlink, 0700/0600
 // rules, and a missing source is a warning rather than a failure.
+// MCode keeps rotating OAuth state in its shared profile namespace.
 func prepareGenericProviderHome(provider, taskHome string, logger *slog.Logger) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if strings.TrimSpace(taskHome) == "" {
@@ -308,10 +308,16 @@ func prepareGenericProviderHome(provider, taskHome string, logger *slog.Logger) 
 		return fmt.Errorf("resolve user home: %w", err)
 	}
 	for _, rel := range dirs {
+		if provider == "mcode" && rel == ".minimax" {
+			continue
+		}
 		src := filepath.Join(home, rel)
 		if err := mirrorProviderTree(src, filepath.Join(taskHome, rel), nil, logger); err != nil {
 			return fmt.Errorf("copy %s config: %w", provider, err)
 		}
+	}
+	if provider == "mcode" {
+		return prepareMcodeHome(taskHome, logger)
 	}
 	return nil
 }

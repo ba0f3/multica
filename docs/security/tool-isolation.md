@@ -74,12 +74,18 @@ Providers without bespoke prep mirror their auth/config dot-directories from the
 | `grok` | `.grok` |
 | `qwen` | `.qwen` |
 | `qwenpaw` | `.qwenpaw` |
-| `mcode` (MiniMax Code) | `.mcode`, `.minimax`, `.config/mcode` |
+| `mcode` (MiniMax Code) | `.mcode`, `.config/mcode`, `.minimax` configuration; OAuth state uses the mounts below |
 | `muse` | `.muse` |
 | `dim` | `.dim` |
 | `zeroclaw` | `.zeroclaw` |
 
 Codex, Cursor, OpenCode, Hermes, OpenClaw, Claude, and Antigravity are excluded because they have bespoke prep or mounts. A missing source directory is a warning (auth may fail), not a failed task.
+
+## MCode OAuth state
+
+MCode refresh tokens rotate. Docker workers share only the selected profile's `auth/` directory, including its native cross-process lock, with the daemon user's CLI. Copying this directory per task would leave other tasks with invalid refresh tokens after the first refresh.
+
+The launcher preserves the original data-directory path in `MINIMAX_DATA_DIR` and `MAVIS_DATA_DIR`: MCode hashes that path into its credential key. The data directory at that path is a mount of the task's private `.minimax` tree, and its parent is a mount of the task's private home so MCode can create its sibling migration lock. Only the nested `auth/` directory is mounted from the profile read-write. Sessions, configuration, logs and tools stay private to the task. Host runtime databases, session history, process leases, auth sockets and caches are excluded from the initial copy. After acquiring the task-home claim, preparation removes any sibling migration lock left by a prior container; it preserves the task's own runtime database for resume. Changing the selected profile or region is applied again on reuse.
 
 ## OpenClaw / QwenPaw same-path mounts
 
@@ -87,7 +93,7 @@ OpenClaw reads its per-task config through an absolute `$include`, and QwenPaw t
 
 ## Native-binary requirement
 
-Every provider is supported only as a **native CLI binary**. A Node/npm shim whose resolved file is a script needs its interpreter (and `node_modules`), which the worker image does not bundle; bind-mounting only the resolved script is not enough for such an install. Credentials stored only in a system keyring that the CLI does not materialise under its home dot-directory (or via an explicitly exported env/custom config) will not reach the worker, because the boundary mounts only copies in the task home and never the host home or a keyring socket. Providers whose auth lives outside the listed dot-directories need an env/custom config source to carry credentials across the boundary.
+Every provider is supported only as a **native CLI binary**. A Node/npm shim whose resolved file is a script needs its interpreter (and `node_modules`), which the worker image does not bundle; bind-mounting only the resolved script is not enough for such an install. Credentials stored only in a system keyring that the CLI does not materialise under its home dot-directory (or via an explicitly exported env/custom config) will not reach the worker, because the boundary mounts task-home copies, except for MCode's scoped OAuth state described above, and never the whole host home or a keyring socket. Providers whose auth lives outside the listed dot-directories need an env/custom config source to carry credentials across the boundary.
 
 ## Environment signals
 

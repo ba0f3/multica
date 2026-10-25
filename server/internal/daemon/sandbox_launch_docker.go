@@ -91,6 +91,13 @@ func (d *Daemon) dockerBackend(
 	agentConfig := config
 	if sandbox.ProviderUsesDockerAgentBinary(provider) {
 		switch strings.ToLower(strings.TrimSpace(provider)) {
+		case "codex":
+			containerExec, codexBinds, err := sandbox.DockerCodexAgentBinds(config.ExecutablePath)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+			}
+			binds = append(binds, codexBinds...)
+			agentConfig.ExecutablePath = containerExec
 		case "cursor":
 			containerExec, cursorBinds, err := sandbox.DockerCursorAgentBinds(config.ExecutablePath)
 			if err != nil {
@@ -158,6 +165,20 @@ func (d *Daemon) dockerBackend(
 	}
 
 	containerEnv := sandbox.ContainerEnv(agentConfig.Env)
+	if provider == "mcode" {
+		mcodeBinds, mcodeEnv, err := sandbox.DockerMcodeAuthBinds(homeDir, env.McodeDataDir)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
+		}
+		binds = append(binds, mcodeBinds...)
+		for key, value := range mcodeEnv {
+			containerEnv[key] = value
+		}
+	}
+	if provider == "opencode" && env.OpenCodeCredentialsPath != "" {
+		binds = append(binds, sandbox.DockerBind(env.OpenCodeCredentialsPath, sandbox.OpenCodeCredentialsPath, "ro"))
+		containerEnv[sandbox.OpenCodeCredentialsEnv] = sandbox.OpenCodeCredentialsPath
+	}
 	if agentSocket != "" {
 		containerEnv["SSH_AUTH_SOCK"] = sandbox.AgentSocketPath
 	}

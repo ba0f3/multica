@@ -52,6 +52,33 @@ func DockerAgentBinaryBind(hostExecutable string) (containerExec string, bind st
 	return containerExec, bind, nil
 }
 
+// DockerCodexAgentBinds includes the sibling process used by Codex code-mode
+// tools. Older installations without that process need only the main binary.
+func DockerCodexAgentBinds(hostExecutable string) (string, []string, error) {
+	containerExec, bind, err := DockerAgentBinaryBind(hostExecutable)
+	if err != nil {
+		return "", nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(hostExecutable)
+	if err != nil {
+		return "", nil, fmt.Errorf("sandbox: resolve Codex executable: %w", err)
+	}
+	binds := []string{bind}
+	companion := filepath.Join(filepath.Dir(resolved), "codex-code-mode-host")
+	info, err := os.Stat(companion)
+	if os.IsNotExist(err) {
+		return containerExec, binds, nil
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("sandbox: inspect Codex tool runtime: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, fmt.Errorf("sandbox: Codex tool runtime %q is not a regular file", companion)
+	}
+	binds = append(binds, DockerBind(companion, filepath.Join(dockerAgentBinaryContainerDir, "codex-code-mode-host"), "ro"))
+	return containerExec, binds, nil
+}
+
 // DockerCursorAgentBinds mounts Cursor's complete versioned installation. Its
 // launcher executes the adjacent Node runtime and index.js, so mounting only
 // the launcher breaks the relative paths after it resolves its symlink.

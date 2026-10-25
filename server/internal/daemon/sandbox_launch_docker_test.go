@@ -33,6 +33,20 @@ func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
 	}
 }
 
+func TestDockerBackendBindsCodexCodeModeHost(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"codex", "codex-code-mode-host"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	joined := dockerBackendArgvForProvider(t, "codex", agent.Config{ExecutablePath: filepath.Join(dir, "codex")})
+	want := sandbox.DockerBind(filepath.Join(dir, "codex-code-mode-host"), "/usr/local/bin/codex-code-mode-host", "ro")
+	if !strings.Contains(joined, want) {
+		t.Fatalf("Codex tool runtime is missing from Docker mounts: want %s", want)
+	}
+}
+
 // TestDockerBackendBindsClaudeAndAntigravity verifies the two newly admitted
 // providers pass the gate, their resolved host binaries are bind-mounted
 // read-only at /usr/local/bin/<basename>, and Claude's task-local --settings
@@ -517,6 +531,9 @@ func dockerBackendArgvForProvider(t *testing.T, provider string, config agent.Co
 	daemon.cfg.DockerCLIPath = fakeDocker
 	daemon.cfg.DockerTaskImage = "multica/task-worker:test"
 	env := newSandboxTestEnv(t)
+	if provider == "mcode" {
+		env.McodeDataDir = t.TempDir()
+	}
 	for _, fn := range setup {
 		fn(env)
 	}
@@ -542,4 +559,45 @@ func dockerBackendArgvForProvider(t *testing.T, provider string, config agent.Co
 		t.Fatalf("read argv: %v", err)
 	}
 	return string(raw)
+}
+
+func TestDockerBackendImportsOpenCodeCredentialsReadOnly(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	exportPath := ""
+	joined := dockerBackendArgvForProvider(t, "opencode", agent.Config{ExecutablePath: bin}, func(env *execenv.Environment) {
+		exportPath = filepath.Join(env.RootDir, "opencode-credentials.json")
+		if err := os.WriteFile(exportPath, []byte(`{}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		env.OpenCodeCredentialsPath = exportPath
+	})
+	if !strings.Contains(joined, sandbox.DockerBind(exportPath, sandbox.OpenCodeCredentialsPath, "ro")) {
+		t.Fatal("credential export is not mounted read-only")
+	}
+	if got := dockerEnv(joined)[sandbox.OpenCodeCredentialsEnv]; got != sandbox.OpenCodeCredentialsPath {
+		t.Fatalf("worker auth import path=%q", got)
+	}
+}
+
+func TestDockerBackendUsesMcodeProfileAuthWithPrivateData(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "mcode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	profile := t.TempDir()
+	joined := dockerBackendArgvForProvider(t, "mcode", agent.Config{ExecutablePath: bin}, func(env *execenv.Environment) { env.McodeDataDir = profile })
+	auth := filepath.Join(profile, "auth")
+	if !strings.Contains(joined, sandbox.DockerBind(auth, auth, "rw")) {
+		t.Fatal("MCode rotating credentials and lock are not shared")
+	}
+	if strings.Contains(joined, sandbox.DockerBind(profile, profile, "rw")) {
+		t.Fatal("host MCode sessions are exposed to worker")
+	}
+	got := dockerEnv(joined)
+	if got["MINIMAX_DATA_DIR"] != profile || got["MAVIS_DATA_DIR"] != profile {
+		t.Fatalf("MCode namespace changed: %v", got)
+	}
 }

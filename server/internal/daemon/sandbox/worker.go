@@ -45,6 +45,9 @@ func RunWorker(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 }
 
 func runManifest(ctx context.Context, manifest Manifest, out io.Writer, logger *slog.Logger) error {
+	if err := importWorkerOpenCodeCredentials(ctx, manifest); err != nil {
+		return WriteFrame(out, Frame{Type: FrameError, Error: err.Error()})
+	}
 	backend, err := agent.ResolveBackend(manifest.Provider, agent.Config{
 		ExecutablePath: manifest.Config.ExecutablePath,
 		LaunchPrefix:   manifest.Config.LaunchPrefix,

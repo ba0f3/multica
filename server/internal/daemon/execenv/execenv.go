@@ -61,6 +61,7 @@ type PrepareParams struct {
 	// IsolatedToolBoundary prepares provider state for Docker/bwrap workers
 	// (private auth paths, container cwd identity for Cursor/OpenCode).
 	IsolatedToolBoundary bool
+	OpenCodeBin          string // Docker credential export executable; empty for other runtimes.
 	OpenclawBin          string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
 	// McpConfig is the agent's saved `mcp_config` JSON, forwarded to the
 	// provider-specific config preparer when that provider materialises MCP
@@ -290,7 +291,9 @@ type Environment struct {
 	// task's Docker worker (<RootDir>/ca-bundle.pem). Empty when the host had
 	// no machine trust and no extra CA to hand over. Set by the daemon, not by
 	// execenv.
-	WorkerCABundlePath string
+	WorkerCABundlePath      string
+	OpenCodeCredentialsPath string // Private host export mounted read-only for worker import.
+	McodeDataDir            string // Original profile path preserves MCode OAuth namespace identity.
 	// LocalWorktree is set when the task runs in worktree mode against a
 	// local_directory resource. The daemon calls Finalize on it after the
 	// agent exits to commit leftovers, drop the worktree, and learn the
@@ -722,9 +725,13 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		if err := os.MkdirAll(taskHome, 0o700); err != nil {
 			return nil, fmt.Errorf("execenv: create task home: %w", err)
 		}
-		if err := prepareOpenCodeIsolatedHome(taskHome, logger); err != nil {
+		if err := prepareOpenCodeIsolatedHome(taskHome, params.OpenCodeBin, logger); err != nil {
 			return nil, fmt.Errorf("execenv: prepare opencode isolated home: %w", err)
 		}
+	}
+
+	if params.Provider == "opencode" && params.OpenCodeBin != "" {
+		env.OpenCodeCredentialsPath = filepath.Join(envRoot, "opencode-credentials.json")
 	}
 
 	if params.IsolatedToolBoundary {
@@ -754,6 +761,13 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 			if err := prepareGenericProviderHome(params.Provider, taskHome, logger); err != nil {
 				return nil, fmt.Errorf("execenv: prepare generic provider home: %w", err)
 			}
+		}
+	}
+
+	if params.Provider == "mcode" && params.IsolatedToolBoundary {
+		env.McodeDataDir, err = resolveMcodeDataDir()
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -817,6 +831,7 @@ type ReuseParams struct {
 	// exposed into the new task-local sessions dir so thread/resume still finds
 	// it. Empty means a fresh thread. See prepareCodexSessionsDir (MUL-4424).
 	ResumeSessionID string
+	OpenCodeBin     string // Docker credential export executable.
 	OpenclawBin     string // only used when Provider == "openclaw"; empty = PATH lookup
 	// McpConfig is the agent's saved `mcp_config` JSON. Reused on reuse so a
 	// freshly-saved managed set re-materialises into the wrapper before the
@@ -1074,12 +1089,19 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		env.CursorDataDir = cursorDataDir
 	}
 
-	// Refresh the isolated task home on reuse. The preparers copy only missing
-	// files, so a reused home keeps credentials the prior run refreshed; a
-	// freshly added auth/config file on the host is picked up.
+	// Refresh provider state on reuse, preserving task sessions while picking
+	// up current host authentication.
 	if params.IsolatedToolBoundary && env.RootDir != "" {
 		taskHome := filepath.Join(env.RootDir, "home")
 		switch params.Provider {
+		case "opencode":
+			if params.OpenCodeBin != "" {
+				env.OpenCodeCredentialsPath = filepath.Join(env.RootDir, "opencode-credentials.json")
+			}
+			if err := prepareOpenCodeIsolatedHome(taskHome, params.OpenCodeBin, logger); err != nil {
+				logger.Warn("execenv: refresh opencode isolated home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
 		case "claude":
 			if err := os.MkdirAll(taskHome, 0o700); err != nil {
 				logger.Warn("execenv: refresh task home failed; forcing fresh prepare", "error", err)
@@ -1111,6 +1133,15 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 				return nil
 			}
 		}
+	}
+
+	if params.Provider == "mcode" && params.IsolatedToolBoundary {
+		source, err := resolveMcodeDataDir()
+		if err != nil {
+			logger.Warn("execenv: resolve MCode profile", "error", err)
+			return nil
+		}
+		env.McodeDataDir = source
 	}
 
 	if env.RootDir != "" {

@@ -8191,6 +8191,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if provider == "codex" && resolvedVersion != "" {
 		codexVersion = resolvedVersion
 	}
+	openCodeBin := ""
+	if provider == "opencode" && dockerRepoCache {
+		openCodeBin = entry.Path
+	}
 	openclawBin := ""
 	if provider == "openclaw" {
 		openclawBin = entry.Path
@@ -8417,6 +8421,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			CodexVersion:          codexVersion,
 			ResumeSessionID:       task.PriorSessionID,
 			OpenclawBin:           openclawBin,
+			OpenCodeBin:           openCodeBin,
 			McpConfig:             effectiveMcpConfig,
 			CursorMcpAuthSource:   cursorMcpAuthSource,
 			OpenclawGateway:       openclawGateway,
@@ -8468,6 +8473,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Provider:              provider,
 			CodexVersion:          codexVersion,
 			OpenclawBin:           openclawBin,
+			OpenCodeBin:           openCodeBin,
 			McpConfig:             effectiveMcpConfig,
 			CursorMcpAuthSource:   cursorMcpAuthSource,
 			OpenclawGateway:       openclawGateway,
