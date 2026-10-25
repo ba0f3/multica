@@ -533,8 +533,8 @@ func repoCheckoutIsolatedSummary(repoURL string, result workercheckout.Result) s
 		}
 		return fmt.Sprintf("Kept the existing checkout of %s at %s (branch: %s; %d commit%s ahead, %d commit%s behind, %d uncommitted file%s, %d unpushed commit%s): "+
 			"nothing was reset, cleaned, or switched.\n"+
-			"To discard its uncommitted changes and untracked files and start over on a new branch from the latest default branch (or --ref), "+
-			"re-run with --fresh; commits stay on the old branch, but push any you still need first.",
+			"To discard local commits and uncommitted changes and start over from the latest default branch (or --ref), "+
+			"re-run with --fresh; push anything you still need first.",
 			repoURL, result.Path, branch,
 			result.Ahead, pluralS(result.Ahead),
 			result.Behind, pluralS(result.Behind),

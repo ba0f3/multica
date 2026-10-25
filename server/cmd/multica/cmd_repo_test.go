@@ -580,6 +580,8 @@ func TestRepoCheckoutIsolatedSummary(t *testing.T) {
 			want: []string{
 				"(branch: agent/test/abc; 1 commit ahead, 1 commit behind, 2 uncommitted files, 3 unpushed commits)",
 				"nothing was reset, cleaned, or switched",
+				"To discard local commits and uncommitted changes",
+				"push anything you still need first",
 			},
 		},
 		{
