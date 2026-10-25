@@ -1825,7 +1825,7 @@ func TestMaintainRepoCacheRunsLightCleanupWhileTaskActive(t *testing.T) {
 
 	d.activeTasks.Add(1)
 	defer d.activeTasks.Add(-1)
-	d.maintainRepoCache(context.Background(), barePath, &gcStats{})
+	d.maintainRepoCache(context.Background(), barePath, &gcStats{}, false)
 
 	if gitRefExists(t, barePath, "refs/heads/"+staleBranch) {
 		t.Fatalf("expected stale branch %q to be deleted while a task is active", staleBranch)

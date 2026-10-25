@@ -239,6 +239,34 @@ func TestLiveDependentCachePathsIgnoresMalformedRecords(t *testing.T) {
 	}
 }
 
+// TestLiveDependentCachePathsKeepsAlternatesObjectsSpelling pins the path shape
+// a reused workdir records. A Git alternates file names <bare>/objects rather
+// than the bare cache directory, and the scan must return that spelling
+// verbatim: the repo-cache GC maps it back to the bare cache, so normalizing or
+// dropping it here would leave a live checkout unpinnable.
+func TestLiveDependentCachePathsKeepsAlternatesObjectsSpelling(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	cache := New(root, testLogger())
+	workDir := t.TempDir()
+	objectsPath := filepath.Join(root, "ws-1", "github.com+org+repo.git", "objects")
+
+	if err := cache.RecordDependents("ws-1", Dependent{
+		WorkDir:    workDir,
+		CachePaths: []string{objectsPath},
+	}); err != nil {
+		t.Fatalf("RecordDependents: %v", err)
+	}
+
+	live, err := cache.LiveDependentCachePaths()
+	if err != nil {
+		t.Fatalf("LiveDependentCachePaths: %v", err)
+	}
+	if want := map[string]struct{}{objectsPath: {}}; !reflect.DeepEqual(live, want) {
+		t.Fatalf("live paths = %v, want %v", live, want)
+	}
+}
+
 func TestLiveDependentCachePathsWithoutRecordsIsEmpty(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
