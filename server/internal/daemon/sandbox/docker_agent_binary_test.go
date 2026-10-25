@@ -27,12 +27,12 @@ func TestDockerAgentBinaryBind(t *testing.T) {
 }
 
 func TestProviderUsesDockerAgentBinary(t *testing.T) {
-	for _, provider := range []string{"codex", "cursor", "opencode", "CODEX"} {
+	for _, provider := range []string{"codex", "cursor", "opencode", "claude", "antigravity", "CODEX"} {
 		if !ProviderUsesDockerAgentBinary(provider) {
 			t.Fatalf("expected %q to use docker agent binary bind", provider)
 		}
 	}
-	if ProviderUsesDockerAgentBinary("claude") {
-		t.Fatal("claude should not use docker agent binary bind")
+	if ProviderUsesDockerAgentBinary("hermes") {
+		t.Fatal("hermes should not use docker agent binary bind")
 	}
 }

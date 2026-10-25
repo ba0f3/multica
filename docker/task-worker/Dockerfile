@@ -11,11 +11,12 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o /out/multica ./cmd/multica
 
-# glibc-based runtime so host-discovered agent CLIs (codex, cursor, opencode) can
-# be bind-mounted into the worker at run time (see sandbox.DockerAgentBinaryBind).
+# glibc-based runtime so host-discovered agent CLIs (codex, cursor, opencode,
+# claude, antigravity) can be bind-mounted into the worker at run time (see
+# sandbox.DockerAgentBinaryBind).
 FROM debian:bookworm-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git openssh-client bash \
+  && apt-get install -y --no-install-recommends ca-certificates git openssh-client bash ripgrep \
   && rm -rf /var/lib/apt/lists/*
 # The internal CA is baked into every worker image so agents can reach
 # self-signed endpoints without per-daemon configuration. This is a fork

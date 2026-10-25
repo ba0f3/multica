@@ -98,6 +98,16 @@ func (d *Daemon) dockerBackend(
 		agentConfig.ExecutablePath = containerExec
 	}
 
+	// Bind the task-local Claude --settings file after the config binds so the
+	// .multica parent directory exists when docker creates the file mount. The
+	// host path is rewritten to the container path in the manifest below, so
+	// the worker never sees the host layout.
+	claudeSettingsContainerPath := ""
+	if env.ClaudeSettingsPath != "" {
+		binds = append(binds, sandbox.DockerBind(env.ClaudeSettingsPath, sandbox.ClaudeSettingsPath, "ro"))
+		claudeSettingsContainerPath = sandbox.ClaudeSettingsPath
+	}
+
 	containerEnv := sandbox.ContainerEnv(agentConfig.Env)
 	if agentSocket != "" {
 		containerEnv["SSH_AUTH_SOCK"] = sandbox.AgentSocketPath
@@ -160,6 +170,7 @@ func (d *Daemon) dockerBackend(
 		Launch: func() (*exec.Cmd, error) {
 			return exec.Command(dockerPath, runArgs...), nil
 		},
+		ClaudeSettingsPath: claudeSettingsContainerPath,
 	}, nil
 }
 

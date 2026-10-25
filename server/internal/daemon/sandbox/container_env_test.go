@@ -12,6 +12,7 @@ func TestContainerEnvRewritesTaskConfigRoot(t *testing.T) {
 	env := ContainerEnv(map[string]string{
 		"MULTICA_TASK_CONFIG_ROOT": "/host/task-multica",
 		"MULTICA_CONFIG_ROOT":      "/host/config",
+		"CLAUDE_CONFIG_DIR":        "/host/.claude",
 	})
 	configRoot := filepath.Join(HomePath, ".multica")
 	if got := env["MULTICA_TASK_CONFIG_ROOT"]; got != configRoot {
@@ -25,6 +26,11 @@ func TestContainerEnvRewritesTaskConfigRoot(t *testing.T) {
 	}
 	if got := env["MULTICA_HOST_REPO_CHECKOUT"]; got != "disabled" {
 		t.Errorf("MULTICA_HOST_REPO_CHECKOUT = %q, want disabled", got)
+	}
+	// Claude Code reads ~/.claude; the task-home copy seeds it at /home/agent,
+	// so an explicit host CLAUDE_CONFIG_DIR must not survive into the container.
+	if got := env["CLAUDE_CONFIG_DIR"]; got != filepath.Join(HomePath, ".claude") {
+		t.Errorf("CLAUDE_CONFIG_DIR = %q, want %q", got, filepath.Join(HomePath, ".claude"))
 	}
 }
 

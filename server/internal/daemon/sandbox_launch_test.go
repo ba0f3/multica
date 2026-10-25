@@ -65,7 +65,7 @@ func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 
 func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "bwrap"))
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("hermes", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
 	if err == nil {
 		t.Fatal("expected unsupported provider to be rejected")
 	}
@@ -75,7 +75,7 @@ func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 	if backend != nil {
 		t.Fatal("backend returned for unsupported provider")
 	}
-	if !strings.Contains(err.Error(), "codex, cursor, opencode") {
+	if !strings.Contains(err.Error(), "codex, cursor, opencode, claude, antigravity") {
 		t.Fatalf("error should name supported providers: %v", err)
 	}
 }
