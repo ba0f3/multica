@@ -330,7 +330,7 @@ test-agent-native-workers: ## Test Linux native workers with the current user's 
 	cd server && go build -o bin/multica-native-smoke ./cmd/multica
 	cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 MULTICA_REAL_AGENT_HOME="$(HOME)" \
 		MULTICA_NATIVE_SMOKE_WORKER="$(CURDIR)/server/bin/multica-native-smoke" \
-		go test -tags=agentintegration ./internal/daemon -run '^(TestRealProviderNativeWorkers|TestRealNativeOpenCodeHostWorkerContinuity|TestRealNativeProfileHostAndTwoWorkers|TestRealNativeMcodeRefresh)$$' -count=1 -v -timeout 60m
+		go test -tags=agentintegration ./internal/daemon -run '^(TestRealProviderNativeWorkers|TestRealNativeTaskAfterWorkerFailure|TestRealNativeOpenCodeHostWorkerContinuity|TestRealNativeProfileHostAndTwoWorkers|TestRealNativeMcodeRefresh)$$' -count=1 -v -timeout 60m
 
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,6 +144,43 @@ func TestIPCBackendKillsTheWorkerWhenTheAttemptIsCancelled(t *testing.T) {
 	case <-session.Result:
 	case <-deadline:
 		t.Fatal("the worker was not stopped after the attempt was cancelled")
+	}
+}
+
+func TestIPCBackendCleanupDoesNotWaitForInheritedStderr(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	backend := newTestBackend(t, `read _; sleep 60 >&2 & child=$!; printf '%s' "$child" > `+pidFile+`; printf '%s\n' '{"type":"worker_ready"}'; wait`)
+	ready := make(chan struct{})
+	backend.OnWorkerReady = func() { close(ready) }
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	session, err := backend.Execute(ctx, "prompt", agent.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixture worker did not become ready")
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Kill()
+	cancel()
+	select {
+	case <-session.Result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cleanup waited for a descendant's inherited stderr pipe")
 	}
 }
 

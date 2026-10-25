@@ -86,6 +86,11 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 	if err != nil {
 		return nil, err
 	}
+	// A descendant may inherit stderr after the launcher exits. Boundary cleanup
+	// stops the attempt; an inherited pipe must not hold cmd.Wait indefinitely.
+	if cmd.WaitDelay == 0 {
+		cmd.WaitDelay = time.Second
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: open the worker stdin: %w", err)

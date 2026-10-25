@@ -48,6 +48,77 @@ func newRealNativeSmokeDaemon(root, worker string) *Daemon {
 	return &Daemon{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), cfg: Config{SandboxEnabled: true, TaskSandboxBackend: "bwrap", WorkspacesRoot: root, SandboxSelfPath: worker, DockerMemoryBytes: 2 << 30, DockerPIDsLimit: 512, DockerNanoCPUs: 2e9}}
 }
 
+func TestRealNativeTaskAfterWorkerFailure(t *testing.T) {
+	_, worker := realNativeSmokeInputs(t)
+	for _, provider := range []string{"codex", "cursor", "opencode"} {
+		t.Run(provider, func(t *testing.T) {
+			binary := provider
+			if provider == "cursor" {
+				binary = "cursor-agent"
+			}
+			executable, err := exec.LookPath(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			d := newRealNativeSmokeDaemon(root, worker)
+			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, err := execenv.Prepare(execenv.PrepareParams{WorkspacesRoot: root, WorkspaceID: "native-failure", TaskID: provider, Provider: provider, NativeProfile: &execenv.NativeProfile{Home: runtime.Home, Env: runtime.Env}}, d.logger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env.ReleaseLock()
+			config := agent.Config{ExecutablePath: executable, CLIVersion: runtime.Version, Env: runtime.Env, Logger: d.logger, BuiltinRuntime: true}
+			backend, err := d.sandboxedBackend(provider, config, env, "", "", "failed-worker-"+provider, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native := backend.(*nativeAttemptBackend)
+			// Resolve the real profile normally, then fail the adapter inside the
+			// actual worker. No installed executable or shared state is changed.
+			native.worker.Config.ExecutablePath = filepath.Join(env.WorkDir, "missing-native-smoke-cli")
+			ready := false
+			native.worker.OnWorkerReady = func() { ready = true }
+			session, err := backend.Execute(t.Context(), "This CLI cannot start.", agent.ExecOptions{Cwd: env.WorkDir, Timeout: 15 * time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, failed := collectSandboxSession(t.Context(), t, session)
+			if !ready || failed.Status != "failed" || failed.Error == "" {
+				t.Fatalf("worker failure was not exercised: ready=%v status=%s error=%s", ready, failed.Status, failed.Error)
+			}
+			if err := os.WriteFile(filepath.Join(env.WorkDir, "input.txt"), []byte("after-worker-failure"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			backend, err = d.sandboxedBackend(provider, config, env, "", "", "after-failure-"+provider, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+			defer cancel()
+			session, err = backend.Execute(ctx, "Use a shell tool to copy input.txt exactly to output.txt, then say done. Do not call external services or Multica commands.", agent.ExecOptions{Cwd: env.WorkDir, Model: os.Getenv("MULTICA_SMOKE_MODEL_" + strings.ToUpper(provider)), Timeout: 160 * time.Second, IsolatedToolBoundary: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages, result := collectSandboxSession(ctx, t, session)
+			tools := 0
+			for _, message := range messages {
+				if message.Type == agent.MessageToolUse {
+					tools++
+				}
+			}
+			data, readErr := os.ReadFile(filepath.Join(env.WorkDir, "output.txt"))
+			if result.Status != "completed" || result.SessionID == "" || tools == 0 || readErr != nil || string(data) != "after-worker-failure" {
+				t.Fatalf("fresh task after failed worker: status=%s tools=%d read=%v error=%s", result.Status, tools, readErr, result.Error)
+			}
+			t.Logf("worker failed after readiness; next task artifact verified session=%s", result.SessionID)
+		})
+	}
+}
+
 // TestRealProviderNativeWorkers uses the production resolver, preparation,
 // launcher, worker protocol and provider adapters. Every remembered canary is
 // removed from the workspace before resume, and checked through a tool artifact.
