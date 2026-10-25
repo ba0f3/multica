@@ -25,6 +25,9 @@ func ProviderSupportsIsolatedTools(provider string) bool {
 // its host-home policy; every other supported provider is seeded into the
 // per-task home and refused on bwrap rather than running without auth.
 func ProviderRequiresDockerBackend(provider string) bool {
+	if !ProviderSupportsIsolatedTools(provider) {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "codex", "cursor", "opencode":
 		return false

@@ -41,3 +41,11 @@ func TestProviderRequiresDockerBackend(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderRequiresDockerBackendRejectsUnknown(t *testing.T) {
+	for _, provider := range []string{"", "nonsense"} {
+		if ProviderRequiresDockerBackend(provider) {
+			t.Fatalf("expected unknown provider %q not to require docker", provider)
+		}
+	}
+}
