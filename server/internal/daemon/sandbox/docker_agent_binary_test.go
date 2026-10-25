@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 func TestDockerAgentBinaryBind(t *testing.T) {
@@ -26,13 +28,22 @@ func TestDockerAgentBinaryBind(t *testing.T) {
 	}
 }
 
+func TestDockerAgentBinaryBindRequiresPath(t *testing.T) {
+	if _, _, err := DockerAgentBinaryBind(""); err == nil {
+		t.Fatal("expected a clear error for an empty executable path")
+	}
+}
+
 func TestProviderUsesDockerAgentBinary(t *testing.T) {
-	for _, provider := range []string{"codex", "cursor", "opencode", "claude", "antigravity", "CODEX"} {
+	supported := append([]string{"omp"}, agent.SupportedTypes...)
+	for _, provider := range supported {
 		if !ProviderUsesDockerAgentBinary(provider) {
 			t.Fatalf("expected %q to use docker agent binary bind", provider)
 		}
 	}
-	if ProviderUsesDockerAgentBinary("hermes") {
-		t.Fatal("hermes should not use docker agent binary bind")
+	for _, provider := range []string{"", "nonsense"} {
+		if ProviderUsesDockerAgentBinary(provider) {
+			t.Fatalf("expected %q not to use docker agent binary bind", provider)
+		}
 	}
 }

@@ -64,7 +64,7 @@ func (d *Daemon) sandboxedBackend(
 		return nil, nil
 	}
 	if !sandbox.ProviderSupportsIsolatedTools(provider) {
-		return nil, fmt.Errorf("%w: provider %q is not supported in the isolated tool boundary (codex, cursor, opencode, claude, antigravity only)", errSandboxUnavailable, provider)
+		return nil, fmt.Errorf("%w: provider %q is not a supported agent backend", errSandboxUnavailable, provider)
 	}
 	if d.cfg.TaskProtectedMode && d.cfg.TaskSandboxBackend == "" {
 		return nil, fmt.Errorf("%w: protected mode requires a sandbox backend", errSandboxUnavailable)
@@ -74,9 +74,10 @@ func (d *Daemon) sandboxedBackend(
 		backend = "bwrap"
 	}
 	if backend == "bwrap" && sandbox.ProviderRequiresDockerBackend(provider) {
-		// Claude Code and Antigravity are seeded into the per-task home, which
-		// only the Docker backend mounts as HOME. Refuse them on bwrap instead
-		// of launching without auth under the host-home policy.
+		// Every provider except codex/cursor/opencode is seeded into the
+		// per-task home, which only the Docker backend mounts as HOME. Refuse
+		// them on bwrap instead of launching without auth under the host-home
+		// policy.
 		return nil, fmt.Errorf("%w: provider %q requires the docker backend", errSandboxUnavailable, provider)
 	}
 	switch backend {

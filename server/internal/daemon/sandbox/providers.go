@@ -1,32 +1,34 @@
 package sandbox
 
-import "strings"
+import (
+	"strings"
 
-// IsolatedToolProviders are the only runtimes supported inside the protected
-// tool boundary for Git security MVP.
-var IsolatedToolProviders = map[string]bool{
-	"codex":       true,
-	"cursor":      true,
-	"opencode":    true,
-	"claude":      true,
-	"antigravity": true,
-}
+	"github.com/multica-ai/multica/server/pkg/agent"
+)
 
 // ProviderSupportsIsolatedTools reports whether a provider may run inside the
-// Docker/bwrap worker boundary.
+// Docker/bwrap worker boundary. A provider is supported when its normalized
+// name is a Multica-supported backend (agent.SupportedTypes) or a built-in
+// runtime identity (agent.IsBuiltinRuntime). Empty and unknown names are
+// refused.
 func ProviderSupportsIsolatedTools(provider string) bool {
-	return IsolatedToolProviders[strings.ToLower(strings.TrimSpace(provider))]
+	name := strings.ToLower(strings.TrimSpace(provider))
+	if name == "" {
+		return false
+	}
+	return agent.IsSupportedType(name) || agent.IsBuiltinRuntime(name)
 }
 
 // ProviderRequiresDockerBackend reports whether the provider's isolated support
 // depends on the Docker task home (config/credentials seeded into the
-// per-task home). bwrap keeps its host-home policy, so these providers are
-// refused there rather than running without auth.
+// per-task home). Only the legacy bwrap set — codex, cursor, opencode — keeps
+// its host-home policy; every other supported provider is seeded into the
+// per-task home and refused on bwrap rather than running without auth.
 func ProviderRequiresDockerBackend(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude", "antigravity":
-		return true
-	default:
+	case "codex", "cursor", "opencode":
 		return false
+	default:
+		return true
 	}
 }
