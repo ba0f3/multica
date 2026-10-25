@@ -22,6 +22,13 @@ func TestCreateIssueAssignedToSquadEnqueuesLeader(t *testing.T) {
 		t.Fatalf("load test agent: %v", err)
 	}
 
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime r SET last_seen_at = now()
+		FROM agent a WHERE a.id = $1 AND a.runtime_id = r.id
+	`, leaderID); err != nil {
+		t.Fatalf("refresh leader runtime: %v", err)
+	}
+
 	// Create a squad with that agent as leader.
 	var squadID string
 	if err := testPool.QueryRow(ctx, `

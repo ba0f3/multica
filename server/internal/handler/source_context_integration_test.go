@@ -345,7 +345,8 @@ func TestCommentSourceContextLifecycle(t *testing.T) {
 		}
 		if _, err := testPool.Exec(ctx, `
 			UPDATE agent_runtime
-			SET metadata = '{"cli_version":"0.4.3","capabilities":["source_context_quick_create_v1"]}'::jsonb
+			SET metadata = '{"cli_version":"0.4.3","capabilities":["source_context_quick_create_v1"]}'::jsonb,
+			    last_seen_at = now()
 			WHERE id = $1
 		`, testRuntimeID); err != nil {
 			t.Fatalf("enable source-context capability: %v", err)

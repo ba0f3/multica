@@ -23,6 +23,9 @@ import (
 
 func createWebhookTestAgent(t *testing.T, name string) string {
 	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET last_seen_at = now() WHERE id = $1`, testRuntimeID); err != nil {
+		t.Fatalf("refresh webhook runtime: %v", err)
+	}
 	var agentID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
