@@ -52,7 +52,8 @@ func TestIsolatedCheckoutIsCommittableOnWindows(t *testing.T) {
 	taskID := "a1b2c3d4-e5f6-7890-abcd-" + hex.EncodeToString(taskSuffixHash[:6])
 	envRoot := execenv.PredictRootDir(execenv.RootDirParams{
 		WorkspacesRoot:  workspacesRoot,
-		Scope:           Scope{WorkspaceID: "a05b0e10-ee7a-4603-a72d-a548b2390cb2", UserID: "test-user"},
+		WorkspaceID:     "a05b0e10-ee7a-4603-a72d-a548b2390cb2",
+		ExecutionUserID: "test-user",
 		WorkspaceSlug:   strings.Repeat("workspace", 20),
 		TaskID:          taskID,
 		IssueIdentifier: strings.Repeat("issue", 20),
