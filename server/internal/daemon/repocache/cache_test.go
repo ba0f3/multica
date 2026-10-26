@@ -173,10 +173,10 @@ func TestSyncSurvivesDeletedProcessWorkingDirectory(t *testing.T) {
 	}
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-deleted-cwd", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-deleted-cwd", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("Sync with deleted process working directory failed: %v", err)
 	}
-	if cachedPath := cache.Lookup("ws-deleted-cwd", sourceRepo); !isBareRepo(cachedPath) {
+	if cachedPath := cache.Lookup(Scope{WorkspaceID: "ws-deleted-cwd", UserID: "test-user"}, sourceRepo); !isBareRepo(cachedPath) {
 		t.Fatalf("expected synced bare repo, got %q", cachedPath)
 	}
 }
@@ -309,7 +309,7 @@ func TestCreateWorktreeContextReturnsBusyAfterBoundedLockWait(t *testing.T) {
 		workspaceID = "ws-1"
 		repoURL     = "https://github.com/org/repo.git"
 	)
-	barePath := cache.BarePath(workspaceID, repoURL)
+	barePath := cache.BarePath(Scope{WorkspaceID: workspaceID, UserID: "test-user"}, repoURL)
 	if err := os.MkdirAll(barePath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestCreateWorktreeContextReturnsBusyAfterBoundedLockWait(t *testing.T) {
 	defer lock.Unlock()
 
 	_, err := cache.CreateWorktreeContext(context.Background(), WorktreeParams{
-		WorkspaceID:     workspaceID,
+		Scope:           Scope{WorkspaceID: workspaceID, UserID: "test-user"},
 		RepoURL:         repoURL,
 		WorkDir:         t.TempDir(),
 		LockWaitTimeout: 20 * time.Millisecond,
@@ -349,7 +349,7 @@ func TestCreateWorktreeContextCancelsRunningGitProcessTree(t *testing.T) {
 		workspaceID = "ws-1"
 		repoURL     = "https://github.com/org/repo.git"
 	)
-	barePath := cache.BarePath(workspaceID, repoURL)
+	barePath := cache.BarePath(Scope{WorkspaceID: workspaceID, UserID: "test-user"}, repoURL)
 	if err := os.MkdirAll(barePath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -361,9 +361,9 @@ func TestCreateWorktreeContextCancelsRunningGitProcessTree(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	_, err := cache.CreateWorktreeContext(ctx, WorktreeParams{
-		WorkspaceID: workspaceID,
-		RepoURL:     repoURL,
-		WorkDir:     t.TempDir(),
+		Scope:   Scope{WorkspaceID: workspaceID, UserID: "test-user"},
+		RepoURL: repoURL,
+		WorkDir: t.TempDir(),
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("CreateWorktreeContext error = %v, want deadline exceeded", err)
@@ -516,7 +516,7 @@ func TestSyncAndLookup(t *testing.T) {
 	cache := New(cacheRoot, testLogger())
 
 	// Sync should clone the repo.
-	err := cache.Sync("ws-123", []RepoInfo{
+	err := cache.Sync(Scope{WorkspaceID: "ws-123", UserID: "test-user"}, []RepoInfo{
 		{URL: sourceRepo},
 	})
 	if err != nil {
@@ -524,7 +524,7 @@ func TestSyncAndLookup(t *testing.T) {
 	}
 
 	// Lookup should find the cached repo.
-	path := cache.Lookup("ws-123", sourceRepo)
+	path := cache.Lookup(Scope{WorkspaceID: "ws-123", UserID: "test-user"}, sourceRepo)
 	if path == "" {
 		t.Fatal("expected to find cached repo")
 	}
@@ -533,12 +533,12 @@ func TestSyncAndLookup(t *testing.T) {
 	}
 
 	// Lookup for unknown URL should return empty.
-	if got := cache.Lookup("ws-123", "https://github.com/org/unknown"); got != "" {
+	if got := cache.Lookup(Scope{WorkspaceID: "ws-123", UserID: "test-user"}, "https://github.com/org/unknown"); got != "" {
 		t.Fatalf("expected empty for unknown URL, got %q", got)
 	}
 
 	// Lookup for unknown workspace should return empty.
-	if got := cache.Lookup("ws-999", sourceRepo); got != "" {
+	if got := cache.Lookup(Scope{WorkspaceID: "ws-999", UserID: "test-user"}, sourceRepo); got != "" {
 		t.Fatalf("expected empty for unknown workspace, got %q", got)
 	}
 }
@@ -582,12 +582,12 @@ func TestSyncKeepsDistinctCachesForSegmentBoundaryColliders(t *testing.T) {
 	runGitAuthored(t, srcB, "commit", "-m", "B-content")
 
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: srcA}, {URL: srcB}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: srcA}, {URL: srcB}}); err != nil {
 		t.Fatalf("Sync failed: %v", err)
 	}
 
-	pathA := cache.Lookup("ws-1", srcA)
-	pathB := cache.Lookup("ws-1", srcB)
+	pathA := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, srcA)
+	pathB := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, srcB)
 	if pathA == "" || pathB == "" {
 		t.Fatalf("missing cache entry: A=%q B=%q", pathA, pathB)
 	}
@@ -655,7 +655,7 @@ func TestSyncFetchesExisting(t *testing.T) {
 	cache := New(cacheRoot, testLogger())
 
 	// First sync: clone.
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("first sync failed: %v", err)
 	}
 
@@ -663,7 +663,7 @@ func TestSyncFetchesExisting(t *testing.T) {
 	// refspec layout, fetches write to refs/remotes/origin/*, not the bare
 	// repo's own refs/heads/*, so reading the bare HEAD would return the
 	// fossil snapshot from initial clone.
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	oldHead := gitRefCommit(t, barePath, getRemoteDefaultBranch(barePath))
 
 	// Add a commit to source.
@@ -674,7 +674,7 @@ func TestSyncFetchesExisting(t *testing.T) {
 	}
 
 	// Second sync: should fetch (not re-clone).
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("second sync failed: %v", err)
 	}
 
@@ -704,11 +704,11 @@ func TestWorktreeFromCache(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	if barePath == "" {
 		t.Fatal("expected cached repo")
 	}
@@ -738,17 +738,17 @@ func TestCreateWorktree(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "Code Reviewer",
-		TaskID:      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir,
+		AgentName: "Code Reviewer",
+		TaskID:    "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -779,16 +779,16 @@ func TestCreateWorktreeWithIsolatedGitMetadata(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	baseRef := getRemoteDefaultBranch(barePath)
 	baseCommit := gitRefCommit(t, barePath, baseRef)
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Linux Codex",
@@ -920,7 +920,7 @@ func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("initial sync failed: %v", err)
 	}
 
@@ -928,7 +928,7 @@ func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	checkout := func(taskID string, fresh bool) *WorktreeResult {
 		t.Helper()
 		result, err := cache.CreateWorktree(WorktreeParams{
-			WorkspaceID:         "ws-1",
+			Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 			RepoURL:             sourceRepo,
 			WorkDir:             workDir,
 			AgentName:           "Linux Codex",
@@ -959,7 +959,7 @@ func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 
 	addEmptyCommit(t, sourceRepo, "upstream advance")
 	wantHead := gitHead(t, sourceRepo)
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("refresh sync failed: %v", err)
 	}
 
@@ -1010,17 +1010,17 @@ func TestCreateWorktreeMigratesLinkedWorktreeToIsolatedMetadata(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	linked, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "Linux Codex",
-		TaskID:      "11111111-1111-1111-1111-111111111111",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir,
+		AgentName: "Linux Codex",
+		TaskID:    "11111111-1111-1111-1111-111111111111",
 	})
 	if err != nil {
 		t.Fatalf("linked CreateWorktree failed: %v", err)
@@ -1030,7 +1030,7 @@ func TestCreateWorktreeMigratesLinkedWorktreeToIsolatedMetadata(t *testing.T) {
 	}
 
 	isolated, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Linux Codex",
@@ -1055,7 +1055,7 @@ func TestCreateWorktreeMigratesLinkedWorktreeToIsolatedMetadata(t *testing.T) {
 		t.Fatalf("migrated checkout local heads = %q, want only %s", got, isolated.BranchName)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	out, err := runGitOutput("-C", barePath, "worktree", "list", "--porcelain")
 	if err != nil {
 		t.Fatalf("list cache worktrees: %v", err)
@@ -1106,10 +1106,10 @@ func TestIsolatedCheckoutCloneWithoutHardlinksIsIndependent(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	baseCommit := gitRefCommit(t, barePath, getRemoteDefaultBranch(barePath))
 	checkoutPath := filepath.Join(t.TempDir(), "repo")
 
@@ -1197,17 +1197,17 @@ func TestCreateWorktreeExcludesOpenCodeSkills(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "OpenCode",
-		TaskID:      "opencode-exclude-test",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir,
+		AgentName: "OpenCode",
+		TaskID:    "opencode-exclude-test",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -1238,17 +1238,17 @@ func TestCreateWorktreeExcludesAgentSidecars(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "CodeBuddy",
-		TaskID:      "codebuddy-exclude-test",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir,
+		AgentName: "CodeBuddy",
+		TaskID:    "codebuddy-exclude-test",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -1281,17 +1281,17 @@ func TestCreateWorktreeDoesNotExcludeReasonixProjectConfig(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "Reasonix",
-		TaskID:      "reasonix-exclude-test",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir,
+		AgentName: "Reasonix",
+		TaskID:    "reasonix-exclude-test",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -1341,11 +1341,11 @@ func TestCreateWorktreeNotCached(t *testing.T) {
 	cache := New(cacheRoot, testLogger())
 
 	_, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     "https://github.com/org/nonexistent",
-		WorkDir:     t.TempDir(),
-		AgentName:   "Agent",
-		TaskID:      "test-task-id",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   "https://github.com/org/nonexistent",
+		WorkDir:   t.TempDir(),
+		AgentName: "Agent",
+		TaskID:    "test-task-id",
 	})
 	if err == nil {
 		t.Fatal("expected error for uncached repo")
@@ -1372,17 +1372,17 @@ func TestCreateWorktreeWithRequestedBranchRef(t *testing.T) {
 	}
 
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     t.TempDir(),
-		Ref:         "review-branch",
-		AgentName:   "Reviewer",
-		TaskID:      "review-task-id",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   t.TempDir(),
+		Ref:       "review-branch",
+		AgentName: "Reviewer",
+		TaskID:    "review-task-id",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -1403,17 +1403,17 @@ func TestCreateWorktreeWithRequestedCommitRef(t *testing.T) {
 	addEmptyCommit(t, sourceRepo, "second commit")
 
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     t.TempDir(),
-		Ref:         firstCommit,
-		AgentName:   "Reviewer",
-		TaskID:      "commit-task-id",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   t.TempDir(),
+		Ref:       firstCommit,
+		AgentName: "Reviewer",
+		TaskID:    "commit-task-id",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -1435,17 +1435,17 @@ func TestCreateWorktreeWithRequestedTagRef(t *testing.T) {
 	addEmptyCommit(t, sourceRepo, "post-tag commit")
 
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     t.TempDir(),
-		Ref:         "v1",
-		AgentName:   "Reviewer",
-		TaskID:      "tag-task-id",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   t.TempDir(),
+		Ref:       "v1",
+		AgentName: "Reviewer",
+		TaskID:    "tag-task-id",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -1460,17 +1460,17 @@ func TestCreateWorktreeWithUnknownRequestedRef(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	_, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     t.TempDir(),
-		Ref:         "missing-ref",
-		AgentName:   "Reviewer",
-		TaskID:      "missing-ref-task-id",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   t.TempDir(),
+		Ref:       "missing-ref",
+		AgentName: "Reviewer",
+		TaskID:    "missing-ref-task-id",
 	})
 	if err == nil {
 		t.Fatal("expected unknown ref error")
@@ -1546,18 +1546,18 @@ func TestCreateWorktreeFetchesDespiteAgentBranchOnRemote(t *testing.T) {
 
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	// First worktree creates refs/heads/agent/... inside the bare cache.
 	workDir1 := t.TempDir()
 	result1, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir1,
-		AgentName:   "agent",
-		TaskID:      "t1111111-0000-0000-0000-000000000000",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir1,
+		AgentName: "agent",
+		TaskID:    "t1111111-0000-0000-0000-000000000000",
 	})
 	if err != nil {
 		t.Fatalf("first CreateWorktree failed: %v", err)
@@ -1586,11 +1586,11 @@ func TestCreateWorktreeFetchesDespiteAgentBranchOnRemote(t *testing.T) {
 	// refspec this succeeds and the new worktree sees sourceHead.
 	workDir2 := t.TempDir()
 	result2, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir2,
-		AgentName:   "agent",
-		TaskID:      "t2222222-0000-0000-0000-000000000000",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir2,
+		AgentName: "agent",
+		TaskID:    "t2222222-0000-0000-0000-000000000000",
 	})
 	if err != nil {
 		t.Fatalf("second CreateWorktree failed: %v", err)
@@ -1626,10 +1626,10 @@ func TestEnsureRemoteTrackingLayoutMigratesLegacyCache(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	// Reset to the legacy mirror refspec to simulate a cache created by an
 	// older version of the daemon.
@@ -1679,10 +1679,10 @@ func TestCreateWorktreePathCollisionDoesNotLeakBranch(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	// Pre-create the target worktree path as a plain non-empty directory.
 	workDir := t.TempDir()
@@ -1696,11 +1696,11 @@ func TestCreateWorktreePathCollisionDoesNotLeakBranch(t *testing.T) {
 	}
 
 	_, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "agent",
-		TaskID:      "t1111111-0000-0000-0000-000000000000",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   workDir,
+		AgentName: "agent",
+		TaskID:    "t1111111-0000-0000-0000-000000000000",
 	})
 	if err == nil {
 		t.Fatal("expected CreateWorktree to fail when path exists as non-worktree")
@@ -1726,10 +1726,10 @@ func TestGetRemoteDefaultBranchScansForCustomDefault(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	// Resolve the existing default branch's commit so we can repoint a
 	// custom-named ref at it, then wipe the standard refs to force the
@@ -1768,10 +1768,10 @@ func TestGetRemoteDefaultBranchFallsBackToBareHead(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	// Force the cache into a state that mimics "legacy mirror clone whose
 	// post-migration backfill fetch failed":
@@ -1812,10 +1812,10 @@ func TestGitFetchRefreshesOriginHeadAfterDefaultChange(t *testing.T) {
 
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	// Precondition: cache is already modern and origin/HEAD points at the
 	// source's initial default branch.
@@ -1864,10 +1864,10 @@ func TestGetRemoteDefaultBranchUsesBareHeadHintForCustomDefault(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	existing := getRemoteDefaultBranch(barePath)
 	if existing == "" {
@@ -1909,13 +1909,13 @@ func TestCreateWorktreeInstallsCoAuthoredByHook(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Test Agent",
@@ -1953,13 +1953,13 @@ func TestCoAuthoredByHookIdempotent(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Test Agent",
@@ -2003,7 +2003,7 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
@@ -2011,7 +2011,7 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 	// shared hooks dir.
 	workDir1 := t.TempDir()
 	if _, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir1,
 		AgentName:           "Test Agent",
@@ -2021,7 +2021,7 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 		t.Fatalf("CreateWorktree (enabled) failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	hookPath := filepath.Join(barePath, "hooks", "prepare-commit-msg")
 	if _, err := os.Stat(hookPath); err != nil {
 		t.Fatalf("precondition: expected hook to be installed at %s: %v", hookPath, err)
@@ -2032,7 +2032,7 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 	// trailer.
 	workDir2 := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir2,
 		AgentName:           "Test Agent",
@@ -2076,7 +2076,7 @@ func TestCreateWorktreeRemovesLegacyCoAuthoredByHook(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
@@ -2107,7 +2107,7 @@ fi
 git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 `
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	hooksDir := filepath.Join(barePath, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
@@ -2119,7 +2119,7 @@ git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Test Agent",
@@ -2159,11 +2159,11 @@ func TestRemoveCoAuthoredByHookPreservesUserHook(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	hooksDir := filepath.Join(barePath, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
@@ -2176,7 +2176,7 @@ func TestRemoveCoAuthoredByHookPreservesUserHook(t *testing.T) {
 
 	workDir := t.TempDir()
 	if _, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Test Agent",
@@ -2206,10 +2206,10 @@ func TestGetRemoteDefaultBranchAmbiguousOriginReturnsEmpty(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	cacheRoot := t.TempDir()
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 
 	existing := getRemoteDefaultBranch(barePath)
 	if existing == "" {
@@ -2287,11 +2287,11 @@ func TestCreateWorktreeStampsLastUsed(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	if barePath == "" {
 		t.Fatal("expected cached repo")
 	}
@@ -2301,11 +2301,11 @@ func TestCreateWorktreeStampsLastUsed(t *testing.T) {
 	}
 
 	if _, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     t.TempDir(),
-		AgentName:   "Code Reviewer",
-		TaskID:      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   t.TempDir(),
+		AgentName: "Code Reviewer",
+		TaskID:    "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 	}); err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
 	}
@@ -2322,11 +2322,11 @@ func TestBarePathIsIndependentOfExistence(t *testing.T) {
 	t.Parallel()
 	cache := New(t.TempDir(), testLogger())
 
-	path := cache.BarePath("ws-1", "https://example.com/acme/widgets.git")
+	path := cache.BarePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "https://example.com/acme/widgets.git")
 	if path == "" {
 		t.Fatal("BarePath must return a path even when nothing is cached")
 	}
-	if cache.Lookup("ws-1", "https://example.com/acme/widgets.git") != "" {
+	if cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "https://example.com/acme/widgets.git") != "" {
 		t.Error("Lookup must still report an uncached repo as absent")
 	}
 }
@@ -2380,13 +2380,13 @@ func TestCoAuthoredByStateStopsTrailerInExistingCheckout(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Test Agent",
@@ -2417,7 +2417,7 @@ func TestCoAuthoredByStateStopsTrailerInExistingCheckout(t *testing.T) {
 
 	// The user flips the toggle off. No new checkout happens — the daemon
 	// only republishes the workspace's setting.
-	if err := cache.WriteCoAuthoredByState("ws-1", false); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("WriteCoAuthoredByState(false) failed: %v", err)
 	}
 
@@ -2429,7 +2429,7 @@ func TestCoAuthoredByStateStopsTrailerInExistingCheckout(t *testing.T) {
 	}
 
 	// Turning it back on restores the trailer without a new checkout either.
-	if err := cache.WriteCoAuthoredByState("ws-1", true); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, true); err != nil {
 		t.Fatalf("WriteCoAuthoredByState(true) failed: %v", err)
 	}
 	if msg := commit("d.txt", "re-enabled commit"); !strings.Contains(msg, "Co-authored-by: multica-agent") {
@@ -2447,13 +2447,13 @@ func TestCreateWorktreeInstallsGatedHook(t *testing.T) {
 	cacheRoot := t.TempDir()
 
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	workDir := t.TempDir()
 	if _, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Test Agent",
@@ -2463,8 +2463,8 @@ func TestCreateWorktreeInstallsGatedHook(t *testing.T) {
 		t.Fatalf("CreateWorktree failed: %v", err)
 	}
 
-	statePath := cache.CoAuthoredByStatePath("ws-1")
-	hook, err := os.ReadFile(filepath.Join(cache.Lookup("ws-1", sourceRepo), "hooks", "prepare-commit-msg"))
+	statePath := cache.CoAuthoredByStatePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"})
+	hook, err := os.ReadFile(filepath.Join(cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo), "hooks", "prepare-commit-msg"))
 	if err != nil {
 		t.Fatalf("read hook: %v", err)
 	}
@@ -2486,10 +2486,10 @@ func TestWriteCoAuthoredByStateIsAtomic(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		enabled := i%2 == 0
-		if err := cache.WriteCoAuthoredByState("ws-1", enabled); err != nil {
+		if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, enabled); err != nil {
 			t.Fatalf("WriteCoAuthoredByState failed: %v", err)
 		}
-		state, err := os.ReadFile(cache.CoAuthoredByStatePath("ws-1"))
+		state, err := os.ReadFile(cache.CoAuthoredByStatePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"}))
 		if err != nil {
 			t.Fatalf("read state: %v", err)
 		}
@@ -2502,7 +2502,7 @@ func TestWriteCoAuthoredByStateIsAtomic(t *testing.T) {
 		}
 	}
 
-	entries, err := os.ReadDir(filepath.Dir(cache.CoAuthoredByStatePath("ws-1")))
+	entries, err := os.ReadDir(filepath.Dir(cache.CoAuthoredByStatePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"})))
 	if err != nil {
 		t.Fatalf("read workspace cache dir: %v", err)
 	}
@@ -2550,11 +2550,11 @@ func seedUpgradedHost(t *testing.T, taskID string) (cache *Cache, worktreePath, 
 	t.Helper()
 	sourceRepo := createTestRepo(t)
 	cache = New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             t.TempDir(),
 		AgentName:           "Test Agent",
@@ -2565,7 +2565,7 @@ func seedUpgradedHost(t *testing.T, taskID string) (cache *Cache, worktreePath, 
 		t.Fatalf("CreateWorktree failed: %v", err)
 	}
 
-	hookPath = filepath.Join(cache.Lookup("ws-1", sourceRepo), "hooks", "prepare-commit-msg")
+	hookPath = filepath.Join(cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo), "hooks", "prepare-commit-msg")
 	if err := os.WriteFile(hookPath, []byte(releasedUngatedHook), 0o755); err != nil {
 		t.Fatalf("seed previous-release hook: %v", err)
 	}
@@ -2601,10 +2601,10 @@ func TestReconcileCoAuthoredByHooksMigratesReleasedHook(t *testing.T) {
 
 	// The daemon learns the setting is off: it publishes the new value and
 	// reconciles the hooks it owns. No checkout happens.
-	if err := cache.WriteCoAuthoredByState("ws-1", false); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("WriteCoAuthoredByState failed: %v", err)
 	}
-	if err := cache.ReconcileCoAuthoredByHooks("ws-1", false); err != nil {
+	if err := cache.ReconcileCoAuthoredByHooks(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("ReconcileCoAuthoredByHooks failed: %v", err)
 	}
 
@@ -2623,10 +2623,10 @@ func TestReconcileCoAuthoredByHooksUpgradesReleasedHookInPlace(t *testing.T) {
 	t.Parallel()
 	cache, worktreePath, hookPath := seedUpgradedHost(t, "66666666-0000-0000-0000-000000000000")
 
-	if err := cache.WriteCoAuthoredByState("ws-1", true); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, true); err != nil {
 		t.Fatalf("WriteCoAuthoredByState failed: %v", err)
 	}
-	if err := cache.ReconcileCoAuthoredByHooks("ws-1", true); err != nil {
+	if err := cache.ReconcileCoAuthoredByHooks(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, true); err != nil {
 		t.Fatalf("ReconcileCoAuthoredByHooks failed: %v", err)
 	}
 
@@ -2634,7 +2634,7 @@ func TestReconcileCoAuthoredByHooksUpgradesReleasedHookInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hook: %v", err)
 	}
-	if !strings.Contains(string(hook), filepath.ToSlash(cache.CoAuthoredByStatePath("ws-1"))) {
+	if !strings.Contains(string(hook), filepath.ToSlash(cache.CoAuthoredByStatePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"}))) {
 		t.Fatalf("hook was not upgraded to read the state file.\ngot:\n%s", hook)
 	}
 	if msg := commitInWorktree(t, worktreePath, "a.txt", "still enabled"); !strings.Contains(msg, "Co-authored-by: multica-agent") {
@@ -2642,7 +2642,7 @@ func TestReconcileCoAuthoredByHooksUpgradesReleasedHookInPlace(t *testing.T) {
 	}
 
 	// The point of the upgrade: from here a publish alone is enough.
-	if err := cache.WriteCoAuthoredByState("ws-1", false); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("WriteCoAuthoredByState failed: %v", err)
 	}
 	if msg := commitInWorktree(t, worktreePath, "b.txt", "toggled off"); strings.Contains(msg, "Co-authored-by: multica-agent") {
@@ -2656,12 +2656,12 @@ func TestReconcileCoAuthoredByHooksPreservesUserHook(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	const userHook = "#!/bin/sh\n# my own hook\nexit 0\n"
-	hooksDir := filepath.Join(cache.Lookup("ws-1", sourceRepo), "hooks")
+	hooksDir := filepath.Join(cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo), "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
 	}
@@ -2671,7 +2671,7 @@ func TestReconcileCoAuthoredByHooksPreservesUserHook(t *testing.T) {
 	}
 
 	for _, enabled := range []bool{false, true} {
-		if err := cache.ReconcileCoAuthoredByHooks("ws-1", enabled); err != nil {
+		if err := cache.ReconcileCoAuthoredByHooks(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, enabled); err != nil {
 			t.Fatalf("ReconcileCoAuthoredByHooks(%v) failed: %v", enabled, err)
 		}
 		got, err := os.ReadFile(hookPath)
@@ -2693,18 +2693,18 @@ func TestCreateWorktreeDoesNotResurrectDisabledState(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	// The daemon published "off" while a checkout that snapshotted "on" was
 	// still waiting on its fetch.
-	if err := cache.WriteCoAuthoredByState("ws-1", false); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("WriteCoAuthoredByState failed: %v", err)
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             t.TempDir(),
 		AgentName:           "Test Agent",
@@ -2715,7 +2715,7 @@ func TestCreateWorktreeDoesNotResurrectDisabledState(t *testing.T) {
 		t.Fatalf("CreateWorktree failed: %v", err)
 	}
 
-	state, err := os.ReadFile(cache.CoAuthoredByStatePath("ws-1"))
+	state, err := os.ReadFile(cache.CoAuthoredByStatePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"}))
 	if err != nil {
 		t.Fatalf("read co-authored-by state: %v", err)
 	}
@@ -2736,12 +2736,12 @@ func TestReconcileCoAuthoredByHookInCheckoutMigratesReleasedHook(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             t.TempDir(),
 		AgentName:           "Test Agent",
@@ -2765,10 +2765,10 @@ func TestReconcileCoAuthoredByHookInCheckoutMigratesReleasedHook(t *testing.T) {
 		t.Fatalf("precondition: the previous release's hook should still add the trailer.\ngot:\n%s", msg)
 	}
 
-	if err := cache.WriteCoAuthoredByState("ws-1", false); err != nil {
+	if err := cache.WriteCoAuthoredByState(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("WriteCoAuthoredByState failed: %v", err)
 	}
-	if err := cache.ReconcileCoAuthoredByHookInCheckout(result.Path, "ws-1", false); err != nil {
+	if err := cache.ReconcileCoAuthoredByHookInCheckout(result.Path, Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("ReconcileCoAuthoredByHookInCheckout failed: %v", err)
 	}
 
@@ -2787,12 +2787,12 @@ func TestReconcileCoAuthoredByHookInCheckoutIgnoresLinkedWorktree(t *testing.T) 
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             t.TempDir(),
 		AgentName:           "Test Agent",
@@ -2803,13 +2803,13 @@ func TestReconcileCoAuthoredByHookInCheckoutIgnoresLinkedWorktree(t *testing.T) 
 		t.Fatalf("CreateWorktree failed: %v", err)
 	}
 
-	if err := cache.ReconcileCoAuthoredByHookInCheckout(result.Path, "ws-1", false); err != nil {
+	if err := cache.ReconcileCoAuthoredByHookInCheckout(result.Path, Scope{WorkspaceID: "ws-1", UserID: "test-user"}, false); err != nil {
 		t.Fatalf("ReconcileCoAuthoredByHookInCheckout failed: %v", err)
 	}
 
 	// The bare cache's hook — the one that actually governs this worktree — is
 	// untouched by the per-checkout path.
-	if _, err := os.Stat(filepath.Join(cache.Lookup("ws-1", sourceRepo), "hooks", "prepare-commit-msg")); err != nil {
+	if _, err := os.Stat(filepath.Join(cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo), "hooks", "prepare-commit-msg")); err != nil {
 		t.Errorf("per-checkout reconcile disturbed the bare cache's hook: %v", err)
 	}
 }

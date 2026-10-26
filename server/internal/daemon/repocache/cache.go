@@ -372,7 +372,7 @@ func (c *Cache) CancelMaintenance() {
 	})
 }
 
-// Sync ensures all repos for a workspace are cloned (or fetched if already cached).
+// Sync clones or fetches repos in one execution user's workspace store.
 // Repos no longer in the list are left in place (cheap to keep, avoids re-cloning
 // if a repo is temporarily removed and re-added).
 //
@@ -380,14 +380,17 @@ func (c *Cache) CancelMaintenance() {
 // via lockForRepo. Different repos run sequentially within a single Sync call
 // but concurrent Sync calls (different workspaces, or the same workspace
 // re-synced while checkouts are running) do not block each other.
-func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
-	return c.SyncContext(context.Background(), workspaceID, repos)
+func (c *Cache) Sync(scope Scope, repos []RepoInfo) error {
+	return c.SyncContext(context.Background(), scope, repos)
 }
 
 // SyncContext is Sync with cancellation propagated through repo lock waits,
 // clone, fetch, and ref-layout migration.
-func (c *Cache) SyncContext(ctx context.Context, workspaceID string, repos []RepoInfo) error {
-	wsDir := filepath.Join(c.root, workspaceID)
+func (c *Cache) SyncContext(ctx context.Context, scope Scope, repos []RepoInfo) error {
+	wsDir, err := c.ScopeRoot(scope)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		return fmt.Errorf("create workspace cache dir: %w", err)
 	}
@@ -401,6 +404,9 @@ func (c *Cache) SyncContext(ctx context.Context, workspaceID string, repos []Rep
 			continue
 		}
 		barePath := filepath.Join(wsDir, bareDirName(repo.URL))
+		if err := rejectRepoAlias(barePath); err != nil {
+			return err
+		}
 
 		repoLock := c.lockForRepo(barePath)
 		if err := repoLock.LockContext(ctx); err != nil {
@@ -431,11 +437,11 @@ func (c *Cache) SyncContext(ctx context.Context, workspaceID string, repos []Rep
 	return firstErr
 }
 
-// Lookup returns the local bare clone path for a repo URL within a workspace.
+// Lookup returns a repo's bare path in the execution user's workspace store.
 // Returns "" if not cached.
-func (c *Cache) Lookup(workspaceID, url string) string {
-	barePath := c.BarePath(workspaceID, url)
-	if isBareRepo(barePath) {
+func (c *Cache) Lookup(scope Scope, url string) string {
+	barePath := c.BarePath(scope, url)
+	if barePath != "" && rejectRepoAlias(barePath) == nil && isBareRepo(barePath) {
 		return barePath
 	}
 	return ""
@@ -445,18 +451,19 @@ func (c *Cache) Lookup(workspaceID, url string) string {
 // yet. Lookup is the "is it cached?" question; this is the "where would it be?"
 // question, which the GC needs to map a set of live repo URLs onto the
 // directories it is about to consider evicting.
-func (c *Cache) BarePath(workspaceID, url string) string {
-	return filepath.Join(c.root, workspaceID, bareDirName(url))
+func (c *Cache) BarePath(scope Scope, url string) string {
+	root, err := c.ScopeRoot(scope)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, bareDirName(url))
 }
 
 // lastUsedFile records the last time a task asked for a worktree from this
 // bare repo. It lives inside the bare repo so it is removed with it.
 //
-// Directory mtime cannot answer this question. Every daemon restart re-syncs
-// each registered workspace's full repo list, and that path fetches every
-// cached repo (see Sync), refreshing the mtime of repos no task has checked
-// out in months. atime is worse: noatime is common on Linux and Windows
-// disables it by default. So the signal has to be written explicitly, at the
+// Directory mtime also changes during fetch and maintenance. atime is
+// unreliable on noatime filesystems and Windows. Record usage explicitly at the
 // one place that means a repo was really used — CreateWorktree.
 const lastUsedFile = ".multica_last_used"
 
@@ -755,7 +762,7 @@ func setFetchRefspecContext(ctx context.Context, barePath, refspec string) error
 
 // WorktreeParams holds inputs for creating a worktree from a cached bare clone.
 type WorktreeParams struct {
-	WorkspaceID         string // workspace that owns the repo
+	Scope               Scope  // workspace and execution user that own the repo
 	RepoURL             string // remote URL to look up in the cache
 	WorkDir             string // parent directory for the worktree (e.g. task workdir)
 	Ref                 string // optional branch, tag, or commit to base the worktree on
@@ -820,9 +827,12 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 // lock is held, so a client that times out behind maintenance cannot leave a
 // late, unwanted checkout.
 func (c *Cache) CreateWorktreeContext(ctx context.Context, params WorktreeParams) (*WorktreeResult, error) {
-	barePath := c.Lookup(params.WorkspaceID, params.RepoURL)
+	if err := params.Scope.Validate(); err != nil {
+		return nil, err
+	}
+	barePath := c.Lookup(params.Scope, params.RepoURL)
 	if barePath == "" {
-		return nil, fmt.Errorf("repo not found in cache: %s (workspace: %s)", params.RepoURL, params.WorkspaceID)
+		return nil, fmt.Errorf("repo not found in cache: %s (workspace: %s)", params.RepoURL, params.Scope.WorkspaceID)
 	}
 
 	// Serialize concurrent CreateWorktree calls on the same bare repo. Git's
@@ -1850,11 +1860,15 @@ const (
 // CoAuthoredByStatePath returns the file the prepare-commit-msg hook consults
 // at commit time for a workspace. Empty when the workspace is unknown, which
 // installs a hook with no gate — the pre-MUL-6921 behavior.
-func (c *Cache) CoAuthoredByStatePath(workspaceID string) string {
-	if workspaceID == "" {
+func (c *Cache) CoAuthoredByStatePath(scope Scope) string {
+	if scope.Validate() != nil {
 		return ""
 	}
-	return filepath.Join(c.root, workspaceID, coAuthoredByStateFile)
+	root, err := c.ScopeRoot(scope)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, coAuthoredByStateFile)
 }
 
 // WriteCoAuthoredByState publishes the workspace's current setting to every
@@ -1865,8 +1879,8 @@ func (c *Cache) CoAuthoredByStatePath(workspaceID string) string {
 //
 // The write is atomic (temp file + rename) so a hook running concurrently
 // reads either the old value or the new one, never a half-written file.
-func (c *Cache) WriteCoAuthoredByState(workspaceID string, enabled bool) error {
-	path := c.CoAuthoredByStatePath(workspaceID)
+func (c *Cache) WriteCoAuthoredByState(scope Scope, enabled bool) error {
+	path := c.CoAuthoredByStatePath(scope)
 	if path == "" {
 		return nil
 	}
@@ -1919,11 +1933,11 @@ func (c *Cache) WriteCoAuthoredByState(workspaceID string, enabled bool) error {
 // us).
 func (c *Cache) applyCoAuthoredBySettingContext(ctx context.Context, worktreePath string, params WorktreeParams) {
 	enabled := params.CoAuthoredByEnabled
-	if published, ok := c.readCoAuthoredByState(params.WorkspaceID); ok {
+	if published, ok := c.readCoAuthoredByState(params.Scope); ok {
 		enabled = published
 	}
 	if enabled {
-		if err := installCoAuthoredByHookContext(ctx, worktreePath, c.CoAuthoredByStatePath(params.WorkspaceID)); err != nil {
+		if err := installCoAuthoredByHookContext(ctx, worktreePath, c.CoAuthoredByStatePath(params.Scope)); err != nil {
 			c.logger.Warn("repo checkout: install co-authored-by hook failed (non-fatal)", "error", err)
 		}
 		return
@@ -1936,8 +1950,8 @@ func (c *Cache) applyCoAuthoredBySettingContext(ctx context.Context, worktreePat
 // readCoAuthoredByState reports the setting the daemon last published for a
 // workspace. ok is false when nothing has been published — the caller decides
 // what "unknown" means for it.
-func (c *Cache) readCoAuthoredByState(workspaceID string) (enabled, ok bool) {
-	path := c.CoAuthoredByStatePath(workspaceID)
+func (c *Cache) readCoAuthoredByState(scope Scope) (enabled, ok bool) {
+	path := c.CoAuthoredByStatePath(scope)
 	if path == "" {
 		return false, false
 	}
@@ -1968,11 +1982,14 @@ func (c *Cache) readCoAuthoredByState(workspaceID string) (enabled, ok bool) {
 // knows. Isolated checkouts keep their hook inside a task workdir; the daemon
 // finds those and reconciles them one at a time through
 // ReconcileCoAuthoredByHookInCheckout.
-func (c *Cache) ReconcileCoAuthoredByHooks(workspaceID string, enabled bool) error {
-	if workspaceID == "" {
+func (c *Cache) ReconcileCoAuthoredByHooks(scope Scope, enabled bool) error {
+	if scope.Validate() != nil {
 		return nil
 	}
-	wsDir := filepath.Join(c.root, workspaceID)
+	wsDir, err := c.ScopeRoot(scope)
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(wsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1990,7 +2007,7 @@ func (c *Cache) ReconcileCoAuthoredByHooks(workspaceID string, enabled bool) err
 		if !isBareRepo(barePath) {
 			continue
 		}
-		if err := c.reconcileHookAt(filepath.Join(barePath, "hooks"), workspaceID, enabled); err != nil && firstErr == nil {
+		if err := c.reconcileHookAt(filepath.Join(barePath, "hooks"), scope, enabled); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -2005,8 +2022,8 @@ func (c *Cache) ReconcileCoAuthoredByHooks(workspaceID string, enabled bool) err
 //
 // A linked worktree has a .git FILE pointing at the bare cache; it is skipped
 // here because its hook is reconciled through the bare cache instead.
-func (c *Cache) ReconcileCoAuthoredByHookInCheckout(checkoutPath, workspaceID string, enabled bool) error {
-	if checkoutPath == "" || workspaceID == "" {
+func (c *Cache) ReconcileCoAuthoredByHookInCheckout(checkoutPath string, scope Scope, enabled bool) error {
+	if checkoutPath == "" || scope.Validate() != nil {
 		return nil
 	}
 	gitDir := filepath.Join(checkoutPath, ".git")
@@ -2014,13 +2031,13 @@ func (c *Cache) ReconcileCoAuthoredByHookInCheckout(checkoutPath, workspaceID st
 	if err != nil || !info.IsDir() {
 		return nil
 	}
-	return c.reconcileHookAt(filepath.Join(gitDir, "hooks"), workspaceID, enabled)
+	return c.reconcileHookAt(filepath.Join(gitDir, "hooks"), scope, enabled)
 }
 
 // reconcileHookAt applies the workspace setting to one hooks directory. It
 // leaves a hook the daemon did not install alone, and never creates a hooks
 // directory it did not find.
-func (c *Cache) reconcileHookAt(hooksDir, workspaceID string, enabled bool) error {
+func (c *Cache) reconcileHookAt(hooksDir string, scope Scope, enabled bool) error {
 	hookPath := filepath.Join(hooksDir, "prepare-commit-msg")
 	current, err := os.ReadFile(hookPath)
 	switch {
@@ -2041,7 +2058,7 @@ func (c *Cache) reconcileHookAt(hooksDir, workspaceID string, enabled bool) erro
 		return nil
 	}
 
-	want := prepareCommitMsgHook(c.CoAuthoredByStatePath(workspaceID))
+	want := prepareCommitMsgHook(c.CoAuthoredByStatePath(scope))
 	if exists && string(current) == want {
 		return nil
 	}

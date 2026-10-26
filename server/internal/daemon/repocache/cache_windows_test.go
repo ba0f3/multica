@@ -30,10 +30,10 @@ func TestIsolatedCheckoutIsCommittableOnWindows(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	baseRef := getRemoteDefaultBranch(barePath)
 	baseCommit := gitRefCommit(t, barePath, baseRef)
 
@@ -52,7 +52,7 @@ func TestIsolatedCheckoutIsCommittableOnWindows(t *testing.T) {
 	taskID := "a1b2c3d4-e5f6-7890-abcd-" + hex.EncodeToString(taskSuffixHash[:6])
 	envRoot := execenv.PredictRootDir(execenv.RootDirParams{
 		WorkspacesRoot:  workspacesRoot,
-		WorkspaceID:     "a05b0e10-ee7a-4603-a72d-a548b2390cb2",
+		Scope:           Scope{WorkspaceID: "a05b0e10-ee7a-4603-a72d-a548b2390cb2", UserID: "test-user"},
 		WorkspaceSlug:   strings.Repeat("workspace", 20),
 		TaskID:          taskID,
 		IssueIdentifier: strings.Repeat("issue", 20),
@@ -67,7 +67,7 @@ func TestIsolatedCheckoutIsCommittableOnWindows(t *testing.T) {
 	}
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Windows Codex",
@@ -118,14 +118,14 @@ func TestIsolatedCheckoutAcrossVolumesOnWindows(t *testing.T) {
 
 	sourceRepo := createTestRepo(t)
 	cache := New(cacheRoot, testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	barePath := cache.Lookup("ws-1", sourceRepo)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 	baseCommit := gitRefCommit(t, barePath, getRemoteDefaultBranch(barePath))
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             workDir,
 		AgentName:           "Windows Codex",

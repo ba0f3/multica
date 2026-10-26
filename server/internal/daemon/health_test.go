@@ -411,7 +411,7 @@ func TestHealthHandlerRespondsWhileTaskRepoLookupWaits(t *testing.T) {
 
 	registerDone := make(chan struct{})
 	go func() {
-		d.registerTaskRepos(workspaceID, "task-health", []RepoData{{URL: repoURL}})
+		d.registerTaskRepos(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, "task-health", []RepoData{{URL: repoURL}})
 		close(registerDone)
 	}()
 	cache.waitForLookup(t)
@@ -448,7 +448,7 @@ func TestRepoCheckoutUsesTaskScopedProjectRefByDefault(t *testing.T) {
 	cache := &recordingRepoCache{lookupPath: "/cache/org/repo.git"}
 	workDir := t.TempDir()
 	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
-	d.registerTaskRepos(workspaceID, "task-1", []RepoData{{URL: repoURL, Ref: "release/v2"}})
+	d.registerTaskRepos(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, "task-1", []RepoData{{URL: repoURL, Ref: "release/v2"}})
 
 	rec := httptest.NewRecorder()
 	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","agent_name":"Other Agent","task_id":"task-1"}`)
@@ -476,7 +476,7 @@ func TestRepoCheckoutRejectsHostCheckoutWhenIsolated(t *testing.T) {
 	cache := &recordingRepoCache{lookupPath: "/cache/org/repo.git"}
 	workDir := t.TempDir()
 	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
-	d.registerActiveRepoCheckoutTask("mat_isolated_checkout", activeRepoCheckoutTask{
+	d.registerActiveRepoCheckoutTask("mat_isolated_checkout", activeRepoCheckoutTask{ExecutionUserID: "test-user",
 		WorkspaceID:              workspaceID,
 		TaskID:                   "task-1",
 		AgentID:                  "agent-1",
@@ -706,7 +706,7 @@ func TestRepoCheckoutExplicitRefOverridesProjectDefault(t *testing.T) {
 	cache := &recordingRepoCache{lookupPath: "/cache/org/repo.git"}
 	workDir := t.TempDir()
 	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
-	d.registerTaskRepos(workspaceID, "task-1", []RepoData{{URL: repoURL, Ref: "release/v2"}})
+	d.registerTaskRepos(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, "task-1", []RepoData{{URL: repoURL, Ref: "release/v2"}})
 
 	rec := httptest.NewRecorder()
 	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","ref":"hotfix"}`)
@@ -839,7 +839,7 @@ func newRepoCheckoutTestDaemon(t *testing.T, workspaceID, repoURL, workDir strin
 		},
 		logger: slog.Default(),
 	}
-	d.registerActiveRepoCheckoutTask("mat_repo_checkout_test", activeRepoCheckoutTask{
+	d.registerActiveRepoCheckoutTask("mat_repo_checkout_test", activeRepoCheckoutTask{ExecutionUserID: "test-user",
 		WorkspaceID: workspaceID,
 		TaskID:      "task-1",
 		AgentID:     "agent-1",
@@ -888,11 +888,11 @@ func newBlockingLookupRepoCache(path string) *blockingLookupRepoCache {
 	}
 }
 
-func (c *blockingLookupRepoCache) BarePath(_, _ string) string {
+func (c *blockingLookupRepoCache) BarePath(_ repocache.Scope, _ string) string {
 	return ""
 }
 
-func (c *blockingLookupRepoCache) Lookup(_, _ string) string {
+func (c *blockingLookupRepoCache) Lookup(_ repocache.Scope, _ string) string {
 	select {
 	case <-c.lookupSeen:
 	default:
@@ -902,7 +902,7 @@ func (c *blockingLookupRepoCache) Lookup(_, _ string) string {
 	return c.path
 }
 
-func (c *blockingLookupRepoCache) Sync(string, []repocache.RepoInfo) error {
+func (c *blockingLookupRepoCache) Sync(repocache.Scope, []repocache.RepoInfo) error {
 	return nil
 }
 
@@ -920,15 +920,15 @@ type recordingRepoCache struct {
 	params     []repocache.WorktreeParams
 }
 
-func (c *recordingRepoCache) Lookup(_, _ string) string {
+func (c *recordingRepoCache) Lookup(_ repocache.Scope, _ string) string {
 	return c.lookupPath
 }
 
-func (c *recordingRepoCache) BarePath(_, _ string) string {
+func (c *recordingRepoCache) BarePath(_ repocache.Scope, _ string) string {
 	return c.lookupPath
 }
 
-func (c *recordingRepoCache) Sync(string, []repocache.RepoInfo) error {
+func (c *recordingRepoCache) Sync(repocache.Scope, []repocache.RepoInfo) error {
 	return nil
 }
 
@@ -1039,4 +1039,25 @@ func TestHealthHandlerReportsProfileIdentity(t *testing.T) {
 			t.Errorf("launched_by should be omitted for a standalone daemon, got %v", raw["launched_by"])
 		}
 	})
+}
+
+func TestRepoCheckoutUsesRegisteredUserAndPrivateGit(t *testing.T) {
+	const workspaceID = "ws-checkout"
+	const url = "https://github.com/org/repo.git"
+	cache := &recordingRepoCache{lookupPath: "/cache/repo.git"}
+	workDir := t.TempDir()
+	d := newRepoCheckoutTestDaemon(t, workspaceID, url, workDir, cache)
+	body := strings.NewReader(`{"url":"` + url + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","execution_user_id":"someone-else"}`)
+	rec := httptest.NewRecorder()
+	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Code, rec.Body.String())
+	}
+	params := cache.lastCreateParams()
+	if params.Scope.UserID != "test-user" {
+		t.Fatalf("checkout accepted a caller-selected owner: %+v", params.Scope)
+	}
+	if !params.IsolatedGitMetadata {
+		t.Fatal("task checkout shares writable Git administration with its base")
+	}
 }

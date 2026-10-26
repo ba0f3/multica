@@ -357,7 +357,7 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"messa
 	auth := filepath.Join(home, ".codex", "auth.json")
 	_ = os.WriteFile(auth, []byte("original auth sentinel"), 0600)
 	before, _ := os.Stat(auth)
-	bare := createBareRepoDir(t, filepath.Join(root, ".repos", "ws-1", "fixture.git"))
+	bare := createBareRepoDir(t, filepath.Join(root, ".repos", "ws-1", "test-user", "fixture.git"))
 	cache.prepared = []repocache.PreparedRepo{{URL: "https://example.com/fixture", BarePath: bare, CommitSHA: fakeCommitSHA}}
 	for _, id := range []string{"native-task-1", "native-task-2"} {
 		task := dockerTask(id, []RepoData{{URL: "https://example.com/fixture"}})

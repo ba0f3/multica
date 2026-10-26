@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -161,5 +162,18 @@ func TestRepositoryHostParsesBothURLForms(t *testing.T) {
 		if got := repositoryHost(raw); got != want {
 			t.Errorf("repositoryHost(%q) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+func TestTaskRepoGitDoesNotReadOwnerCredentials(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(config, []byte("[credential]\n helper = owner-secret-helper\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	cmd := exec.Command("git", "config", "--get", "credential.helper")
+	cmd.Env = taskRepoGitEnvironment(Task{}, "")
+	if out, err := cmd.Output(); err == nil || len(out) != 0 {
+		t.Fatalf("task inherited owner Git credentials: %q %v", out, err)
 	}
 }

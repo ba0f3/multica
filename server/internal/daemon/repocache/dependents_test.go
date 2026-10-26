@@ -19,7 +19,7 @@ import (
 // the naming scheme fails the tests rather than silently passing them.
 func dependentsRecordPath(root, workspaceID, workDir string) string {
 	sum := sha256.Sum256([]byte(workDir))
-	return filepath.Join(root, workspaceID, ".dependents", hex.EncodeToString(sum[:])[:16]+".json")
+	return filepath.Join(root, workspaceID, "test-user", ".dependents", hex.EncodeToString(sum[:])[:16]+".json")
 }
 
 func readDependentRecord(t *testing.T, path string) Dependent {
@@ -40,9 +40,9 @@ func TestDependentsRecordWritesHashedFileAndReplaces(t *testing.T) {
 	root := t.TempDir()
 	cache := New(root, testLogger())
 	workDir := t.TempDir()
-	cachePath := filepath.Join(root, "ws-1", "github.com+org+repo.git")
+	cachePath := filepath.Join(root, "ws-1", "test-user", "github.com+org+repo.git")
 
-	if err := cache.RecordDependents("ws-1", Dependent{
+	if err := cache.RecordDependents(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, Dependent{
 		WorkDir:    workDir,
 		CachePaths: []string{cachePath},
 		TaskID:     "task-1",
@@ -80,8 +80,8 @@ func TestDependentsRecordWritesHashedFileAndReplaces(t *testing.T) {
 
 	// A second record for the same workdir replaces the first: one task attempt
 	// succeeding a previous one must not leave two retention claims behind.
-	replacement := filepath.Join(root, "ws-1", "gitlab.com+org+other.git")
-	if err := cache.RecordDependents("ws-1", Dependent{
+	replacement := filepath.Join(root, "ws-1", "test-user", "gitlab.com+org+other.git")
+	if err := cache.RecordDependents(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, Dependent{
 		WorkDir:    workDir,
 		CachePaths: []string{replacement},
 		TaskID:     "task-2",
@@ -117,11 +117,11 @@ func TestLiveDependentCachePathsReturnsEveryPathOfLiveRecord(t *testing.T) {
 	// concatenation because filepath.Join would clean it before the record is
 	// written.
 	sep := string(filepath.Separator)
-	cachePathA := filepath.Join(root, "ws-1") + sep + "uncleaned" + sep + ".." + sep + "github.com+org+repo-a.git"
-	cachePathB := filepath.Join(root, "ws-2", "github.com+org+repo-b.git")
-	cachePathC := filepath.Join(root, "ws-2", "github.com+org+repo-c.git")
+	cachePathA := filepath.Join(root, "ws-1", "test-user") + sep + "uncleaned" + sep + ".." + sep + "github.com+org+repo-a.git"
+	cachePathB := filepath.Join(root, "ws-2", "test-user", "github.com+org+repo-b.git")
+	cachePathC := filepath.Join(root, "ws-2", "test-user", "github.com+org+repo-c.git")
 
-	if err := cache.RecordDependents("ws-1", Dependent{
+	if err := cache.RecordDependents(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, Dependent{
 		WorkDir:    workDirA,
 		CachePaths: []string{cachePathA},
 		TaskID:     "task-a",
@@ -130,7 +130,7 @@ func TestLiveDependentCachePathsReturnsEveryPathOfLiveRecord(t *testing.T) {
 	}
 	// One task workdir can depend on several bare caches, and different
 	// workspaces have their own records under the same root.
-	if err := cache.RecordDependents("ws-2", Dependent{
+	if err := cache.RecordDependents(Scope{WorkspaceID: "ws-2", UserID: "test-user"}, Dependent{
 		WorkDir:    workDirB,
 		CachePaths: []string{cachePathB, cachePathC},
 	}); err != nil {
@@ -164,14 +164,14 @@ func TestLiveDependentCachePathsDropsRecordsOfRemovedWorkdir(t *testing.T) {
 	cache := New(root, testLogger())
 	keptWorkDir := t.TempDir()
 	removedWorkDir := t.TempDir()
-	keptCache := filepath.Join(root, "ws-1", "kept.git")
-	orphanCache := filepath.Join(root, "ws-1", "orphan.git")
+	keptCache := filepath.Join(root, "ws-1", "test-user", "kept.git")
+	orphanCache := filepath.Join(root, "ws-1", "test-user", "orphan.git")
 
 	for _, dep := range []Dependent{
 		{WorkDir: keptWorkDir, CachePaths: []string{keptCache}},
 		{WorkDir: removedWorkDir, CachePaths: []string{orphanCache}},
 	} {
-		if err := cache.RecordDependents("ws-1", dep); err != nil {
+		if err := cache.RecordDependents(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, dep); err != nil {
 			t.Fatalf("RecordDependents(%s): %v", dep.WorkDir, err)
 		}
 	}
@@ -200,18 +200,18 @@ func TestLiveDependentCachePathsIgnoresMalformedRecords(t *testing.T) {
 	root := t.TempDir()
 	cache := New(root, testLogger())
 	workDir := t.TempDir()
-	cachePath := filepath.Join(root, "ws-1", "github.com+org+repo.git")
-	if err := cache.RecordDependents("ws-1", Dependent{WorkDir: workDir, CachePaths: []string{cachePath}}); err != nil {
+	cachePath := filepath.Join(root, "ws-1", "test-user", "github.com+org+repo.git")
+	if err := cache.RecordDependents(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, Dependent{WorkDir: workDir, CachePaths: []string{cachePath}}); err != nil {
 		t.Fatalf("RecordDependents: %v", err)
 	}
 
-	dir := filepath.Join(root, "ws-1", ".dependents")
+	dir := filepath.Join(root, "ws-1", "test-user", ".dependents")
 	malformed := map[string]string{
 		// Corrupt JSON, e.g. a truncated write from outside the daemon.
 		"0000000000000000.json": "{not json",
 		// Well-formed JSON naming a relative workdir: the daemon never writes
 		// one, and statting it would resolve against the daemon's own cwd.
-		"1111111111111111.json": `{"workdir":"relative/workdir","cache_paths":["` + filepath.ToSlash(filepath.Join(root, "ws-1", "elsewhere.git")) + `"]}`,
+		"1111111111111111.json": `{"workdir":"relative/workdir","cache_paths":["` + filepath.ToSlash(filepath.Join(root, "ws-1", "test-user", "elsewhere.git")) + `"]}`,
 	}
 	for name, contents := range malformed {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
@@ -249,9 +249,9 @@ func TestLiveDependentCachePathsKeepsAlternatesObjectsSpelling(t *testing.T) {
 	root := t.TempDir()
 	cache := New(root, testLogger())
 	workDir := t.TempDir()
-	objectsPath := filepath.Join(root, "ws-1", "github.com+org+repo.git", "objects")
+	objectsPath := filepath.Join(root, "ws-1", "test-user", "github.com+org+repo.git", "objects")
 
-	if err := cache.RecordDependents("ws-1", Dependent{
+	if err := cache.RecordDependents(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, Dependent{
 		WorkDir:    workDir,
 		CachePaths: []string{objectsPath},
 	}); err != nil {
@@ -271,7 +271,7 @@ func TestLiveDependentCachePathsWithoutRecordsIsEmpty(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	cache := New(root, testLogger())
-	if err := os.MkdirAll(filepath.Join(root, "ws-1", "repo.git"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "ws-1", "test-user", "repo.git"), 0o755); err != nil {
 		t.Fatalf("create workspace cache: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestRecordDependentsRejectsInvalidPaths(t *testing.T) {
 	root := t.TempDir()
 	cache := New(root, testLogger())
 	absoluteDir := t.TempDir()
-	cachePath := filepath.Join(root, "ws-1", "repo.git")
+	cachePath := filepath.Join(root, "ws-1", "test-user", "repo.git")
 
 	tests := []struct {
 		name        string
@@ -343,7 +343,7 @@ func TestRecordDependentsRejectsInvalidPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := cache.RecordDependents(tt.workspaceID, tt.dep)
+			err := cache.RecordDependents(Scope{WorkspaceID: tt.workspaceID, UserID: "test-user"}, tt.dep)
 			if err == nil {
 				t.Fatal("RecordDependents accepted invalid input")
 			}

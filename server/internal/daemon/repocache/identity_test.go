@@ -60,7 +60,7 @@ func TestCheckoutIdentityIgnoresSharedCache(t *testing.T) {
 	for _, mode := range checkoutModes {
 		t.Run(mode.name, func(t *testing.T) {
 			f := newExistingCheckoutFixture(t, mode.isolated)
-			bare := f.cache.Lookup("ws-1", f.source)
+			bare := f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source)
 			polluteCacheIdentity(t, bare)
 			first := f.checkout(t, firstTaskID, false)
 			assertCommitIdentity(t, first.Path, "User", "user@example.com")
@@ -81,14 +81,14 @@ func TestCheckoutIdentityIgnoresSharedCache(t *testing.T) {
 func TestCheckoutIdentityConcurrentTasksAndOverrides(t *testing.T) {
 	identityTestEnvironment(t)
 	f := newExistingCheckoutFixture(t, false)
-	bare := f.cache.Lookup("ws-1", f.source)
+	bare := f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source)
 	polluteCacheIdentity(t, bare)
 	var wg sync.WaitGroup
 	results := make([]*WorktreeResult, 2)
 	errs := make([]error, 2)
 	params := make([]WorktreeParams, 2)
 	for i := range params {
-		params[i] = WorktreeParams{WorkspaceID: "ws-1", RepoURL: f.source, WorkDir: t.TempDir(), AgentName: "Agent", TaskID: fmt.Sprintf("task-%d", i)}
+		params[i] = WorktreeParams{Scope: Scope{WorkspaceID: "ws-1", UserID: "test-user"}, RepoURL: f.source, WorkDir: t.TempDir(), AgentName: "Agent", TaskID: fmt.Sprintf("task-%d", i)}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -123,7 +123,7 @@ func TestCheckoutIdentityMigratesExistingWorktree(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("worktreeConfig=%v", enabled), func(t *testing.T) {
 			f := newExistingCheckoutFixture(t, false)
-			bare := f.cache.Lookup("ws-1", f.source)
+			bare := f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source)
 			polluteCacheIdentity(t, bare)
 			path := filepath.Join(f.workDir, repoNameFromURL(f.source))
 			gitIdentityCommand(t, "-C", bare, "worktree", "add", "-b", taskBranchName(firstTaskID), path)
@@ -155,14 +155,14 @@ func TestCheckoutIdentityMigratesExistingWorktree(t *testing.T) {
 func TestCheckoutIdentityUserConfigAndCoauthor(t *testing.T) {
 	identityTestEnvironment(t)
 	f := newExistingCheckoutFixture(t, false)
-	bare := f.cache.Lookup("ws-1", f.source)
+	bare := f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source)
 	polluteCacheIdentity(t, bare)
 	include := filepath.Join(t.TempDir(), "identity.config")
 	gitIdentityCommand(t, "config", "--file", include, "user.name", "Conditional User")
 	gitIdentityCommand(t, "config", "--file", include, "author.name", "Explicit Author")
 	gitIdentityCommand(t, "config", "--global", "includeIf.onbranch:agent/**.path", filepath.ToSlash(include))
 	for _, enabled := range []bool{true, false} {
-		params := WorktreeParams{WorkspaceID: "ws-1", RepoURL: f.source, WorkDir: f.workDir, AgentName: "Agent", TaskID: firstTaskID, CoAuthoredByEnabled: enabled}
+		params := WorktreeParams{Scope: Scope{WorkspaceID: "ws-1", UserID: "test-user"}, RepoURL: f.source, WorkDir: f.workDir, AgentName: "Agent", TaskID: firstTaskID, CoAuthoredByEnabled: enabled}
 		result, err := f.cache.CreateWorktree(params)
 		if err != nil {
 			t.Fatal(err)
@@ -191,7 +191,7 @@ func TestCheckoutIdentityWithoutUserFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newExistingCheckoutFixture(t, false)
-	polluteCacheIdentity(t, f.cache.Lookup("ws-1", f.source))
+	polluteCacheIdentity(t, f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source))
 	result := f.checkout(t, firstTaskID, false)
 	if out, err := runGitCombinedOutput("-C", result.Path, "commit", "--allow-empty", "-m", "must not use cache author"); err == nil {
 		t.Fatalf("commit succeeded without a configured identity: %s", out)
@@ -221,7 +221,7 @@ func TestCheckoutIdentityConfigLockFailureIsRetryable(t *testing.T) {
 	if err := os.WriteFile(lock, []byte("another writer"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := f.cache.CreateWorktree(WorktreeParams{WorkspaceID: "ws-1", RepoURL: f.source, WorkDir: f.workDir, AgentName: "Agent", TaskID: firstTaskID})
+	_, err := f.cache.CreateWorktree(WorktreeParams{Scope: Scope{WorkspaceID: "ws-1", UserID: "test-user"}, RepoURL: f.source, WorkDir: f.workDir, AgentName: "Agent", TaskID: firstTaskID})
 	if err == nil || !strings.Contains(err.Error(), "lock Git config") {
 		t.Fatalf("checkout error = %v, want config lock failure", err)
 	}
@@ -241,7 +241,7 @@ func TestCheckoutIdentityRejectsForeignWorktree(t *testing.T) {
 	f := newExistingCheckoutFixture(t, false)
 	foreign := filepath.Join(t.TempDir(), "foreign")
 	gitIdentityCommand(t, "-C", f.source, "worktree", "add", "-b", "foreign", foreign)
-	err := isolateWorktreeIdentityContext(context.Background(), f.cache.Lookup("ws-1", f.source), foreign)
+	err := isolateWorktreeIdentityContext(context.Background(), f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source), foreign)
 	if err == nil || !strings.Contains(err.Error(), "does not match cache") {
 		t.Fatalf("identity isolation error = %v, want foreign repository rejection", err)
 	}
@@ -259,7 +259,7 @@ func TestCheckoutIdentityEnabledWithSharedConfigLocked(t *testing.T) {
 	f.workDir = t.TempDir()
 	second := f.checkout(t, secondTaskID, false)
 	secondWorkDir := f.workDir
-	bare := f.cache.Lookup("ws-1", f.source)
+	bare := f.cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, f.source)
 	lockPath := filepath.Join(bare, "config.lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {

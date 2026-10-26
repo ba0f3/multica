@@ -21,7 +21,7 @@ func TestPrepareUsesTaskGitEnvironmentForColdCloneAndFetch(t *testing.T) {
 		"GIT_CONFIG_VALUE_1="+url,
 	)
 	ctx := WithGitEnvironment(context.Background(), env)
-	first, err := cache.Prepare(ctx, "ws-1", []RepoInfo{{URL: url}})
+	first, err := cache.Prepare(ctx, Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: url}})
 	if err != nil {
 		t.Fatalf("cold clone with task credentials: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestPrepareUsesTaskGitEnvironmentForColdCloneAndFetch(t *testing.T) {
 		t.Fatalf("cache identity changed: %q", first[0].URL)
 	}
 	addEmptyCommit(t, remote, "fresh commit")
-	second, err := cache.Prepare(ctx, "ws-1", []RepoInfo{{URL: url}})
+	second, err := cache.Prepare(ctx, Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: url}})
 	if err != nil {
 		t.Fatalf("fetch with task credentials: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestPrepareColdCache(t *testing.T) {
 	wantSHA := gitHead(t, remote)
 	cache := New(t.TempDir(), testLogger())
 
-	got, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}})
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}})
 	if err != nil {
 		t.Fatalf("Prepare failed: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestPrepareColdCache(t *testing.T) {
 	if prepared.Ref != "" {
 		t.Errorf("Ref = %q, want empty for the default branch", prepared.Ref)
 	}
-	if want := cache.BarePath("ws-1", remote); prepared.BarePath != want {
+	if want := cache.BarePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, remote); prepared.BarePath != want {
 		t.Errorf("BarePath = %q, want %q", prepared.BarePath, want)
 	}
 	if prepared.CommitSHA != wantSHA {
@@ -81,7 +81,7 @@ func TestPrepareWarmCacheFetchesNewCommit(t *testing.T) {
 	remote := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
 
-	first, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}})
+	first, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}})
 	if err != nil {
 		t.Fatalf("first Prepare failed: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestPrepareWarmCacheFetchesNewCommit(t *testing.T) {
 		t.Fatal("test setup failed: remote HEAD did not advance")
 	}
 
-	second, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}})
+	second, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}})
 	if err != nil {
 		t.Fatalf("second Prepare failed: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestPrepareRequestedRef(t *testing.T) {
 	runGitAuthored(t, remote, "checkout", defaultBranch)
 
 	cache := New(t.TempDir(), testLogger())
-	got, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote, Ref: "feature"}})
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote, Ref: "feature"}})
 	if err != nil {
 		t.Fatalf("Prepare failed: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestPrepareFetchFailureIsStrict(t *testing.T) {
 	remote := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
 
-	first, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}})
+	first, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}})
 	if err != nil {
 		t.Fatalf("first Prepare failed: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestPrepareFetchFailureIsStrict(t *testing.T) {
 		t.Fatalf("remove remote: %v", err)
 	}
 
-	got, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}})
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}})
 	if err == nil {
 		t.Fatal("expected fetch failure, got nil error")
 	}
@@ -164,7 +164,7 @@ func TestPrepareUnknownRef(t *testing.T) {
 	remote := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
 
-	got, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote, Ref: "missing"}})
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote, Ref: "missing"}})
 	if err == nil {
 		t.Fatal("expected unknown ref error")
 	}
@@ -181,7 +181,7 @@ func TestPrepareColdCloneFailure(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	cache := New(t.TempDir(), testLogger())
 
-	got, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: missing}})
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: missing}})
 	if err == nil {
 		t.Fatal("expected clone failure, got nil error")
 	}
@@ -198,10 +198,10 @@ func TestPrepareRejectsInvalidInput(t *testing.T) {
 	cache := New(t.TempDir(), testLogger())
 	remote := createTestRepo(t)
 
-	if got, err := cache.Prepare(context.Background(), "", []RepoInfo{{URL: remote}}); err == nil {
+	if got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "", UserID: "test-user"}, []RepoInfo{{URL: remote}}); err == nil {
 		t.Errorf("Prepare with empty workspace ID returned %d repos, want error", len(got))
 	}
-	if got, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: ""}}); err == nil {
+	if got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: ""}}); err == nil {
 		t.Errorf("Prepare with empty URL returned %d repos, want error", len(got))
 	}
 }
@@ -210,7 +210,7 @@ func TestPrepareEmptyReposReturnsNil(t *testing.T) {
 	t.Parallel()
 	cache := New(t.TempDir(), testLogger())
 
-	got, err := cache.Prepare(context.Background(), "ws-1", nil)
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, nil)
 	if err != nil {
 		t.Fatalf("Prepare with no repos failed: %v", err)
 	}
@@ -231,19 +231,19 @@ func TestPrepareRefreshesCABundleOnCachedRepo(t *testing.T) {
 	remote := createTestRepo(t)
 	cache := newTestCacheQuiet(t)
 
-	if _, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}}); err != nil {
+	if _, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}}); err != nil {
 		t.Fatalf("initial Prepare failed: %v", err)
 	}
 	_, caPEM := newServerCert(t, "prepare-ca")
 	if err := cache.SetExtraCACerts(caPEM); err != nil {
 		t.Fatalf("SetExtraCACerts: %v", err)
 	}
-	barePath := cache.BarePath("ws-1", remote)
+	barePath := cache.BarePath(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, remote)
 	if out, _ := agentGit(t, barePath, "config", "--local", "--get", caBundleConfigKey); strings.TrimSpace(out) != "" {
 		t.Fatalf("%s already set on the pre-existing cache: %q", caBundleConfigKey, out)
 	}
 
-	if _, err := cache.Prepare(context.Background(), "ws-1", []RepoInfo{{URL: remote}}); err != nil {
+	if _, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: remote}}); err != nil {
 		t.Fatalf("second Prepare failed: %v", err)
 	}
 	out, err := agentGit(t, barePath, "config", "--local", "--get", caBundleConfigKey)
@@ -294,7 +294,10 @@ exec "$TEST_REAL_GIT" "$@"
 		err   error
 	}
 	done := make(chan result, 1)
-	go func() { repos, err := cache.Prepare(ctx, "ws-1", repos); done <- result{repos, err} }()
+	go func() {
+		repos, err := cache.Prepare(ctx, Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repos)
+		done <- result{repos, err}
+	}()
 	deadline := time.After(2 * time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -340,14 +343,14 @@ func TestPrepareBatchFailureReturnsNoPartialRepositories(t *testing.T) {
 	first, second := createTestRepo(t), createTestRepo(t)
 	repos := []RepoInfo{{URL: first}, {URL: second}}
 	cache := New(t.TempDir(), testLogger())
-	if _, err := cache.Prepare(context.Background(), "ws-1", repos); err != nil {
+	if _, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repos); err != nil {
 		t.Fatal(err)
 	}
 	addEmptyCommit(t, first, "updated head")
 	if err := os.RemoveAll(second); err != nil {
 		t.Fatal(err)
 	}
-	got, err := cache.Prepare(context.Background(), "ws-1", repos)
+	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repos)
 	if err == nil || !strings.Contains(err.Error(), second) || got != nil {
 		t.Fatalf("expected strict batch failure, got=%v err=%v", got, err)
 	}

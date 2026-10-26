@@ -1948,11 +1948,11 @@ func TestPruneWorktree_LegacyCacheFallbackSerializesWithCreateWorktree(t *testin
 	d := newGCTestDaemon(t, http.NewServeMux())
 	sourceRepo := createGCGitRepo(t)
 	cache := repocache.New(filepath.Join(d.cfg.WorkspacesRoot, ".repos"), slog.Default())
-	if err := cache.Sync("ws1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(repocache.Scope{WorkspaceID: "ws1", UserID: "test-user"}, []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("cache sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws1", sourceRepo)
+	barePath := cache.Lookup(repocache.Scope{WorkspaceID: "ws1", UserID: "test-user"}, sourceRepo)
 	if barePath == "" {
 		t.Fatal("expected bare repo to be cached")
 	}
@@ -1981,11 +1981,11 @@ func TestPruneWorktree_LegacyCacheFallbackSerializesWithCreateWorktree(t *testin
 	createDone := make(chan error, 1)
 	go func() {
 		_, err := blockingCache.CreateWorktree(repocache.WorktreeParams{
-			WorkspaceID: "ws1",
-			RepoURL:     sourceRepo,
-			WorkDir:     t.TempDir(),
-			AgentName:   "tester",
-			TaskID:      "11111111-1111-1111-1111-111111111111",
+			Scope:     repocache.Scope{WorkspaceID: "ws1", UserID: "test-user"},
+			RepoURL:   sourceRepo,
+			WorkDir:   t.TempDir(),
+			AgentName: "tester",
+			TaskID:    "11111111-1111-1111-1111-111111111111",
 		})
 		createDone <- err
 	}()
@@ -2075,11 +2075,11 @@ func TestPruneWorktreePreemptionCleansLocksBeforeTaskStarts(t *testing.T) {
 	d := newGCTestDaemon(t, http.NewServeMux())
 	sourceRepo := createGCGitRepo(t)
 	cache := repocache.New(filepath.Join(d.cfg.WorkspacesRoot, ".repos"), slog.Default())
-	if err := cache.Sync("ws1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(repocache.Scope{WorkspaceID: "ws1", UserID: "test-user"}, []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("cache sync failed: %v", err)
 	}
 	d.repoCache = cache
-	barePath := cache.Lookup("ws1", sourceRepo)
+	barePath := cache.Lookup(repocache.Scope{WorkspaceID: "ws1", UserID: "test-user"}, sourceRepo)
 	runGitForGC(t, "", "-C", barePath, "branch", "agent/stale/87654321", "HEAD")
 
 	lockPath := filepath.Join(barePath, "refs", "remotes", "origin", "main.lock")
@@ -2145,15 +2145,15 @@ type blockingRepoCache struct {
 	release chan struct{}
 }
 
-func (c *blockingRepoCache) Lookup(workspaceID, url string) string {
+func (c *blockingRepoCache) Lookup(workspaceID repocache.Scope, url string) string {
 	return c.inner.Lookup(workspaceID, url)
 }
 
-func (c *blockingRepoCache) BarePath(workspaceID, url string) string {
+func (c *blockingRepoCache) BarePath(workspaceID repocache.Scope, url string) string {
 	return c.inner.BarePath(workspaceID, url)
 }
 
-func (c *blockingRepoCache) Sync(workspaceID string, repos []repocache.RepoInfo) error {
+func (c *blockingRepoCache) Sync(workspaceID repocache.Scope, repos []repocache.RepoInfo) error {
 	return c.inner.Sync(workspaceID, repos)
 }
 

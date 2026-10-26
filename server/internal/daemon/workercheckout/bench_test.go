@@ -37,7 +37,7 @@ func BenchmarkRepoCacheCheckout(b *testing.B) {
 			cache := repocache.New(b.TempDir(), logger)
 
 			start := time.Now()
-			prepared, err := cache.Prepare(context.Background(), "ws-bench", repos)
+			prepared, err := cache.Prepare(context.Background(), repocache.Scope{WorkspaceID: "ws-bench", UserID: "test-user"}, repos)
 			fetchNs += time.Since(start).Nanoseconds()
 			if err != nil {
 				b.Fatalf("Prepare (cold): %v", err)
@@ -63,7 +63,7 @@ func BenchmarkRepoCacheCheckout(b *testing.B) {
 	b.Run("warm", func(b *testing.B) {
 		// Pre-populate the cache once, outside the timer.
 		cache := repocache.New(b.TempDir(), logger)
-		if _, err := cache.Prepare(context.Background(), "ws-bench", repos); err != nil {
+		if _, err := cache.Prepare(context.Background(), repocache.Scope{WorkspaceID: "ws-bench", UserID: "test-user"}, repos); err != nil {
 			b.Fatalf("Prepare (seed): %v", err)
 		}
 		b.ResetTimer()
@@ -73,7 +73,7 @@ func BenchmarkRepoCacheCheckout(b *testing.B) {
 			workDir := b.TempDir()
 
 			start := time.Now()
-			prepared, err := cache.Prepare(context.Background(), "ws-bench", repos)
+			prepared, err := cache.Prepare(context.Background(), repocache.Scope{WorkspaceID: "ws-bench", UserID: "test-user"}, repos)
 			fetchNs += time.Since(start).Nanoseconds()
 			if err != nil {
 				b.Fatalf("Prepare (warm): %v", err)

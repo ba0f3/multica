@@ -23,9 +23,10 @@ const (
 )
 
 type taskRootRecord struct {
-	WorkspaceID  string `json:"workspace_id"`
-	TaskID       string `json:"task_id"`
-	RelativePath string `json:"relative_path"`
+	ExecutionUserID string `json:"execution_user_id,omitempty"`
+	WorkspaceID     string `json:"workspace_id"`
+	TaskID          string `json:"task_id"`
+	RelativePath    string `json:"relative_path"`
 }
 
 // ResolveRootDir returns the one physical env root assigned to a task. The
@@ -58,9 +59,10 @@ func ResolveRootDir(params RootDirParams) (string, error) {
 		return "", fmt.Errorf("execenv: make task root relative: %w", err)
 	}
 	record = taskRootRecord{
-		WorkspaceID:  params.WorkspaceID,
-		TaskID:       params.TaskID,
-		RelativePath: relative,
+		WorkspaceID:     params.WorkspaceID,
+		ExecutionUserID: params.ExecutionUserID,
+		TaskID:          params.TaskID,
+		RelativePath:    relative,
 	}
 	if err := installTaskRootRecord(recordDir, record); err != nil {
 		return "", err
@@ -80,7 +82,7 @@ func taskRootRecordDir(params RootDirParams) string {
 	return filepath.Join(
 		params.WorkspacesRoot,
 		taskRootIndexDir,
-		stableIdentityKey(params.WorkspaceID+"\x00"+params.TaskID),
+		stableIdentityKey(params.WorkspaceID+"\x00"+params.ExecutionUserID+"\x00"+params.TaskID),
 	)
 }
 
@@ -173,7 +175,7 @@ func renameTaskRootRecordWithRetry(
 // permanent until an operator intervenes, so every error names recordDir —
 // the one path they need to inspect or remove.
 func validateTaskRootRecord(params RootDirParams, recordDir string, record taskRootRecord) (string, error) {
-	if record.WorkspaceID != params.WorkspaceID || record.TaskID != params.TaskID {
+	if record.WorkspaceID != params.WorkspaceID || record.TaskID != params.TaskID || record.ExecutionUserID != params.ExecutionUserID {
 		return "", fmt.Errorf("execenv: task root record %s belongs to workspace %s task %s, not workspace %s task %s",
 			recordDir, record.WorkspaceID, record.TaskID, params.WorkspaceID, params.TaskID)
 	}
@@ -185,7 +187,7 @@ func validateTaskRootRecord(params RootDirParams, recordDir string, record taskR
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || parts[0] == ".." || parts[1] == ".." {
 		return "", fmt.Errorf("execenv: task root record %s holds invalid relative path %q", recordDir, record.RelativePath)
 	}
-	if !validTaskRootSegment(parts[0], params.WorkspaceID, true) || !validTaskRootSegment(parts[1], params.TaskID, false) {
+	if !validTaskRootSegment(parts[0], params.WorkspaceID, true) || !validTaskRootSegment(parts[1], taskRootPathID(params.TaskID, params.ExecutionUserID), false) {
 		return "", fmt.Errorf("execenv: task root record %s points at %q, which does not match its stable identity", recordDir, record.RelativePath)
 	}
 	return filepath.Join(params.WorkspacesRoot, relative), nil
@@ -232,7 +234,7 @@ func ValidateEnvRootOwnerPath(workspacesRoot, envRoot string, owner EnvRootOwner
 	if !validTaskRootSegment(parts[0], owner.WorkspaceID, true) {
 		return fmt.Errorf("execenv: workspace directory %q does not match owner %s", parts[0], owner.WorkspaceID)
 	}
-	if !validTaskRootSegment(parts[1], owner.TaskID, false) {
+	if !validTaskRootSegment(parts[1], taskRootPathID(owner.TaskID, owner.ExecutionUserID), false) {
 		return fmt.Errorf("execenv: task directory %q does not match owner %s", parts[1], owner.TaskID)
 	}
 	return nil
@@ -246,9 +248,10 @@ func RemoveRootDirRecord(workspacesRoot, envRoot string, owner EnvRootOwner) err
 		return nil
 	}
 	params := RootDirParams{
-		WorkspacesRoot: workspacesRoot,
-		WorkspaceID:    owner.WorkspaceID,
-		TaskID:         owner.TaskID,
+		WorkspacesRoot:  workspacesRoot,
+		WorkspaceID:     owner.WorkspaceID,
+		ExecutionUserID: owner.ExecutionUserID,
+		TaskID:          owner.TaskID,
 	}
 	recordDir := taskRootRecordDir(params)
 	record, err := readTaskRootRecord(recordDir)
@@ -331,9 +334,10 @@ func PruneTaskRootIndex(workspacesRoot string, retention time.Duration, now time
 			continue
 		}
 		params := RootDirParams{
-			WorkspacesRoot: workspacesRoot,
-			WorkspaceID:    record.WorkspaceID,
-			TaskID:         record.TaskID,
+			WorkspacesRoot:  workspacesRoot,
+			WorkspaceID:     record.WorkspaceID,
+			ExecutionUserID: record.ExecutionUserID,
+			TaskID:          record.TaskID,
 		}
 		resolved, validateErr := validateTaskRootRecord(params, entryPath, record)
 		if validateErr != nil {
@@ -397,6 +401,9 @@ func findOwnedTaskRoot(params RootDirParams) (string, error) {
 			if readErr != nil {
 				return "", fmt.Errorf("execenv: read candidate env root owner for %s: %w", candidate, readErr)
 			}
+			if owner.ExecutionUserID != params.ExecutionUserID {
+				continue
+			}
 			if owner.TaskID == "" {
 				hasWork, inspectErr := envRootHoldsWork(candidate)
 				if inspectErr != nil {
@@ -433,4 +440,11 @@ func taskRootRecordAge(recordDir string, now time.Time) (time.Duration, bool) {
 		return 0, false
 	}
 	return now.Sub(info.ModTime()), true
+}
+
+func taskRootPathID(taskID, userID string) string {
+	if userID == "" {
+		return taskID
+	}
+	return stableIdentityKey(userID + "\x00" + taskID)
 }

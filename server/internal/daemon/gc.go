@@ -1316,36 +1316,43 @@ func (d *Daemon) pruneRepoWorktreesContext(ctx context.Context, workspacesRoot s
 		if !wsEntry.IsDir() {
 			continue
 		}
-		wsRepoDir := filepath.Join(reposRoot, wsEntry.Name())
-		repoEntries, err := os.ReadDir(wsRepoDir)
+		scopes, err := repocache.New(reposRoot, d.logger).Scopes(wsEntry.Name())
 		if err != nil {
 			continue
 		}
-		for _, repoEntry := range repoEntries {
-			if ctx.Err() != nil {
-				return
-			}
-			if !repoEntry.IsDir() {
+		for _, scope := range scopes {
+			wsRepoDir := filepath.Join(reposRoot, scope.WorkspaceID, scope.UserID)
+			repoEntries, err := os.ReadDir(wsRepoDir)
+			if err != nil {
 				continue
 			}
-			barePath := filepath.Join(wsRepoDir, repoEntry.Name())
-			if !isBareRepo(barePath) {
-				continue
+			for _, repoEntry := range repoEntries {
+				if ctx.Err() != nil {
+					return
+				}
+				if !repoEntry.IsDir() {
+					continue
+				}
+				barePath := filepath.Join(wsRepoDir, repoEntry.Name())
+				if !isBareRepo(barePath) {
+					continue
+				}
+				d.maintainRepoCache(ctx, barePath, stats, repoCachePinned(liveDependents, barePath))
 			}
-			d.maintainRepoCache(ctx, barePath, stats, repoCachePinned(liveDependents, barePath))
+			// Drop the per-workspace directory once its last repo is gone. The
+			// dependents records are bookkeeping for those repos, so they neither
+			// count as content nor outlive an empty cache.
+			if !repoCacheWorkspaceDirHasRepos(wsRepoDir) {
+				dependentsDir := filepath.Join(wsRepoDir, repocache.DependentsDirName)
+				if err := os.RemoveAll(dependentsDir); err != nil {
+					d.logger.Warn("gc: remove repo cache dependents failed", "dir", dependentsDir, "error", err)
+				}
+				if err := os.Remove(wsRepoDir); err != nil && !os.IsNotExist(err) {
+					d.logger.Warn("gc: remove empty repo cache workspace dir failed", "dir", wsRepoDir, "error", err)
+				}
+			}
 		}
-		// Drop the per-workspace directory once its last repo is gone. The
-		// dependents records are bookkeeping for those repos, so they neither
-		// count as content nor outlive an empty cache.
-		if !repoCacheWorkspaceDirHasRepos(wsRepoDir) {
-			dependentsDir := filepath.Join(wsRepoDir, repocache.DependentsDirName)
-			if err := os.RemoveAll(dependentsDir); err != nil {
-				d.logger.Warn("gc: remove repo cache dependents failed", "dir", dependentsDir, "error", err)
-			}
-			if err := os.Remove(wsRepoDir); err != nil && !os.IsNotExist(err) {
-				d.logger.Warn("gc: remove empty repo cache workspace dir failed", "dir", wsRepoDir, "error", err)
-			}
-		}
+		_ = os.Remove(filepath.Join(reposRoot, wsEntry.Name()))
 	}
 }
 

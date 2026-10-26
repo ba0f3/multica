@@ -151,7 +151,7 @@ func TestResolveRootDirAdoptsExistingOwnedRootBeforeIndex(t *testing.T) {
 	if err := os.MkdirAll(original, 0o755); err != nil {
 		t.Fatalf("seed existing root: %v", err)
 	}
-	if err := writeEnvRootOwner(original, workspaceID, taskID); err != nil {
+	if err := writeEnvRootOwner(original, workspaceID, taskID, ""); err != nil {
 		t.Fatalf("seed existing owner: %v", err)
 	}
 
@@ -6561,7 +6561,7 @@ func TestPrepareRefusesEnvRootOwnedByAnotherTask(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(envRoot, "workdir"), 0o755); err != nil {
 		t.Fatalf("seed env root: %v", err)
 	}
-	if err := writeEnvRootOwner(envRoot, "ws-owned", "11111111-2222-3333-4444-555555555555"); err != nil {
+	if err := writeEnvRootOwner(envRoot, "ws-owned", "11111111-2222-3333-4444-555555555555", ""); err != nil {
 		t.Fatalf("seed owner: %v", err)
 	}
 	survivor := filepath.Join(envRoot, "workdir", "other-task-work.txt")
@@ -6718,7 +6718,7 @@ func TestClaimEnvRootRefusesUnownedDirectoryWithContent(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if _, _, err := claimEnvRoot(envRoot, "ws", "aaaaaaaa-1111-2222-3333-0123456789ab"); err == nil {
+	if _, _, err := claimEnvRoot(envRoot, "ws", "aaaaaaaa-1111-2222-3333-0123456789ab", ""); err == nil {
 		t.Fatal("claimEnvRoot took a directory holding files with no owner")
 	} else if !strings.Contains(err.Error(), "names no owning task") {
 		t.Fatalf("error = %v, want it to explain the missing owner", err)
@@ -6738,7 +6738,7 @@ func TestClaimEnvRootAdoptsEmptyDirectory(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	const id = "aaaaaaaa-1111-2222-3333-0123456789ab"
-	lock, reset, err := claimEnvRoot(envRoot, "ws", id)
+	lock, reset, err := claimEnvRoot(envRoot, "ws", id, "")
 	if err != nil {
 		t.Fatalf("claimEnvRoot on an empty directory: %v", err)
 	}
@@ -6857,7 +6857,7 @@ func TestClaimEnvRootRepairsTornOwnerMarker(t *testing.T) {
 	}
 
 	const id = "aaaaaaaa-1111-2222-3333-0123456789ab"
-	lock, _, err := claimEnvRoot(envRoot, "ws", id)
+	lock, _, err := claimEnvRoot(envRoot, "ws", id, "")
 	if err != nil {
 		t.Fatalf("claimEnvRoot wedged on a torn marker: %v", err)
 	}
@@ -6885,7 +6885,7 @@ func TestWriteEnvRootOwnerAtomicallyReplacesMarker(t *testing.T) {
 		t.Fatalf("stat legacy owner: %v", err)
 	}
 
-	if err := writeEnvRootOwner(envRoot, "ws-authoritative", taskID); err != nil {
+	if err := writeEnvRootOwner(envRoot, "ws-authoritative", taskID, ""); err != nil {
 		t.Fatalf("upgrade owner: %v", err)
 	}
 	after, err := os.Stat(ownerPath)
@@ -6921,7 +6921,7 @@ func TestClaimEnvRootRecoversOwnerTempLeftBeforeRename(t *testing.T) {
 	}
 
 	const taskID = "aaaaaaaa-1111-2222-3333-0123456789ab"
-	lock, reset, err := claimEnvRoot(envRoot, "ws", taskID)
+	lock, reset, err := claimEnvRoot(envRoot, "ws", taskID, "")
 	if err != nil {
 		t.Fatalf("claim after interrupted owner write: %v", err)
 	}

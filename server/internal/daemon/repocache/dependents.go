@@ -4,17 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// DependentsDirName is the per-workspace directory holding the records of
-// workdirs whose Git checkouts borrow objects from this workspace's bare
-// caches. It lives beside the bare cache directories, so removing a workspace
-// cache removes its records with it.
+// DependentsDirName stores records of workdirs borrowing objects from one
+// execution user's bare caches. Records live beside that user's repositories.
 const DependentsDirName = ".dependents"
 
 // dependentRecordLen is the number of hex characters of the workdir hash kept
@@ -33,18 +30,19 @@ type Dependent struct {
 	AttemptID  string   `json:"attempt_id,omitempty"`
 }
 
-// dependentsDir is where a workspace's dependent records live.
-func (c *Cache) dependentsDir(workspaceID string) string {
-	return filepath.Join(c.root, workspaceID, DependentsDirName)
+// dependentsDir is where one execution user's dependent records live.
+func (c *Cache) dependentsDir(scope Scope) string {
+	root, _ := c.ScopeRoot(scope)
+	return filepath.Join(root, DependentsDirName)
 }
 
 // dependentRecordPath is the file identifying workDir. The workdir is hashed
 // rather than escaped into the name: it is an absolute path that filesystem
 // filename limits can reject, and the hash keeps the name fixed-size.
-func (c *Cache) dependentRecordPath(workspaceID, workDir string) string {
+func (c *Cache) dependentRecordPath(scope Scope, workDir string) string {
 	sum := sha256.Sum256([]byte(workDir))
 	name := hex.EncodeToString(sum[:])[:dependentRecordLen] + ".json"
-	return filepath.Join(c.dependentsDir(workspaceID), name)
+	return filepath.Join(c.dependentsDir(scope), name)
 }
 
 // RecordDependents durably records that dep.WorkDir depends on dep.CachePaths.
@@ -53,11 +51,15 @@ func (c *Cache) dependentRecordPath(workspaceID, workDir string) string {
 //
 // The write is atomic (temp file + rename), so a scan running concurrently
 // reads either the previous record or the new one, never a partial file.
-func (c *Cache) RecordDependents(workspaceID string, dep Dependent) error {
-	if workspaceID == "" {
-		return errors.New("record repo cache dependents: workspace id is required")
+func (c *Cache) RecordDependents(scope Scope, dep Dependent) error {
+	if err := scope.Validate(); err != nil {
+		return err
 	}
 	workDir, err := absoluteCleanPath("workdir", dep.WorkDir)
+	if err != nil {
+		return err
+	}
+	root, err := c.ScopeRoot(scope)
 	if err != nil {
 		return err
 	}
@@ -66,6 +68,10 @@ func (c *Cache) RecordDependents(workspaceID string, dep Dependent) error {
 		cleaned, err := absoluteCleanPath("cache path", path)
 		if err != nil {
 			return err
+		}
+		rel, err := filepath.Rel(root, cleaned)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return fmt.Errorf("repo cache dependent is outside the execution user store: %s", cleaned)
 		}
 		cachePaths = append(cachePaths, cleaned)
 	}
@@ -77,7 +83,7 @@ func (c *Cache) RecordDependents(workspaceID string, dep Dependent) error {
 		return fmt.Errorf("encode repo cache dependents: %w", err)
 	}
 
-	dir := c.dependentsDir(workspaceID)
+	dir := c.dependentsDir(scope)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create repo cache dependents dir: %w", err)
 	}
@@ -98,7 +104,7 @@ func (c *Cache) RecordDependents(workspaceID string, dep Dependent) error {
 		os.Remove(tmpName)
 		return fmt.Errorf("write repo cache dependents: %w", err)
 	}
-	if err := os.Rename(tmpName, c.dependentRecordPath(workspaceID, workDir)); err != nil {
+	if err := os.Rename(tmpName, c.dependentRecordPath(scope, workDir)); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("publish repo cache dependents: %w", err)
 	}
@@ -139,19 +145,28 @@ func (c *Cache) LiveDependentCachePaths() (map[string]struct{}, error) {
 		if !workspace.IsDir() {
 			continue
 		}
-		dir := filepath.Join(c.root, workspace.Name(), DependentsDirName)
-		records, err := os.ReadDir(dir)
+		owners, err := os.ReadDir(filepath.Join(c.root, workspace.Name()))
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue // no dependent workdirs in this workspace
-			}
-			return nil, fmt.Errorf("read repo cache dependents %s: %w", dir, err)
+			return nil, err
 		}
-		for _, record := range records {
-			if record.IsDir() || !strings.HasSuffix(record.Name(), ".json") {
+		for _, owner := range owners {
+			if !owner.IsDir() || strings.HasSuffix(owner.Name(), ".git") {
 				continue
 			}
-			scanDependentRecord(filepath.Join(dir, record.Name()), live)
+			dir := filepath.Join(c.root, workspace.Name(), owner.Name(), DependentsDirName)
+			records, err := os.ReadDir(dir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue // no dependent workdirs in this workspace
+				}
+				return nil, fmt.Errorf("read repo cache dependents %s: %w", dir, err)
+			}
+			for _, record := range records {
+				if record.IsDir() || !strings.HasSuffix(record.Name(), ".json") {
+					continue
+				}
+				scanDependentRecord(filepath.Join(dir, record.Name()), live)
+			}
 		}
 	}
 	return live, nil

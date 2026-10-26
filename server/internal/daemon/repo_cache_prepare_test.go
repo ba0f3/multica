@@ -65,14 +65,14 @@ func TestPrepareTaskRepoCachesDeduplicatesCanonicalCachePaths(t *testing.T) {
 	workspaceID := "ws-1"
 	cacheRoot := filepath.Join(workspacesRoot, ".repos")
 	realCache := repocache.New(cacheRoot, newDiscardLogger())
-	barePath := realCache.BarePath(workspaceID, "https://github.com/r2d-ai/multica.git")
+	barePath := realCache.BarePath(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, "https://github.com/r2d-ai/multica.git")
 	if err := os.MkdirAll(filepath.Dir(barePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	createBareRepoDir(t, barePath)
 	cache := &fakePrepareCache{
 		barePathFn: realCache.BarePath,
-		prepareFn: func(_ context.Context, _ string, repos []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+		prepareFn: func(_ context.Context, _ repocache.Scope, repos []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
 			if len(repos) != 1 {
 				t.Fatalf("Prepare received %d repos, want canonical duplicates collapsed to 1: %+v", len(repos), repos)
 			}
@@ -84,7 +84,7 @@ func TestPrepareTaskRepoCachesDeduplicatesCanonicalCachePaths(t *testing.T) {
 		repoCache: cache,
 		logger:    newDiscardLogger(),
 	}
-	task := Task{
+	task := Task{ExecutionUserID: "test-user",
 		WorkspaceID: workspaceID,
 		Repos: []RepoData{
 			{URL: "https://github.com/r2d-ai/multica.git", Ref: "main"},
@@ -180,11 +180,11 @@ type fakePrepareCache struct {
 	mu sync.Mutex
 
 	prepared     []repocache.PreparedRepo
-	barePathFn   func(string, string) string
-	prepareFn    func(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error)
+	barePathFn   func(repocache.Scope, string) string
+	prepareFn    func(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error)
 	prepareCalls int
 
-	recordFn    func(string, repocache.Dependent) error
+	recordFn    func(repocache.Scope, repocache.Dependent) error
 	recorded    []repocache.Dependent
 	recordCalls int
 
@@ -192,14 +192,14 @@ type fakePrepareCache struct {
 	syncCalls int
 }
 
-func (c *fakePrepareCache) Lookup(string, string) string { return "" }
-func (c *fakePrepareCache) BarePath(workspaceID, url string) string {
+func (c *fakePrepareCache) Lookup(repocache.Scope, string) string { return "" }
+func (c *fakePrepareCache) BarePath(workspaceID repocache.Scope, url string) string {
 	if c.barePathFn != nil {
 		return c.barePathFn(workspaceID, url)
 	}
 	return ""
 }
-func (c *fakePrepareCache) Sync(string, []repocache.RepoInfo) error {
+func (c *fakePrepareCache) Sync(repocache.Scope, []repocache.RepoInfo) error {
 	c.syncMu.Lock()
 	c.syncCalls++
 	c.syncMu.Unlock()
@@ -210,7 +210,7 @@ func (c *fakePrepareCache) CreateWorktree(repocache.WorktreeParams) (*repocache.
 	return nil, nil
 }
 
-func (c *fakePrepareCache) Prepare(ctx context.Context, ws string, repos []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+func (c *fakePrepareCache) Prepare(ctx context.Context, ws repocache.Scope, repos []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
 	c.mu.Lock()
 	c.prepareCalls++
 	c.mu.Unlock()
@@ -220,7 +220,7 @@ func (c *fakePrepareCache) Prepare(ctx context.Context, ws string, repos []repoc
 	return c.prepared, nil
 }
 
-func (c *fakePrepareCache) RecordDependents(ws string, dep repocache.Dependent) error {
+func (c *fakePrepareCache) RecordDependents(ws repocache.Scope, dep repocache.Dependent) error {
 	c.mu.Lock()
 	c.recordCalls++
 	c.recorded = append(c.recorded, dep)
@@ -310,7 +310,7 @@ func newDockerTaskDaemon(t *testing.T, cache repoCacheBackend) (*Daemon, string,
 }
 
 func dockerTask(id string, repos []RepoData) Task {
-	return Task{
+	return Task{ExecutionUserID: "test-user",
 		ID:          id,
 		WorkspaceID: "ws-1",
 		AgentID:     "agent-1",
@@ -336,7 +336,7 @@ func readManifestRepos(t *testing.T, path string) []workercheckout.Entry {
 func TestPrepareTaskRepoCachesRejectsPathOutsideWorkspaceCache(t *testing.T) {
 	workspacesRoot := t.TempDir()
 	workspaceID := "ws-1"
-	cacheRoot := filepath.Join(workspacesRoot, ".repos", workspaceID)
+	cacheRoot := filepath.Join(workspacesRoot, ".repos", workspaceID, "test-user")
 	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
 		t.Fatalf("mkdir cache root: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestPrepareTaskRepoCachesRejectsPathOutsideWorkspaceCache(t *testing.T) {
 		logger:    newDiscardLogger(),
 	}
 
-	_, err := d.prepareTaskRepoCaches(context.Background(), Task{
+	_, err := d.prepareTaskRepoCaches(context.Background(), Task{ExecutionUserID: "test-user",
 		WorkspaceID: workspaceID,
 		Repos:       []RepoData{{URL: "https://example.com/a"}},
 	})
@@ -363,7 +363,7 @@ func TestPrepareTaskRepoCachesRejectsPathOutsideWorkspaceCache(t *testing.T) {
 
 func TestRunTaskFailsWhenRepoCachePrepareFails(t *testing.T) {
 	const repoURL = "https://example.com/broken.git"
-	cache := &fakePrepareCache{prepareFn: func(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+	cache := &fakePrepareCache{prepareFn: func(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
 		return nil, fmt.Errorf("fetch %s: connection refused", repoURL)
 	}}
 	d := &Daemon{
@@ -378,7 +378,7 @@ func TestRunTaskFailsWhenRepoCachePrepareFails(t *testing.T) {
 	}
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	task := Task{
+	task := Task{ExecutionUserID: "test-user",
 		ID:          "task-1",
 		WorkspaceID: "ws-1",
 		AgentID:     "agent-1",
@@ -402,7 +402,7 @@ func TestRunTaskWritesManifestAndRecordsDependents(t *testing.T) {
 	cache := &fakePrepareCache{}
 	d, workspacesRoot, argvRecord := newDockerTaskDaemon(t, cache)
 
-	bare := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-1", "repo-a.git"))
+	bare := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-1", "test-user", "repo-a.git"))
 	const repoURL = "https://example.com/a"
 	cache.prepared = []repocache.PreparedRepo{
 		{URL: repoURL, CommitSHA: fakeCommitSHA, BarePath: bare},
@@ -446,12 +446,12 @@ func TestRunTaskWritesManifestAndRecordsDependents(t *testing.T) {
 }
 
 func TestRunTaskFailsWhenRecordDependentsFails(t *testing.T) {
-	cache := &fakePrepareCache{recordFn: func(string, repocache.Dependent) error {
+	cache := &fakePrepareCache{recordFn: func(repocache.Scope, repocache.Dependent) error {
 		return errors.New("record boom")
 	}}
 	d, workspacesRoot, _ := newDockerTaskDaemon(t, cache)
 
-	bare := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-1", "repo-a.git"))
+	bare := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-1", "test-user", "repo-a.git"))
 	cache.prepared = []repocache.PreparedRepo{{URL: "https://example.com/a", CommitSHA: fakeCommitSHA, BarePath: bare}}
 
 	_, err := d.runTask(context.Background(), dockerTask("task-1", []RepoData{{URL: "https://example.com/a"}}), "codex", 0, newDiscardLogger())
@@ -462,7 +462,7 @@ func TestRunTaskFailsWhenRecordDependentsFails(t *testing.T) {
 
 func TestRunTaskPreparesRepoCacheForBwrap(t *testing.T) {
 	expected := errors.New("native fetch fixture failed")
-	cache := &fakePrepareCache{prepareFn: func(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+	cache := &fakePrepareCache{prepareFn: func(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
 		return nil, expected
 	}}
 	d := &Daemon{
@@ -477,7 +477,7 @@ func TestRunTaskPreparesRepoCacheForBwrap(t *testing.T) {
 	}
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	task := Task{
+	task := Task{ExecutionUserID: "test-user",
 		ID:          "task-1",
 		WorkspaceID: "ws-1",
 		AgentID:     "agent-1",
@@ -525,7 +525,7 @@ func TestTwoDockerTasksUseSeparateWorkdirsAndOneSharedCache(t *testing.T) {
 	cache := &fakePrepareCache{}
 	d, workspacesRoot, argvRecord := newDockerTaskDaemon(t, cache)
 
-	bare := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-1", "repo-a.git"))
+	bare := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-1", "test-user", "repo-a.git"))
 	const repoURL = "https://example.com/a"
 	cache.prepared = []repocache.PreparedRepo{
 		{URL: repoURL, CommitSHA: fakeCommitSHA, BarePath: bare},
@@ -566,7 +566,7 @@ func TestReusedWorkdirKeepsOldCacheMounted(t *testing.T) {
 	workspaceID := "ws-1"
 	workDir := t.TempDir()
 
-	oldCache := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", workspaceID, "old-repo.git"))
+	oldCache := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", workspaceID, "test-user", "old-repo.git"))
 	// A worker checkout points its alternates at <cache>/objects.
 	alternates := filepath.Join(workDir, "oldrepo", ".git", "objects", "info", "alternates")
 	if err := os.MkdirAll(filepath.Dir(alternates), 0o755); err != nil {
@@ -577,7 +577,7 @@ func TestReusedWorkdirKeepsOldCacheMounted(t *testing.T) {
 	}
 
 	d := &Daemon{cfg: Config{WorkspacesRoot: workspacesRoot}, logger: newDiscardLogger()}
-	paths, err := d.repoCachePathsForReusedWorkdir(workspaceID, workDir)
+	paths, err := d.repoCachePathsForReusedWorkdir(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, workDir)
 	if err != nil {
 		t.Fatalf("repoCachePathsForReusedWorkdir: %v", err)
 	}
@@ -600,7 +600,7 @@ func TestReusedWorkdirReturnsRawAlternatesPath(t *testing.T) {
 	// set must keep that raw spelling rather than the resolved target, or the
 	// reused checkout breaks when the worker no longer sees the referenced path.
 	realRoot := t.TempDir()
-	createBareRepoDir(t, filepath.Join(realRoot, ".repos", "ws-1", "old-repo.git"))
+	createBareRepoDir(t, filepath.Join(realRoot, ".repos", "ws-1", "test-user", "old-repo.git"))
 
 	linkRoot := filepath.Join(t.TempDir(), "workspaces-link")
 	if err := os.Symlink(realRoot, linkRoot); err != nil {
@@ -608,7 +608,7 @@ func TestReusedWorkdirReturnsRawAlternatesPath(t *testing.T) {
 	}
 
 	workDir := t.TempDir()
-	altPath := filepath.Join(linkRoot, ".repos", "ws-1", "old-repo.git", "objects")
+	altPath := filepath.Join(linkRoot, ".repos", "ws-1", "test-user", "old-repo.git", "objects")
 	alternates := filepath.Join(workDir, "oldrepo", ".git", "objects", "info", "alternates")
 	if err := os.MkdirAll(filepath.Dir(alternates), 0o755); err != nil {
 		t.Fatalf("mkdir alternates dir: %v", err)
@@ -618,7 +618,7 @@ func TestReusedWorkdirReturnsRawAlternatesPath(t *testing.T) {
 	}
 
 	d := &Daemon{cfg: Config{WorkspacesRoot: linkRoot}, logger: newDiscardLogger()}
-	paths, err := d.repoCachePathsForReusedWorkdir("ws-1", workDir)
+	paths, err := d.repoCachePathsForReusedWorkdir(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, workDir)
 	if err != nil {
 		t.Fatalf("repoCachePathsForReusedWorkdir: %v", err)
 	}
@@ -627,7 +627,7 @@ func TestReusedWorkdirReturnsRawAlternatesPath(t *testing.T) {
 	}
 	// The returned raw path must still pass the strict-child boundary against
 	// the resolved cache root.
-	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(linkRoot, ".repos", "ws-1"))
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(linkRoot, ".repos", "ws-1", "test-user"))
 	if err != nil {
 		t.Fatalf("eval symlinks cache root: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestReusedWorkdirIgnoresAlternatesOutsideCacheRoot(t *testing.T) {
 	workspaceID := "ws-1"
 	workDir := t.TempDir()
 
-	if err := os.MkdirAll(filepath.Join(workspacesRoot, ".repos", workspaceID), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspacesRoot, ".repos", workspaceID, "test-user"), 0o755); err != nil {
 		t.Fatalf("mkdir cache root: %v", err)
 	}
 
@@ -653,7 +653,7 @@ func TestReusedWorkdirIgnoresAlternatesOutsideCacheRoot(t *testing.T) {
 	// valid path under this workspace's cache root.
 	outsideTmp := createBareRepoDir(t, filepath.Join(t.TempDir(), "tmp-cache.git"))
 	siblingCache := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", "ws-sibling", "sibling.git"))
-	ownCache := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", workspaceID, "own.git"))
+	ownCache := createBareRepoDir(t, filepath.Join(workspacesRoot, ".repos", workspaceID, "test-user", "own.git"))
 
 	type checkout struct {
 		name string
@@ -675,12 +675,77 @@ func TestReusedWorkdirIgnoresAlternatesOutsideCacheRoot(t *testing.T) {
 	}
 
 	d := &Daemon{cfg: Config{WorkspacesRoot: workspacesRoot}, logger: newDiscardLogger()}
-	paths, err := d.repoCachePathsForReusedWorkdir(workspaceID, workDir)
+	paths, err := d.repoCachePathsForReusedWorkdir(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, workDir)
 	if err != nil {
 		t.Fatalf("repoCachePathsForReusedWorkdir: %v", err)
 	}
 	want := filepath.Join(ownCache, "objects")
 	if len(paths) != 1 || paths[0] != want {
 		t.Fatalf("reused cache paths = %v, want only [%q]", paths, want)
+	}
+}
+
+func TestHostCodeTaskRequiresProvenExecutionUser(t *testing.T) {
+	d, _, _ := newDockerTaskDaemon(t, &fakePrepareCache{})
+	d.cfg.SandboxEnabled = false
+	task := dockerTask("missing-user", []RepoData{{URL: "https://example.test/repo.git"}})
+	task.ExecutionUserID = ""
+	_, err := d.runTask(context.Background(), task, "codex", 0, newDiscardLogger())
+	d.waitBackgroundSyncs()
+	if err == nil || !strings.Contains(err.Error(), "execution user") {
+		t.Fatalf("task without owner was not rejected at ownership boundary: %v", err)
+	}
+}
+
+func TestReusedWorkdirCannotUseAliasedUserStore(t *testing.T) {
+	root := t.TempDir()
+	bob := filepath.Join(root, ".repos", "ws-1", "bob")
+	objects := filepath.Join(bob, "repo.git", "objects")
+	if err := os.MkdirAll(objects, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bob, filepath.Join(root, ".repos", "ws-1", "alice")); err != nil {
+		t.Skip(err)
+	}
+	work := t.TempDir()
+	alternate := filepath.Join(work, "repo", ".git", "objects", "info", "alternates")
+	if err := os.MkdirAll(filepath.Dir(alternate), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alternate, []byte(objects+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{cfg: Config{WorkspacesRoot: root}, logger: newDiscardLogger()}
+	paths, err := d.repoCachePathsForReusedWorkdir(repocache.Scope{WorkspaceID: "ws-1", UserID: "alice"}, work)
+	if err == nil && len(paths) > 0 {
+		t.Fatalf("Alice admitted Bob's cache through a user-store symlink: %v", paths)
+	}
+}
+
+func TestConcurrentUsersReceiveSeparateTaskCaches(t *testing.T) {
+	d, root, _ := newDockerTaskDaemon(t, nil)
+	d.repoCache = repocache.New(filepath.Join(root, ".repos"), newDiscardLogger())
+	remote := createGCGitRepo(t)
+	results := make(chan error, 2)
+	for _, user := range []string{"alice", "bob"} {
+		go func() {
+			task := dockerTask("task-"+user, []RepoData{{URL: remote}})
+			task.ExecutionUserID = user
+			result, err := d.runTask(context.Background(), task, "codex", 0, newDiscardLogger())
+			if err == nil && result.Status != "completed" {
+				err = fmt.Errorf("task status %s", result.Status)
+			}
+			results <- err
+		}()
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	alice := d.repoCache.Lookup(repocache.Scope{WorkspaceID: "ws-1", UserID: "alice"}, remote)
+	bob := d.repoCache.Lookup(repocache.Scope{WorkspaceID: "ws-1", UserID: "bob"}, remote)
+	if alice == "" || bob == "" || alice == bob {
+		t.Fatalf("tasks did not create separate user bases: Alice=%s Bob=%s", alice, bob)
 	}
 }

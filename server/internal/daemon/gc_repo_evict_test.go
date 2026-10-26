@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ const testRepoURL = "https://example.com/acme/widgets.git"
 func newEvictTestRepo(t *testing.T, d *Daemon, workspaceID, repoURL string) string {
 	t.Helper()
 	source := createGCGitRepo(t)
-	barePath := d.repoCache.BarePath(workspaceID, repoURL)
+	barePath := d.repoCache.BarePath(repocache.Scope{WorkspaceID: workspaceID, UserID: "test-user"}, repoURL)
 	if err := os.MkdirAll(filepath.Dir(barePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +320,7 @@ func TestRepoBarePathIsLiveCoversBothURLSets(t *testing.T) {
 		{"repo no workspace claims", strangerRepo, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := d.repoBarePathIsLive(d.repoCache.BarePath(wsID, tc.url))
+			got := d.repoBarePathIsLive(d.repoCache.BarePath(repocache.Scope{WorkspaceID: wsID, UserID: "test-user"}, tc.url))
 			if got != tc.want {
 				t.Errorf("repoBarePathIsLive(%s) = %v, want %v", tc.name, got, tc.want)
 			}
@@ -327,7 +328,7 @@ func TestRepoBarePathIsLiveCoversBothURLSets(t *testing.T) {
 	}
 
 	// Same URL under a workspace this daemon does not watch is not live.
-	other := d.repoCache.BarePath("22222222-2222-2222-2222-222222222222", workspaceRepo)
+	other := d.repoCache.BarePath(repocache.Scope{WorkspaceID: "22222222-2222-2222-2222-222222222222", UserID: "test-user"}, workspaceRepo)
 	if d.repoBarePathIsLive(other) {
 		t.Error("a repo under an unwatched workspace must not count as live")
 	}

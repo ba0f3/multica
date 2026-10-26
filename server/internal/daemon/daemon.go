@@ -424,9 +424,9 @@ func (l *contextLock) Unlock() {
 }
 
 type repoCacheBackend interface {
-	Lookup(workspaceID, url string) string
-	BarePath(workspaceID, url string) string
-	Sync(workspaceID string, repos []repocache.RepoInfo) error
+	Lookup(scope repocache.Scope, url string) string
+	BarePath(scope repocache.Scope, url string) string
+	Sync(scope repocache.Scope, repos []repocache.RepoInfo) error
 	WithRepoLock(barePath string, fn func() error) error
 	CreateWorktree(params repocache.WorktreeParams) (*repocache.WorktreeResult, error)
 }
@@ -435,7 +435,7 @@ type repoCacheBackend interface {
 // doubles of repoCacheBackend do not have to implement it; prepareTaskRepoCaches
 // fails closed when the configured cache cannot prepare a repo for a task.
 type repoCachePreparer interface {
-	Prepare(context.Context, string, []repocache.RepoInfo) ([]repocache.PreparedRepo, error)
+	Prepare(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error)
 }
 
 // repoCacheDependentRecorder is implemented by repocache.Cache. It is optional
@@ -443,7 +443,7 @@ type repoCachePreparer interface {
 // recordRepoCacheDependents fails closed when the configured cache cannot
 // record a workdir's dependency on its caches.
 type repoCacheDependentRecorder interface {
-	RecordDependents(string, repocache.Dependent) error
+	RecordDependents(repocache.Scope, repocache.Dependent) error
 }
 
 // Daemon is the local agent runtime that polls for and executes tasks.
@@ -3273,14 +3273,21 @@ func (d *Daemon) repoBarePathIsLive(barePath string) bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	scope, valid := d.repoScopeForPath(barePath)
+	if !valid {
+		return false
+	}
 	for workspaceID, ws := range d.workspaces {
+		if workspaceID != scope.WorkspaceID {
+			continue
+		}
 		for url := range ws.allowedRepoURLs {
-			if d.repoCache.BarePath(workspaceID, url) == barePath {
+			if d.repoCache.BarePath(scope, url) == barePath {
 				return true
 			}
 		}
 		for url := range ws.taskRepoURLs {
-			if d.repoCache.BarePath(workspaceID, url) == barePath {
+			if d.repoCache.BarePath(scope, url) == barePath {
 				return true
 			}
 		}
@@ -3330,7 +3337,8 @@ func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 // idempotent. Called from runTask before the agent spawns so
 // `multica repo checkout` accepts project-only URLs without an extra round
 // trip back to GetWorkspaceRepos (which doesn't carry project resources).
-func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData) []RepoData {
+func (d *Daemon) registerTaskRepos(scope repocache.Scope, taskID string, repos []RepoData) []RepoData {
+	workspaceID := scope.WorkspaceID
 	if len(repos) == 0 {
 		return nil
 	}
@@ -3380,7 +3388,7 @@ func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData)
 
 	toSync := make([]RepoData, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.tracked && d.repoCache != nil && d.repoCache.Lookup(workspaceID, candidate.url) != "" {
+		if candidate.tracked && d.repoCache != nil && d.repoCache.Lookup(scope, candidate.url) != "" {
 			continue
 		}
 		toSync = append(toSync, RepoData{URL: candidate.url})
@@ -3424,28 +3432,28 @@ func (d *Daemon) waitBackgroundSyncs() {
 	d.bgSyncs.Wait()
 }
 
-func (d *Daemon) syncWorkspaceRepos(workspaceID string, repos []RepoData) {
-	_ = d.syncWorkspaceReposContext(context.Background(), workspaceID, repos)
+func (d *Daemon) syncWorkspaceRepos(scope repocache.Scope, repos []RepoData) {
+	_ = d.syncWorkspaceReposContext(context.Background(), scope, repos)
 }
 
 // syncWorkspaceReposContext returns the sync error to its caller rather than
 // recording it per workspace: background syncs of other repos run
 // concurrently, and a shared slot let a later successful sync erase the
 // failure before a checkout could report it.
-func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, workspaceID string, repos []RepoData) error {
+func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, scope repocache.Scope, repos []RepoData) error {
 	if d.repoCache == nil {
 		return nil
 	}
 	var err error
 	if cache, ok := d.repoCache.(interface {
-		SyncContext(context.Context, string, []repocache.RepoInfo) error
+		SyncContext(context.Context, repocache.Scope, []repocache.RepoInfo) error
 	}); ok {
-		err = cache.SyncContext(ctx, workspaceID, repoDataToInfo(repos))
+		err = cache.SyncContext(ctx, scope, repoDataToInfo(repos))
 	} else {
-		err = d.repoCache.Sync(workspaceID, repoDataToInfo(repos))
+		err = d.repoCache.Sync(scope, repoDataToInfo(repos))
 	}
 	if err != nil {
-		d.logger.Warn("repo cache sync failed", "workspace_id", workspaceID, "error", err)
+		d.logger.Warn("repo cache sync failed", "workspace_id", scope.WorkspaceID, "error", err)
 	}
 	return err
 }
@@ -3456,12 +3464,6 @@ func (d *Daemon) usesWorkerRepoCache(provider string) bool {
 	return d.cfg.SandboxEnabled &&
 		(d.cfg.TaskSandboxBackend == "docker" || (d.cfg.TaskSandboxBackend == "bwrap" && sandbox.ProviderSupportsNativeHost(provider))) &&
 		sandbox.ProviderSupportsIsolatedTools(provider)
-}
-
-// workspaceRepoCacheRoot is the per-workspace directory under which the repo
-// cache stores bare clones. It mirrors the root repocache.New is handed.
-func (d *Daemon) workspaceRepoCacheRoot(workspaceID string) string {
-	return filepath.Join(d.cfg.WorkspacesRoot, ".repos", workspaceID)
 }
 
 // prepareTaskRepoCaches makes every task repo available in the workspace cache
@@ -3491,7 +3493,7 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 		if url == "" {
 			continue
 		}
-		cacheKey := d.repoCache.BarePath(task.WorkspaceID, url)
+		cacheKey := d.repoCache.BarePath(task.repoScope(), url)
 		if cacheKey == "" {
 			cacheKey = url
 		} else {
@@ -3507,12 +3509,19 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 		return nil, nil
 	}
 
-	prepared, err := preparer.Prepare(ctx, task.WorkspaceID, infos)
+	if err := task.repoScope().Validate(); err != nil {
+		return nil, err
+	}
+	prepared, err := preparer.Prepare(ctx, task.repoScope(), infos)
 	if err != nil {
 		return nil, taskRepoPrepareError(task, err)
 	}
 
-	resolvedRoot, err := filepath.EvalSymlinks(d.workspaceRepoCacheRoot(task.WorkspaceID))
+	root, err := repocache.New(filepath.Join(d.cfg.WorkspacesRoot, ".repos"), d.logger).ScopeRoot(task.repoScope())
+	if err != nil {
+		return nil, err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace cache root: %w", err)
 	}
@@ -3564,11 +3573,15 @@ func resolvePreparedRepoCachePath(barePath, resolvedWorkspaceCacheRoot string) (
 // still exist strictly under the resolved workspace cache root. These are
 // extra read-only mounts for a Docker worker so an old checkout keeps working
 // after a task's repo set changes; they are never listed in the manifest.
-func (d *Daemon) repoCachePathsForReusedWorkdir(workspaceID, workDir string) ([]string, error) {
+func (d *Daemon) repoCachePathsForReusedWorkdir(scope repocache.Scope, workDir string) ([]string, error) {
 	if workDir == "" {
 		return nil, nil
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(d.workspaceRepoCacheRoot(workspaceID))
+	root, err := repocache.New(filepath.Join(d.cfg.WorkspacesRoot, ".repos"), d.logger).ScopeRoot(scope)
+	if err != nil {
+		return nil, err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -3619,12 +3632,12 @@ func (d *Daemon) repoCachePathsForReusedWorkdir(workspaceID, workDir string) ([]
 // cachePaths so the repo-cache GC retains them while the workdir exists. It
 // fails closed: if the cache cannot record the dependency, the task must not
 // launch and then lose its cache mid-run.
-func (d *Daemon) recordRepoCacheDependents(workspaceID string, env *execenv.Environment, taskID, attemptID string, cachePaths []string) error {
+func (d *Daemon) recordRepoCacheDependents(scope repocache.Scope, env *execenv.Environment, taskID, attemptID string, cachePaths []string) error {
 	recorder, ok := d.repoCache.(repoCacheDependentRecorder)
 	if !ok {
 		return errors.New("record repo cache dependents: repo cache does not support RecordDependents")
 	}
-	if err := recorder.RecordDependents(workspaceID, repocache.Dependent{
+	if err := recorder.RecordDependents(scope, repocache.Dependent{
 		WorkDir:    env.WorkDir,
 		CachePaths: cachePaths,
 		TaskID:     taskID,
@@ -3686,9 +3699,9 @@ func (d *Daemon) refreshWorkspaceRepos(ctx context.Context, workspaceID string) 
 // themselves in the workspace's bare caches. Optional so test daemons can run
 // with a minimal repoCacheBackend.
 type coAuthoredByPublisher interface {
-	WriteCoAuthoredByState(workspaceID string, enabled bool) error
-	ReconcileCoAuthoredByHooks(workspaceID string, enabled bool) error
-	ReconcileCoAuthoredByHookInCheckout(checkoutPath, workspaceID string, enabled bool) error
+	WriteCoAuthoredByState(scope repocache.Scope, enabled bool) error
+	ReconcileCoAuthoredByHooks(scope repocache.Scope, enabled bool) error
+	ReconcileCoAuthoredByHookInCheckout(checkoutPath string, scope repocache.Scope, enabled bool) error
 }
 
 // persistCoAuthoredByState records the workspace's current Co-authored-by
@@ -3732,11 +3745,18 @@ func (d *Daemon) publishCoAuthoredByState(workspaceID string, verdict func(strin
 	defer ws.coAuthorPublishMu.Unlock()
 
 	enabled := verdict(workspaceID)
-	if err := cache.WriteCoAuthoredByState(workspaceID, enabled); err != nil {
-		d.logger.Warn("record co-authored-by state failed", "workspace_id", workspaceID, "error", err)
+	scopes, err := d.repoCacheScopes(workspaceID)
+	if err != nil {
+		d.logger.Warn("enumerate repository owners", "error", err)
+		return
 	}
-	if err := cache.ReconcileCoAuthoredByHooks(workspaceID, enabled); err != nil {
-		d.logger.Warn("reconcile co-authored-by hooks failed", "workspace_id", workspaceID, "error", err)
+	for _, scope := range scopes {
+		if err := cache.WriteCoAuthoredByState(scope, enabled); err != nil {
+			d.logger.Warn("record co-authored-by state failed", "workspace_id", workspaceID, "error", err)
+		}
+		if err := cache.ReconcileCoAuthoredByHooks(scope, enabled); err != nil {
+			d.logger.Warn("reconcile co-authored-by hooks failed", "workspace_id", workspaceID, "error", err)
+		}
 	}
 	d.reconcileIsolatedCoAuthoredByHooks(cache, workspaceID, enabled)
 }
@@ -3788,8 +3808,12 @@ func (d *Daemon) reconcileIsolatedCoAuthoredByHooks(cache coAuthoredByPublisher,
 			if !d.envRootBelongsToWorkspace(wsEntry.Name(), envRoot, workspaceID) {
 				continue
 			}
+			owner, ownerErr := execenv.ReadEnvRootOwner(envRoot)
+			if ownerErr != nil || owner.ExecutionUserID == "" {
+				continue
+			}
 			for _, checkout := range isolatedCheckoutCandidates(envRoot, isolatedCheckoutScanDepth) {
-				if err := cache.ReconcileCoAuthoredByHookInCheckout(checkout, workspaceID, enabled); err != nil {
+				if err := cache.ReconcileCoAuthoredByHookInCheckout(checkout, repocache.Scope{WorkspaceID: workspaceID, UserID: owner.ExecutionUserID}, enabled); err != nil {
 					d.logger.Warn("reconcile co-authored-by hook in checkout failed",
 						"workspace_id", workspaceID, "path", checkout, "error", err)
 				}
@@ -4093,7 +4117,11 @@ func (d *Daemon) convergeWorkspaceRuntimesToZero(ctx context.Context, workspaceI
 	return nil
 }
 
-func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL string) error {
+func (d *Daemon) ensureRepoReady(ctx context.Context, scope repocache.Scope, repoURL string) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	workspaceID := scope.WorkspaceID
 	if d.repoCache == nil {
 		return fmt.Errorf("repo cache not initialized")
 	}
@@ -4121,18 +4149,18 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 	//     a sibling goroutine on a concurrent cold-miss already refreshed
 	//     and populated the cache. We can skip the duplicate refresh — the
 	//     sibling's refresh is fresh enough for our gate read.
-	cacheHitOnEntry := d.workspaceRepoAllowed(workspaceID, repoURL) && d.repoCache.Lookup(workspaceID, repoURL) != ""
+	cacheHitOnEntry := d.workspaceRepoAllowed(workspaceID, repoURL) && d.repoCache.Lookup(scope, repoURL) != ""
 
 	if err := ws.repoRefreshMu.Lock(ctx); err != nil {
 		return err
 	}
 	defer ws.repoRefreshMu.Unlock()
 
-	if !cacheHitOnEntry && d.workspaceRepoAllowed(workspaceID, repoURL) && d.repoCache.Lookup(workspaceID, repoURL) != "" {
+	if !cacheHitOnEntry && d.workspaceRepoAllowed(workspaceID, repoURL) && d.repoCache.Lookup(scope, repoURL) != "" {
 		return nil
 	}
 
-	resp, err := d.refreshWorkspaceRepos(ctx, workspaceID)
+	_, err := d.refreshWorkspaceRepos(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("refresh workspace repos: %w", err)
 	}
@@ -4141,16 +4169,16 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 		return ErrRepoNotConfigured
 	}
 
-	if d.repoCache.Lookup(workspaceID, repoURL) != "" {
+	if d.repoCache.Lookup(scope, repoURL) != "" {
 		return nil
 	}
 
-	syncErr := d.syncWorkspaceReposContext(ctx, workspaceID, resp.Repos)
+	syncErr := d.syncWorkspaceReposContext(ctx, scope, []RepoData{{URL: repoURL}})
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
 
-	if d.repoCache.Lookup(workspaceID, repoURL) != "" {
+	if d.repoCache.Lookup(scope, repoURL) != "" {
 		return nil
 	}
 
@@ -4539,9 +4567,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context, reconcileProfiles bo
 		}
 
 		d.applyGitCACerts(resp.CACerts)
-		if d.repoCache != nil && len(resp.Repos) > 0 {
-			go d.syncWorkspaceRepos(id, resp.Repos)
-		}
+		// Repository data is fetched only with a task-proven execution user.
 
 		// Tell the server about any tasks the previous daemon process was
 		// running on these runtimes. Without this, an issue can stay stuck
@@ -6674,6 +6700,7 @@ func taskRootDirParams(workspacesRoot string, task Task) execenv.RootDirParams {
 	return execenv.RootDirParams{
 		WorkspacesRoot:  workspacesRoot,
 		WorkspaceID:     task.WorkspaceID,
+		ExecutionUserID: task.ExecutionUserID,
 		WorkspaceSlug:   task.WorkspaceSlug,
 		TaskID:          task.ID,
 		IssueIdentifier: task.IssueIdentifier,
@@ -7490,6 +7517,10 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 		return nil, "", nil, false, nil
 	}
 	priorRoot := filepath.Dir(workDir)
+	owner, ownerErr := execenv.ReadEnvRootOwner(priorRoot)
+	if ownerErr != nil || (owner.WorkspaceID != "" && owner.WorkspaceID != task.WorkspaceID) || owner.ExecutionUserID != task.ExecutionUserID {
+		return nil, "", nil, false, nil
+	}
 	// workDir came back through util.ResolveSymlinks, so the root it is
 	// measured against has to be resolved the same way — otherwise a symlinked
 	// workspaces root (macOS /tmp -> /private/tmp, a home on a linked volume,
@@ -7955,7 +7986,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// in the per-workspace allowlist and the local cache, otherwise
 	// `multica repo checkout` would reject project-only URLs that aren't also
 	// bound at the workspace level.
-	toSync := d.registerTaskRepos(task.WorkspaceID, task.ID, task.Repos)
+	if len(task.Repos) > 0 {
+		if err := task.repoScope().Validate(); err != nil {
+			return TaskResult{}, err
+		}
+	}
+	d.registerTaskRepos(task.repoScope(), task.ID, task.Repos)
 	defer d.clearTaskRepoRefs(task.WorkspaceID, task.ID)
 
 	// Git operations inside this run sign as the human who authorized it,
@@ -7979,11 +8015,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	prepareCtx = repocache.WithGitEnvironment(prepareCtx, taskRepoGitEnvironment(task, gitSocketPath))
 
-	// A Docker-cache task receives its code from the prepared bare caches, so
-	// it must fetch and resolve them before launch — strictly, with no fallback
-	// to a stale snapshot. Every other task keeps the historical background
-	// sync (and `multica repo checkout` still clones on demand inside the
-	// boundary).
+	// Worker caches are fetched strictly before launch. Host checkouts fetch
+	// on demand through the active task credential; there is no owner-auth sync.
 	timing.Mark("repo_started")
 	workerRepoCache := d.usesWorkerRepoCache(provider)
 	var taskRepoCaches []workercheckout.Entry
@@ -7994,12 +8027,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			return TaskResult{}, fmt.Errorf("prepare task repo cache: %w", prepareErr)
 		}
 		taskRepoCaches = prepared
-	} else if len(toSync) > 0 {
-		d.bgSyncs.Add(1)
-		go func() {
-			defer d.bgSyncs.Done()
-			d.syncWorkspaceRepos(task.WorkspaceID, toSync)
-		}()
+
 	}
 
 	phaseRecorder.Mark(taskPhaseRepoCacheReady)
@@ -8433,7 +8461,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		var err error
 		env, err = d.reuseExecutionEnvironment(prepareCtx, execenv.ReuseParams{
-			NativeProfile:  nativeProfile,
+			NativeProfile: nativeProfile,
+			WorkspaceID:   task.WorkspaceID, ExecutionUserID: task.ExecutionUserID,
 			WorkspacesRoot: d.cfg.WorkspacesRoot,
 			Profile:        d.cfg.Profile,
 			// The canonical path the lock was taken on. Handing Reuse the raw
@@ -8487,6 +8516,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			WorkspacesRoot:  d.cfg.WorkspacesRoot,
 			Profile:         d.cfg.Profile,
 			WorkspaceID:     task.WorkspaceID,
+			ExecutionUserID: task.ExecutionUserID,
 			WorkspaceSlug:   task.WorkspaceSlug,
 			TaskID:          task.ID,
 			IssueIdentifier: task.IssueIdentifier,
@@ -8602,7 +8632,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// outlive the workdir's use of it.
 	var extraCachePaths []string
 	if workerRepoCache {
-		reused, reusedErr := d.repoCachePathsForReusedWorkdir(task.WorkspaceID, env.WorkDir)
+		reused, reusedErr := d.repoCachePathsForReusedWorkdir(task.repoScope(), env.WorkDir)
 		if reusedErr != nil {
 			return TaskResult{}, fmt.Errorf("resolve reused workdir repo cache paths: %w", reusedErr)
 		}
@@ -8632,7 +8662,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			cachePaths = append(cachePaths, path)
 		}
 		if len(cachePaths) > 0 {
-			if err := d.recordRepoCacheDependents(task.WorkspaceID, env, task.ID, attemptID, cachePaths); err != nil {
+			if err := d.recordRepoCacheDependents(task.repoScope(), env, task.ID, attemptID, cachePaths); err != nil {
 				return TaskResult{}, err
 			}
 		}
@@ -9257,11 +9287,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// execution window and always remove the credential afterwards.
 	d.registerActiveRepoCheckoutTask(agentToken, activeRepoCheckoutTask{
 		WorkspaceID:              task.WorkspaceID,
+		ExecutionUserID:          task.ExecutionUserID,
 		TaskID:                   task.ID,
 		AgentID:                  task.AgentID,
 		AgentName:                task.Agent.Name,
 		WorkDir:                  env.WorkDir,
 		HostRepoCheckoutDisabled: sandboxed != nil,
+		GitEnvironment:           taskRepoGitEnvironment(task, gitSocketPath),
 	})
 	if sandboxed != nil {
 		if env != nil {

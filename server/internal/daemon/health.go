@@ -124,11 +124,13 @@ type repoCheckoutRequest struct {
 }
 
 type activeRepoCheckoutTask struct {
-	WorkspaceID string
-	TaskID      string
-	AgentID     string
-	AgentName   string
-	WorkDir     string
+	ExecutionUserID string
+	GitEnvironment  []string
+	WorkspaceID     string
+	TaskID          string
+	AgentID         string
+	AgentName       string
+	WorkDir         string
 	// HostRepoCheckoutDisabled is set for tasks running inside an execution
 	// boundary. Git for those attempts must use native commands in the mounted
 	// workdir (container path), not the daemon's host-side repocache checkout.
@@ -505,7 +507,8 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			return
 		}
 
-		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL); err != nil {
+		checkoutCtx := repocache.WithGitEnvironment(r.Context(), activeTask.GitEnvironment)
+		if err := d.ensureRepoReady(checkoutCtx, repocache.Scope{WorkspaceID: activeTask.WorkspaceID, UserID: activeTask.ExecutionUserID}, req.URL); err != nil {
 			if r.Context().Err() != nil {
 				d.logger.Debug("repo checkout readiness cancelled", "url", req.URL, "error", err)
 				return
@@ -525,14 +528,14 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 		}
 
 		params := repocache.WorktreeParams{
-			WorkspaceID:         req.WorkspaceID,
+			Scope:               repocache.Scope{WorkspaceID: activeTask.WorkspaceID, UserID: activeTask.ExecutionUserID},
 			RepoURL:             req.URL,
 			WorkDir:             req.WorkDir,
 			Ref:                 checkoutRef,
 			AgentName:           req.AgentName,
 			TaskID:              req.TaskID,
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
-			IsolatedGitMetadata: req.CheckoutMode == repoCheckoutModeIsolated,
+			IsolatedGitMetadata: true,
 			Fresh:               req.Fresh,
 		}
 		if req.RetryBusy {
@@ -543,7 +546,7 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 		if cache, ok := d.repoCache.(interface {
 			CreateWorktreeContext(context.Context, repocache.WorktreeParams) (*repocache.WorktreeResult, error)
 		}); ok {
-			result, err = cache.CreateWorktreeContext(r.Context(), params)
+			result, err = cache.CreateWorktreeContext(checkoutCtx, params)
 		} else {
 			result, err = d.repoCache.CreateWorktree(params)
 		}

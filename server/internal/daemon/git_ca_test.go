@@ -21,10 +21,10 @@ type caRecordingCache struct {
 	err   error
 }
 
-func (c *caRecordingCache) Lookup(string, string) string                 { return "" }
-func (c *caRecordingCache) BarePath(string, string) string               { return "" }
-func (c *caRecordingCache) Sync(string, []repocache.RepoInfo) error      { return nil }
-func (c *caRecordingCache) WithRepoLock(_ string, fn func() error) error { return fn() }
+func (c *caRecordingCache) Lookup(repocache.Scope, string) string            { return "" }
+func (c *caRecordingCache) BarePath(repocache.Scope, string) string          { return "" }
+func (c *caRecordingCache) Sync(repocache.Scope, []repocache.RepoInfo) error { return nil }
+func (c *caRecordingCache) WithRepoLock(_ string, fn func() error) error     { return fn() }
 func (c *caRecordingCache) CreateWorktree(repocache.WorktreeParams) (*repocache.WorktreeResult, error) {
 	return nil, nil
 }

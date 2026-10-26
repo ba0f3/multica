@@ -4810,7 +4810,7 @@ func TestEnsureRepoReadyCachedRepoStillRefreshesSettings(t *testing.T) {
 			Settings:     json.RawMessage(`{"github_enabled":false,"co_authored_by_enabled":true}`),
 		})
 	})
-	if err := d.repoCache.Sync("ws-1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := d.repoCache.Sync(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("seed repo cache: %v", err)
 	}
 	// Workspace starts with the master switch ON. The server above will return
@@ -4827,7 +4827,7 @@ func TestEnsureRepoReadyCachedRepoStillRefreshesSettings(t *testing.T) {
 		t.Fatalf("precondition: expected co-author hook enabled before checkout")
 	}
 
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
+	if err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo); err != nil {
 		t.Fatalf("ensureRepoReady: %v", err)
 	}
 	if got := refreshCalls.Load(); got != 1 {
@@ -4855,13 +4855,13 @@ func TestEnsureRepoReadyTrimsURL(t *testing.T) {
 			ReposVersion: "v2",
 		})
 	})
-	if err := d.repoCache.Sync("ws-1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := d.repoCache.Sync(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("seed repo cache: %v", err)
 	}
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "v1", []RepoData{{URL: sourceRepo}}, nil)
 
 	// URL with trailing whitespace should still resolve to the cached repo.
-	if err := d.ensureRepoReady(context.Background(), "ws-1", "  "+sourceRepo+"  "); err != nil {
+	if err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "  "+sourceRepo+"  "); err != nil {
 		t.Fatalf("ensureRepoReady with padded URL: %v", err)
 	}
 	// Even on cache hit we refresh settings once so toggle flips feel live.
@@ -4889,13 +4889,13 @@ func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
+	if err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo); err != nil {
 		t.Fatalf("ensureRepoReady: %v", err)
 	}
 	if got := refreshCalls.Load(); got != 1 {
 		t.Fatalf("expected 1 refresh call, got %d", got)
 	}
-	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
+	if d.repoCache.Lookup(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo) == "" {
 		t.Fatal("expected repo to be cached after refresh")
 	}
 }
@@ -4923,12 +4923,12 @@ func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
 	// the only repo URL the agent should be able to check out.
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	toSync := d.registerTaskRepos("ws-1", "task-project-only", []RepoData{{URL: sourceRepo}})
+	toSync := d.registerTaskRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "task-project-only", []RepoData{{URL: sourceRepo}})
 	// registerTaskRepos no longer syncs in the background (runTask owns that);
 	// sync synchronously so the cache is populated before the assertions below.
-	d.syncWorkspaceRepos("ws-1", toSync)
+	d.syncWorkspaceRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, toSync)
 
-	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
+	if d.repoCache.Lookup(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo) == "" {
 		t.Fatalf("expected repo to be cached after registerTaskRepos, but Lookup returned empty")
 	}
 
@@ -4936,7 +4936,7 @@ func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
 		t.Fatal("expected project repo to pass workspaceRepoAllowed")
 	}
 
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
+	if err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo); err != nil {
 		t.Fatalf("ensureRepoReady: %v", err)
 	}
 	// ensureRepoReady refreshes settings on every call (RFC MUL-2414 §4.8; PR
@@ -4964,8 +4964,8 @@ func TestRegisterTaskReposSurvivesWorkspaceRefresh(t *testing.T) {
 		})
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-	toSync := d.registerTaskRepos("ws-1", "task-refresh", []RepoData{{URL: sourceRepo}})
-	d.syncWorkspaceRepos("ws-1", toSync)
+	toSync := d.registerTaskRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "task-refresh", []RepoData{{URL: sourceRepo}})
+	d.syncWorkspaceRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, toSync)
 
 	if _, err := d.refreshWorkspaceRepos(context.Background(), "ws-1"); err != nil {
 		t.Fatalf("refreshWorkspaceRepos: %v", err)
@@ -4986,11 +4986,11 @@ func TestTaskRepoDefaultRefScopedByTask(t *testing.T) {
 		},
 	}
 
-	d.registerTaskRepos("ws-1", "task-a", []RepoData{
+	d.registerTaskRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "task-a", []RepoData{
 		{URL: repoURL, Ref: "release/a"},
 		{URL: repoURL, Ref: "late-duplicate"},
 	})
-	d.registerTaskRepos("ws-1", "task-b", []RepoData{{URL: repoURL, Ref: "release/b"}})
+	d.registerTaskRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "task-b", []RepoData{{URL: repoURL, Ref: "release/b"}})
 
 	if got := d.taskRepoDefaultRef("ws-1", "task-a", repoURL); got != "release/a" {
 		t.Fatalf("task-a default ref = %q, want release/a", got)
@@ -5021,7 +5021,7 @@ func TestEnsureRepoReadyReturnsNotConfigured(t *testing.T) {
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	err := d.ensureRepoReady(context.Background(), "ws-1", "git@example.com:team/api.git")
+	err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, "git@example.com:team/api.git")
 	if !errors.Is(err, ErrRepoNotConfigured) {
 		t.Fatalf("expected ErrRepoNotConfigured, got %v", err)
 	}
@@ -5040,7 +5040,7 @@ func TestEnsureRepoReadyReportsSyncFailure(t *testing.T) {
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	err := d.ensureRepoReady(context.Background(), "ws-1", missingRepo)
+	err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, missingRepo)
 	if err == nil || !strings.Contains(err.Error(), "repo is configured but not synced: git clone --bare:") {
 		t.Fatalf("expected sync failure error with git's output, got %v", err)
 	}
@@ -5057,18 +5057,18 @@ type syncRaceRepoCache struct {
 	raced      bool
 }
 
-func (c *syncRaceRepoCache) Lookup(string, string) string {
+func (c *syncRaceRepoCache) Lookup(repocache.Scope, string) string {
 	c.mu.Lock()
 	race := c.failedOnce && !c.raced
 	c.raced = c.raced || race
 	c.mu.Unlock()
 	if race {
-		c.d.syncWorkspaceRepos("ws-1", []RepoData{{URL: "https://example.com/other.git"}})
+		c.d.syncWorkspaceRepos(repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoData{{URL: "https://example.com/other.git"}})
 	}
 	return ""
 }
-func (c *syncRaceRepoCache) BarePath(string, string) string { return "" }
-func (c *syncRaceRepoCache) Sync(_ string, repos []repocache.RepoInfo) error {
+func (c *syncRaceRepoCache) BarePath(repocache.Scope, string) string { return "" }
+func (c *syncRaceRepoCache) Sync(_ repocache.Scope, repos []repocache.RepoInfo) error {
 	for _, r := range repos {
 		if r.URL == c.failURL {
 			c.mu.Lock()
@@ -5099,7 +5099,7 @@ func TestEnsureRepoReadyKeepsSyncFailureDespiteConcurrentSuccess(t *testing.T) {
 	d.repoCache = cache
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	err := d.ensureRepoReady(context.Background(), "ws-1", repoURL)
+	err := d.ensureRepoReady(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repoURL)
 	if !cache.raced {
 		t.Fatal("test did not exercise the concurrent sync")
 	}
@@ -5164,7 +5164,7 @@ func TestEnsureRepoReadyConcurrentMissRefreshesOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			waitCtx := &repoRefreshWaitContext{Context: ctx, waiting: waiting}
-			errCh <- d.ensureRepoReady(waitCtx, "ws-1", sourceRepo)
+			errCh <- d.ensureRepoReady(waitCtx, repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)
 		}()
 	}
 	for range concurrency {

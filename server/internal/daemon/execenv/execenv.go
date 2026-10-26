@@ -37,6 +37,7 @@ type ProjectResourceForEnv struct {
 
 // PrepareParams holds all inputs needed to set up an execution environment.
 type PrepareParams struct {
+	ExecutionUserID string
 	NativeProfile   *NativeProfile
 	WorkspacesRoot  string // base path for all envs (e.g., ~/multica_workspaces)
 	WorkspaceID     string // workspace UUID — stable identity and path suffix
@@ -367,6 +368,7 @@ type Environment struct {
 // environment root. IDs provide stable collision-safe suffixes; user-controlled
 // labels are only readable prefixes and never serve as identity.
 type RootDirParams struct {
+	ExecutionUserID string
 	WorkspacesRoot  string
 	WorkspaceID     string
 	WorkspaceSlug   string
@@ -389,7 +391,7 @@ func PredictRootDir(params RootDirParams) string {
 	return filepath.Join(
 		params.WorkspacesRoot,
 		readablePathSegment(params.WorkspaceSlug, "workspace", params.WorkspaceID),
-		readablePathSegment(params.IssueIdentifier, "task", params.TaskID),
+		readablePathSegment(params.IssueIdentifier, "task", taskRootPathID(params.TaskID, params.ExecutionUserID)),
 	)
 }
 
@@ -435,6 +437,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	envRoot, err := ResolveRootDir(RootDirParams{
 		WorkspacesRoot:  params.WorkspacesRoot,
 		WorkspaceID:     params.WorkspaceID,
+		ExecutionUserID: params.ExecutionUserID,
 		WorkspaceSlug:   params.WorkspaceSlug,
 		TaskID:          params.TaskID,
 		IssueIdentifier: params.IssueIdentifier,
@@ -476,7 +479,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 			return nil, fmt.Errorf("execenv: create env root %s: %w", envRoot, err)
 		}
 	} else {
-		lock, reset, err := claimEnvRoot(envRoot, params.WorkspaceID, params.TaskID)
+		lock, reset, err := claimEnvRoot(envRoot, params.WorkspaceID, params.TaskID, params.ExecutionUserID)
 		if err != nil {
 			return nil, fmt.Errorf("execenv: %w", err)
 		}
@@ -827,7 +830,9 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 // the per-provider knobs (CodexVersion, OpenclawBin) so callers can pass
 // the same resolved binary path on both first-run and reuse paths.
 type ReuseParams struct {
-	NativeProfile *NativeProfile
+	WorkspaceID     string
+	ExecutionUserID string
+	NativeProfile   *NativeProfile
 	// WorkspacesRoot is the daemon-owned root under which all task envs live.
 	// Passed on reuse so the root-level fail-closed marker is self-healed here
 	// too — a marker removed while the daemon runs is restored before a reused
@@ -916,6 +921,12 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		// the empty RootDir on reuse is fine for the current callers
 		// (GC writes meta from Prepare's result, not Reuse's).
 		rootDir = ""
+	}
+	if rootDir != "" {
+		owner, err := ReadEnvRootOwner(rootDir)
+		if err != nil || (params.WorkspaceID != "" && owner.WorkspaceID != params.WorkspaceID) || owner.ExecutionUserID != params.ExecutionUserID {
+			return nil
+		}
 	}
 	env := &Environment{
 		RootDir:        rootDir,
@@ -1466,7 +1477,7 @@ func ClaimEnvRoot(params RootDirParams) (*EnvRootClaim, error) {
 	if envRoot == "" {
 		return nil, fmt.Errorf("execenv: claim env root: workspaces root, workspace ID and task ID are all required")
 	}
-	lock, reset, err := claimEnvRoot(envRoot, params.WorkspaceID, params.TaskID)
+	lock, reset, err := claimEnvRoot(envRoot, params.WorkspaceID, params.TaskID, params.ExecutionUserID)
 	if err != nil {
 		return nil, fmt.Errorf("execenv: %w", err)
 	}
@@ -1590,7 +1601,7 @@ const envRootLockFile = ".task_lock"
 //
 // Holding the lock also serialises everything below it, which is what makes
 // repairing a torn marker safe: no other execution can be mid-claim.
-func claimEnvRoot(envRoot, workspaceID, taskID string) (lockFile *os.File, reset bool, err error) {
+func claimEnvRoot(envRoot, workspaceID, taskID, executionUserID string) (lockFile *os.File, reset bool, err error) {
 	if err := os.MkdirAll(envRoot, 0o755); err != nil {
 		return nil, false, fmt.Errorf("create env root %s: %w", envRoot, err)
 	}
@@ -1625,11 +1636,11 @@ func claimEnvRoot(envRoot, workspaceID, taskID string) (lockFile *os.File, reset
 		return nil, false, fmt.Errorf("read env root owner for %s: %w", envRoot, err)
 	}
 	switch {
-	case owner.TaskID == taskID && (owner.WorkspaceID == "" || owner.WorkspaceID == workspaceID):
+	case owner.TaskID == taskID && owner.ExecutionUserID == executionUserID && (owner.WorkspaceID == "" || owner.WorkspaceID == workspaceID):
 		// Upgrade legacy task-only markers while the lock makes the rewrite
 		// exclusive. Disk usage can then attribute active roots by workspace.
 		if owner.WorkspaceID == "" {
-			if err := writeEnvRootOwner(envRoot, workspaceID, taskID); err != nil {
+			if err := writeEnvRootOwner(envRoot, workspaceID, taskID, executionUserID); err != nil {
 				return nil, false, err
 			}
 		}
@@ -1650,7 +1661,7 @@ func claimEnvRoot(envRoot, workspaceID, taskID string) (lockFile *os.File, reset
 	if hasWork {
 		return nil, false, fmt.Errorf("env root %s already holds files but names no owning task; refusing to delete it", envRoot)
 	}
-	if err := writeEnvRootOwner(envRoot, workspaceID, taskID); err != nil {
+	if err := writeEnvRootOwner(envRoot, workspaceID, taskID, executionUserID); err != nil {
 		return nil, false, err
 	}
 	return lockFile, false, nil
@@ -1683,9 +1694,9 @@ func releaseLockFile(f *os.File) {
 // must hold the env root lock, which makes overwriting a torn or legacy marker
 // safe from another execution racing mid-claim. The same-directory temp file
 // and rename keep lock-free readers from observing a truncated JSON marker.
-func writeEnvRootOwner(envRoot, workspaceID, taskID string) error {
+func writeEnvRootOwner(envRoot, workspaceID, taskID, executionUserID string) error {
 	path := filepath.Join(envRoot, envRootOwnerFile)
-	data, err := json.Marshal(EnvRootOwner{WorkspaceID: workspaceID, TaskID: taskID})
+	data, err := json.Marshal(EnvRootOwner{WorkspaceID: workspaceID, TaskID: taskID, ExecutionUserID: executionUserID})
 	if err != nil {
 		return fmt.Errorf("encode env root owner for %s: %w", envRoot, err)
 	}
@@ -1753,8 +1764,9 @@ func readEnvRootOwner(envRoot string) (string, error) {
 // EnvRootOwner is written before any task content so active and partially
 // prepared roots retain authoritative identity without completion metadata.
 type EnvRootOwner struct {
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	TaskID      string `json:"task_id"`
+	ExecutionUserID string `json:"execution_user_id,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
+	TaskID          string `json:"task_id"`
 }
 
 // ReadEnvRootOwner reads both current JSON markers and legacy plain task IDs.

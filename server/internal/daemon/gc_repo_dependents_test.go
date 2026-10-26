@@ -47,7 +47,7 @@ func newPinnedRepoCache(t *testing.T, d *Daemon) string {
 
 func recordDependentWorkdir(t *testing.T, cache *repocache.Cache, workDir string, cachePaths ...string) {
 	t.Helper()
-	if err := cache.RecordDependents(dependentTestWorkspaceID, repocache.Dependent{
+	if err := cache.RecordDependents(repocache.Scope{WorkspaceID: dependentTestWorkspaceID, UserID: "test-user"}, repocache.Dependent{
 		WorkDir:    workDir,
 		CachePaths: cachePaths,
 		TaskID:     "task-1",

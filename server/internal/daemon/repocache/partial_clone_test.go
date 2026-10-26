@@ -52,7 +52,7 @@ var partialCloneTestFiles = []string{"a.txt", "b.txt"}
 // cold miss. Returns the bare repo path.
 func seedBloblessCache(t *testing.T, cache *Cache, workspaceID, sourceRepo string) string {
 	t.Helper()
-	barePath := filepath.Join(cache.root, workspaceID, bareDirName(sourceRepo))
+	barePath := cache.BarePath(Scope{WorkspaceID: workspaceID, UserID: "test-user"}, sourceRepo)
 	if err := os.MkdirAll(filepath.Dir(barePath), 0o755); err != nil {
 		t.Fatalf("create workspace cache dir: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestCreateIsolatedCheckoutFromPartialCacheHasFileContents(t *testing.T) {
 	seedBloblessCache(t, cache, "ws-1", sourceRepo)
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             t.TempDir(),
 		AgentName:           "Linux Codex",
@@ -141,7 +141,7 @@ func TestReusedIsolatedCheckoutRepairsPromisorConfig(t *testing.T) {
 	seedBloblessCache(t, cache, "ws-1", sourceRepo)
 
 	params := WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             sourceRepo,
 		WorkDir:             t.TempDir(),
 		AgentName:           "Linux Codex",
@@ -177,11 +177,11 @@ func TestCreateWorktreeFromPartialCacheHasFileContents(t *testing.T) {
 	seedBloblessCache(t, cache, "ws-1", sourceRepo)
 
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     t.TempDir(),
-		AgentName:   "tester",
-		TaskID:      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+		RepoURL:   sourceRepo,
+		WorkDir:   t.TempDir(),
+		AgentName: "tester",
+		TaskID:    "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -194,10 +194,10 @@ func TestIsPartialClone(t *testing.T) {
 	sourceRepo := createFilterableTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
 
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
-	if isPartialClone(cache.Lookup("ws-1", sourceRepo)) {
+	if isPartialClone(cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, sourceRepo)) {
 		t.Fatal("an ordinary full cache must not be reported as a partial clone")
 	}
 

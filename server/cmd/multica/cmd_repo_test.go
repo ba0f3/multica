@@ -418,7 +418,7 @@ func newRepoCheckoutTestCache(t *testing.T, remote string) *repoCheckoutTestCach
 
 func (tc *repoCheckoutTestCache) entry(t *testing.T) workercheckout.Entry {
 	t.Helper()
-	prepared, err := tc.cache.Prepare(context.Background(), "ws-1", []repocache.RepoInfo{{URL: tc.remote}})
+	prepared, err := tc.cache.Prepare(context.Background(), repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []repocache.RepoInfo{{URL: tc.remote}})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

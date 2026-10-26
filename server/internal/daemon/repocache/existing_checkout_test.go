@@ -45,7 +45,7 @@ func newExistingCheckoutFixture(t *testing.T, isolated bool) *existingCheckoutFi
 	runGitAuthored(t, source, "commit", "-m", "add tracked file")
 
 	cache := New(t.TempDir(), testLogger())
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: source}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: source}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
 	return &existingCheckoutFixture{
@@ -60,7 +60,7 @@ func newExistingCheckoutFixture(t *testing.T, isolated bool) *existingCheckoutFi
 func (f *existingCheckoutFixture) checkout(t *testing.T, taskID string, fresh bool) *WorktreeResult {
 	t.Helper()
 	result, err := f.cache.CreateWorktree(WorktreeParams{
-		WorkspaceID:         "ws-1",
+		Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 		RepoURL:             f.source,
 		WorkDir:             f.workDir,
 		AgentName:           "Agent",
@@ -80,7 +80,7 @@ func (f *existingCheckoutFixture) checkout(t *testing.T, taskID string, fresh bo
 func (f *existingCheckoutFixture) advanceUpstream(t *testing.T) string {
 	t.Helper()
 	addEmptyCommit(t, f.source, "upstream advance")
-	if err := f.cache.Sync("ws-1", []RepoInfo{{URL: f.source}}); err != nil {
+	if err := f.cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: f.source}}); err != nil {
 		t.Fatalf("refresh sync failed: %v", err)
 	}
 	return gitHead(t, f.source)
@@ -367,11 +367,11 @@ func TestFreshMigrationCarriesUnpushedBranch(t *testing.T) {
 			f := newExistingCheckoutFixture(t, false)
 			const foreignTaskID = "33333333-3333-3333-3333-333333333333"
 			if _, err := f.cache.CreateWorktree(WorktreeParams{
-				WorkspaceID: "ws-1",
-				RepoURL:     f.source,
-				WorkDir:     t.TempDir(),
-				AgentName:   "Agent",
-				TaskID:      foreignTaskID,
+				Scope:     Scope{WorkspaceID: "ws-1", UserID: "test-user"},
+				RepoURL:   f.source,
+				WorkDir:   t.TempDir(),
+				AgentName: "Agent",
+				TaskID:    foreignTaskID,
 			}); err != nil {
 				t.Fatalf("foreign CreateWorktree failed: %v", err)
 			}

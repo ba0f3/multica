@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -28,9 +27,9 @@ type PreparedRepo struct {
 // to receive code: a failed clone, fetch, or ref resolution returns an error
 // naming the repo URL and no PreparedRepo at all. Callers can therefore trust
 // every returned CommitSHA to reflect the remote state seen by this call.
-func (c *Cache) Prepare(ctx context.Context, workspaceID string, repos []RepoInfo) ([]PreparedRepo, error) {
-	if workspaceID == "" {
-		return nil, errors.New("prepare repos: empty workspace ID")
+func (c *Cache) Prepare(ctx context.Context, scope Scope, repos []RepoInfo) ([]PreparedRepo, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
 	}
 	if len(repos) == 0 {
 		return nil, nil
@@ -41,7 +40,10 @@ func (c *Cache) Prepare(ctx context.Context, workspaceID string, repos []RepoInf
 		}
 	}
 
-	wsDir := filepath.Join(c.root, workspaceID)
+	wsDir, err := c.ScopeRoot(scope)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create workspace cache dir: %w", err)
 	}
@@ -51,7 +53,7 @@ func (c *Cache) Prepare(ctx context.Context, workspaceID string, repos []RepoInf
 	group.SetLimit(4)
 	for i, repo := range repos {
 		group.Go(func() error {
-			preparedRepo, err := c.prepareRepo(prepareCtx, workspaceID, repo)
+			preparedRepo, err := c.prepareRepo(prepareCtx, scope, repo)
 			if err != nil {
 				return fmt.Errorf("prepare repo %s: %w", repo.URL, err)
 			}
@@ -67,8 +69,11 @@ func (c *Cache) Prepare(ctx context.Context, workspaceID string, repos []RepoInf
 
 // prepareRepo clones or fetches one repo under its lock, then resolves the
 // requested ref (or the remote default branch) to a commit SHA.
-func (c *Cache) prepareRepo(ctx context.Context, workspaceID string, repo RepoInfo) (PreparedRepo, error) {
-	barePath := c.BarePath(workspaceID, repo.URL)
+func (c *Cache) prepareRepo(ctx context.Context, scope Scope, repo RepoInfo) (PreparedRepo, error) {
+	barePath := c.BarePath(scope, repo.URL)
+	if err := rejectRepoAlias(barePath); err != nil {
+		return PreparedRepo{}, err
+	}
 
 	repoLock := c.lockForRepo(barePath)
 	if err := repoLock.LockContext(ctx); err != nil {

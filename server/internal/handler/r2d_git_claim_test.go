@@ -171,3 +171,14 @@ func TestClaimWithoutAnOriginatorCarriesNoGitIdentity(t *testing.T) {
 		t.Fatalf("a task with no originator carried credentials: %+v", resp.GitIdentities)
 	}
 }
+
+func TestClaimBindsOriginatorWithoutGitSigningService(t *testing.T) {
+	previous := testHandler.GitSecurity
+	testHandler.GitSecurity = nil
+	t.Cleanup(func() { testHandler.GitSecurity = previous })
+	userID := newGitTestUser(t, "claim-owner-without-signing@multica.ai")
+	resp := claimForTask(t, newGitSigningTask(t, userID))
+	if resp.ExecutionUserID != userID {
+		t.Fatalf("execution user=%q, want originator %q even without Git signing", resp.ExecutionUserID, userID)
+	}
+}

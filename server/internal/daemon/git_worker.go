@@ -15,7 +15,7 @@ import (
 )
 
 func taskWorkerGitEnvironment(task Task, socket string, env *execenv.Environment) (map[string]string, error) {
-	values := map[string]string{"SSH_AUTH_SOCK": socket, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*"}
+	values := map[string]string{"SSH_AUTH_SOCK": socket, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*"}
 	count := 1
 	for _, rewrite := range taskGitURLRewrites(task, socket) {
 		values["GIT_CONFIG_KEY_"+strconv.Itoa(count)] = rewrite.key

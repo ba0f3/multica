@@ -82,7 +82,7 @@ func newTestCache(t *testing.T, remote string) *testCache {
 // prepare clones or fetches the remote into the cache and resolves its commit.
 func (tc *testCache) prepare(t *testing.T) repocache.PreparedRepo {
 	t.Helper()
-	prepared, err := tc.cache.Prepare(context.Background(), tc.ws, []repocache.RepoInfo{{URL: tc.remote}})
+	prepared, err := tc.cache.Prepare(context.Background(), repocache.Scope{WorkspaceID: tc.ws, UserID: "test-user"}, []repocache.RepoInfo{{URL: tc.remote}})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

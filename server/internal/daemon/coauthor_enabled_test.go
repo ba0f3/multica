@@ -149,9 +149,9 @@ type reconciledCheckout struct {
 	enabled bool
 }
 
-func (c *coAuthoredByStateCache) Lookup(string, string) string   { return "" }
-func (c *coAuthoredByStateCache) BarePath(string, string) string { return "" }
-func (c *coAuthoredByStateCache) Sync(string, []repocache.RepoInfo) error {
+func (c *coAuthoredByStateCache) Lookup(repocache.Scope, string) string   { return "" }
+func (c *coAuthoredByStateCache) BarePath(repocache.Scope, string) string { return "" }
+func (c *coAuthoredByStateCache) Sync(repocache.Scope, []repocache.RepoInfo) error {
 	return nil
 }
 func (c *coAuthoredByStateCache) WithRepoLock(_ string, fn func() error) error { return fn() }
@@ -159,21 +159,21 @@ func (c *coAuthoredByStateCache) CreateWorktree(repocache.WorktreeParams) (*repo
 	return nil, nil
 }
 
-func (c *coAuthoredByStateCache) WriteCoAuthoredByState(_ string, enabled bool) error {
+func (c *coAuthoredByStateCache) WriteCoAuthoredByState(_ repocache.Scope, enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.writes = append(c.writes, enabled)
 	return nil
 }
 
-func (c *coAuthoredByStateCache) ReconcileCoAuthoredByHooks(_ string, enabled bool) error {
+func (c *coAuthoredByStateCache) ReconcileCoAuthoredByHooks(_ repocache.Scope, enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reconciles = append(c.reconciles, enabled)
 	return nil
 }
 
-func (c *coAuthoredByStateCache) ReconcileCoAuthoredByHookInCheckout(checkoutPath, _ string, enabled bool) error {
+func (c *coAuthoredByStateCache) ReconcileCoAuthoredByHookInCheckout(checkoutPath string, _ repocache.Scope, enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.checkouts = append(c.checkouts, reconciledCheckout{path: checkoutPath, enabled: enabled})
@@ -559,7 +559,7 @@ func seedEnvRootCheckout(t *testing.T, root, wsDir, envRootName, marker string) 
 // workspaceAwareOwner is the marker written since v0.4.35: JSON carrying the
 // workspace the env root belongs to.
 func workspaceAwareOwner(workspaceID string) string {
-	return fmt.Sprintf(`{"workspace_id":%q,"task_id":"task-1"}`, workspaceID)
+	return fmt.Sprintf(`{"workspace_id":%q,"task_id":"task-1","execution_user_id":"test-user"}`, workspaceID)
 }
 
 // legacyTaskOnlyOwner is the marker v0.4.32–v0.4.34 wrote: the bare task ID,
@@ -572,7 +572,7 @@ const legacyTaskOnlyOwner = "01a05b87-32d9-741c-b7ce-fb90fbd8c451"
 // key> — and both survive upgrades untouched, so the sweep has to attribute
 // them by directory name or the trailer never stops in the very workdirs this
 // issue was reported from (Linux Codex, Windows sandbox).
-func TestPersistCoAuthoredByStateReconcilesLegacyEnvRoots(t *testing.T) {
+func TestPersistCoAuthoredByStatePreservesUnattributedLegacyEnvRoots(t *testing.T) {
 	t.Parallel()
 
 	// The legacy layout used the raw workspace UUID as the directory name.
@@ -600,19 +600,14 @@ func TestPersistCoAuthoredByStateReconcilesLegacyEnvRoots(t *testing.T) {
 	for _, checkout := range cache.reconciledCheckouts() {
 		reconciled[checkout.path] = checkout.enabled
 	}
-	for _, want := range []string{noMarker, taskOnlyMarker} {
-		enabled, ok := reconciled[want]
-		if !ok {
-			t.Errorf("legacy env root was skipped: %s", want)
-			continue
-		}
-		if enabled {
-			t.Errorf("reconciled %s as enabled, want disabled", want)
-		}
-	}
-	for _, forbidden := range []string{otherNoMarker, otherTaskOnly, readableUnattributed} {
+
+	for _, forbidden := range []string{noMarker, taskOnlyMarker, otherNoMarker, otherTaskOnly, readableUnattributed} {
 		if _, ok := reconciled[forbidden]; ok {
 			t.Errorf("reconciled a checkout this workspace cannot claim: %s", forbidden)
 		}
 	}
+}
+
+func (c *coAuthoredByStateCache) Scopes(workspaceID string) ([]repocache.Scope, error) {
+	return []repocache.Scope{{WorkspaceID: workspaceID, UserID: "test-user"}}, nil
 }

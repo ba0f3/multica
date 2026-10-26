@@ -132,7 +132,7 @@ func createCheckouts(t *testing.T, cache *Cache, repoURL, taskID string) map[str
 	paths := map[string]string{}
 	for name, isolated := range map[string]bool{"linked": false, "isolated": true} {
 		result, err := cache.CreateWorktree(WorktreeParams{
-			WorkspaceID:         "ws-1",
+			Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 			RepoURL:             repoURL,
 			WorkDir:             t.TempDir(),
 			AgentName:           "agent",
@@ -153,7 +153,7 @@ func TestExtraCACertsLetGitReachPrivateCAHost(t *testing.T) {
 	cache := newTestCacheQuiet(t)
 	repos := []RepoInfo{{URL: repoURL}}
 
-	err := cache.Sync("ws-1", repos)
+	err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repos)
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "certificate") {
 		t.Fatalf("sync without the CA: want a certificate error, got %v", err)
 	}
@@ -161,7 +161,7 @@ func TestExtraCACertsLetGitReachPrivateCAHost(t *testing.T) {
 	if err := cache.SetExtraCACerts(caPEM); err != nil {
 		t.Fatalf("SetExtraCACerts: %v", err)
 	}
-	if err := cache.Sync("ws-1", repos); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repos); err != nil {
 		t.Fatalf("sync with the CA: %v", err)
 	}
 	bundle, err := os.ReadFile(cache.caBundlePath())
@@ -187,7 +187,7 @@ func TestExtraCACertsLetGitReachPrivateCAHost(t *testing.T) {
 	if got, err := os.ReadFile(cache.caBundlePath()); err != nil || string(got) != string(readSystemCABundle()) {
 		t.Fatalf("after clearing, the bundle must hold the system trust alone (err=%v)", err)
 	}
-	barePath := cache.Lookup("ws-1", repoURL)
+	barePath := cache.Lookup(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repoURL)
 	if err := configureRepoCABundleContext(context.Background(), barePath); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestExtraCACertsKeepOperatorTrust(t *testing.T) {
 	}
 
 	cache := newTestCacheQuiet(t)
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: operatorURL}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: operatorURL}}); err != nil {
 		t.Fatalf("operator repo before backend CAs: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestExtraCACertsKeepOperatorTrust(t *testing.T) {
 	if bundle, _ := os.ReadFile(cache.caBundlePath()); !strings.HasPrefix(string(bundle), machineTrust) {
 		t.Fatal("bundle must start with the operator's http.sslCAInfo, not the system bundle")
 	}
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: operatorURL}, {URL: backendURL}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: operatorURL}, {URL: backendURL}}); err != nil {
 		t.Fatalf("sync with backend CAs: %v", err)
 	}
 	operatorCheckouts := createCheckouts(t, cache, operatorURL, "task-op")
@@ -251,7 +251,7 @@ func TestExtraCACertsKeepOperatorTrust(t *testing.T) {
 	if got, err := os.ReadFile(cache.caBundlePath()); err != nil || string(got) != machineTrust {
 		t.Fatalf("after clearing, the bundle must hold the operator's trust alone (err=%v)", err)
 	}
-	if err := cache.Sync("ws-1", []RepoInfo{{URL: operatorURL}}); err != nil {
+	if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: operatorURL}}); err != nil {
 		t.Fatalf("operator repo after clearing: %v", err)
 	}
 }

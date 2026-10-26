@@ -2821,8 +2821,10 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	//
 	// A credential lookup failure never fails the claim — the run simply
 	// starts without Git signing, which is the safe direction.
-	if h.GitSecurity != nil && task.OriginatorUserID.Valid {
+	if task.OriginatorUserID.Valid {
 		resp.ExecutionUserID = uuidToString(task.OriginatorUserID)
+	}
+	if h.GitSecurity != nil && task.OriginatorUserID.Valid {
 		if identities, identityErr := h.GitSecurity.ReadyIdentities(r.Context(), resp.ExecutionUserID); identityErr != nil {
 			slog.Debug("git credentials: could not list the execution user's identities", "task_id", resp.ID, "error", identityErr)
 		} else {
