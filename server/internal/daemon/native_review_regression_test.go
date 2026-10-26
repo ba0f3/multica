@@ -68,8 +68,16 @@ func runNativeReviewWorker(t *testing.T, d *Daemon, env *execenv.Environment, pr
 	}
 }
 
-func TestNativeStandaloneBoundaryDeniesOtherProvider(t *testing.T) {
-	d, env, exe := nativeReviewFixture(t, "codex", `assert not os.path.exists(os.path.join(os.environ['HOME'], '.local/share/opencode/auth.json'))
+func TestNativeStandaloneHostViewKeepsOtherProfilesReadOnly(t *testing.T) {
+	d, env, exe := nativeReviewFixture(t, "codex", `import errno
+path = os.path.join(os.environ['HOME'], '.local/share/opencode/auth.json')
+assert open(path).read() == 'other-provider-secret'
+try:
+    open(path, 'w')
+except OSError as error:
+    assert error.errno == errno.EROFS
+else:
+    raise AssertionError('the unrelated provider profile is writable')
 assert subprocess.check_output([m['config']['executable_path'], '--version']).strip() == b'9.0.0'`)
 	secret := filepath.Join(os.Getenv("HOME"), ".local", "share", "opencode", "auth.json")
 	if err := os.MkdirAll(filepath.Dir(secret), 0700); err != nil {
@@ -79,6 +87,10 @@ assert subprocess.check_output([m['config']['executable_path'], '--version']).st
 		t.Fatal(err)
 	}
 	runNativeReviewWorker(t, d, env, "codex", exe, "check the boundary")
+	data, err := os.ReadFile(secret)
+	if err != nil || string(data) != "other-provider-secret" {
+		t.Fatalf("host provider state changed: %q, %v", data, err)
+	}
 }
 
 func TestNativeUniversalSkillAndProviderLinkRemainVisible(t *testing.T) {

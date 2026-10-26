@@ -37,7 +37,7 @@ func (s *fakeNativeScope) Command(_ string, argv []string) (*exec.Cmd, error) {
 func (s *fakeNativeScope) Stop(context.Context, string) error { s.stopped++; return nil }
 
 func TestNativeBackendPreservesFourProviderPathsAndWarmResolution(t *testing.T) {
-	for _, provider := range []string{"codex", "cursor", "opencode", "mcode"} {
+	for _, provider := range []string{"codex", "cursor", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
@@ -69,17 +69,7 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"resul
 			if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if provider == "mcode" {
-				prefix := filepath.Dir(filepath.Dir(exe))
-				release := filepath.Join(prefix, "releases", "0.6.13")
-				if err := os.MkdirAll(release, 0700); err != nil {
-					t.Fatal(err)
-				}
-				_ = os.WriteFile(filepath.Join(prefix, "current"), []byte("0.6.13"), 0600)
-				node := filepath.Join(t.TempDir(), "node")
-				_ = os.WriteFile(node, []byte("#!/bin/sh\n"), 0700)
-				_ = os.WriteFile(filepath.Join(release, ".mcode-launcher"), []byte("node='"+node+"'\n"), 0600)
-			}
+
 			env := newSandboxTestEnv(t)
 			cache := filepath.Join(d.cfg.WorkspacesRoot, ".repos", "ws", "fixture.git")
 			if err := os.MkdirAll(cache, 0700); err != nil {
@@ -281,50 +271,6 @@ func TestNativeAgentEntryHealsWithoutUnboundedHostVersionProbe(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("native entry resolution executed a CLI outside its isolated detector")
-	}
-}
-
-func TestNativeVersionProbeHasPrivateWritableInstallerState(t *testing.T) {
-	if os.Getenv("MULTICA_BWRAP_SMOKE") != "1" {
-		t.Skip("set MULTICA_BWRAP_SMOKE=1 for version boundary probe")
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	for _, key := range nativeSelectorKeys {
-		t.Setenv(key, "")
-	}
-	prefix := filepath.Join(home, ".minimax-code")
-	exe := filepath.Join(prefix, "bin", "mcode")
-	release := filepath.Join(prefix, "releases", "0.6.13")
-	for _, dir := range []string{filepath.Dir(exe), release} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_ = os.WriteFile(filepath.Join(prefix, "current"), []byte("0.6.13"), 0600)
-	_ = os.WriteFile(filepath.Join(release, ".mcode-launcher"), []byte("node='/usr/bin/true'\n"), 0600)
-	script := `#!/bin/sh
-set -eu
-prefix=$(dirname "$(dirname "$0")")
-printf probe > "$prefix/.mcode-active/marker"
-test ! -e "$HOME/.minimax/credentials"
-printf private > "$HOME/.minimax/probe-state"
-printf '0.6.13\n'
-`
-	_ = os.WriteFile(exe, []byte(script), 0700)
-	credentials := filepath.Join(home, ".minimax", "credentials")
-	_ = os.MkdirAll(filepath.Dir(credentials), 0700)
-	_ = os.WriteFile(credentials, []byte("original credential sentinel"), 0600)
-	d := &Daemon{cfg: Config{WorkspacesRoot: t.TempDir()}, logger: newDiscardLogger()}
-	version, err := d.detectNativeVersion(t.Context(), "mcode", exe)
-	if err != nil || version != "0.6.13" {
-		t.Fatalf("private installer probe: %s, %v", version, err)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".minimax", "probe-state")); !os.IsNotExist(err) {
-		t.Fatal("version probe wrote original provider profile")
-	}
-	if _, err := os.Stat(filepath.Join(prefix, ".mcode-active", "marker")); !os.IsNotExist(err) {
-		t.Fatal("version probe wrote original installer state")
 	}
 }
 

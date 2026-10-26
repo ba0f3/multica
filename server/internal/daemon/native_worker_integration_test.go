@@ -3,16 +3,12 @@
 package daemon
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -473,7 +468,7 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 			}
 			selected := &execenv.NativeProfile{Home: runtime.Home, Env: runtime.Env}
 			barrierCtx, stopBarrier := context.WithCancel(t.Context())
-			barrier := newNativeToolBarrier(barrierCtx, provider == "mcode")
+			barrier := newNativeToolBarrier(barrierCtx, false)
 			defer barrier.server.Close()
 			defer stopBarrier()
 			type run struct {
@@ -495,9 +490,7 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 				config := agent.Config{ExecutablePath: executable, CLIVersion: runtime.Version, CodexVersion: runtime.Version, Env: runtime.Env, Logger: d.logger, BuiltinRuntime: true, TaskID: provider + "-" + name}
 				var backend agent.Backend
 				if name == "host" {
-					if provider != "mcode" {
-						backend, err = agent.ResolveBackend(provider, config)
-					}
+					backend, err = agent.ResolveBackend(provider, config)
 				} else {
 					backend, err = d.sandboxedBackend(provider, config, env, "", "", fmt.Sprintf("native-concurrent-%s-%s-%d", provider, name, time.Now().UnixNano()), nil, nil)
 				}
@@ -516,10 +509,7 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 					ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
 					defer cancel()
 					prompt := "Use a shell tool to run synchronously: curl -fsS --max-time 150 '" + barrier.server.URL + "/" + r.name + "' && cp input.txt output.txt. Wait for the command to finish, then say done. This local endpoint is the test barrier; do not use other network services or Multica commands."
-					if provider == "mcode" && r.name == "host" {
-						r.result, r.tools, r.err = runRealNativeMcodeHostExec(ctx, executable, r.env.WorkDir, runtime.Env, prompt)
-						return
-					}
+
 					session, err := r.backend.Execute(ctx, prompt, agent.ExecOptions{NativeProfile: true, Cwd: r.env.WorkDir, Model: os.Getenv("MULTICA_SMOKE_MODEL_" + strings.ToUpper(provider)), Timeout: 220 * time.Second, IsolatedToolBoundary: true})
 					if err != nil {
 						r.err = err
@@ -566,245 +556,4 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRealNativeMcodeRefresh(t *testing.T) {
-	if os.Getenv("MULTICA_RUN_REAL_AGENT_SMOKE") != "1" || os.Getenv("MULTICA_SMOKE_MCODE_REFRESH") != "1" {
-		t.Skip("real OAuth refresh requires both explicit smoke opt-ins")
-	}
-	_, worker := realNativeSmokeInputs(t)
-	executable, err := exec.LookPath("mcode")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	d := newRealNativeSmokeDaemon(root, worker)
-	runtime, _, err := d.nativeRuntime(t.Context(), "mcode", executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selected := &execenv.NativeProfile{Home: runtime.Home, Env: runtime.Env}
-	prepare := func(id string) *execenv.Environment {
-		t.Helper()
-		env, err := execenv.Prepare(execenv.PrepareParams{WorkspacesRoot: root, WorkspaceID: "native-refresh", TaskID: id, Provider: "mcode", NativeProfile: selected}, d.logger)
-		if err != nil {
-			t.Fatal(err)
-		}
-		env.ReleaseLock()
-		return env
-	}
-	env := prepare("session")
-	canary := fmt.Sprintf("refresh-%d", time.Now().UnixNano())
-	_ = os.WriteFile(filepath.Join(env.WorkDir, "input.txt"), []byte(canary), 0600)
-	turn := func(prior, prompt, artifact string) agent.Result {
-		t.Helper()
-		backend, err := d.sandboxedBackend("mcode", agent.Config{ExecutablePath: executable, TaskID: "native-refresh", Env: runtime.Env, Logger: d.logger}, env, "", "", fmt.Sprintf("native-refresh-turn-%d", time.Now().UnixNano()), nil, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
-		defer cancel()
-		session, err := backend.Execute(ctx, prompt, agent.ExecOptions{Cwd: env.WorkDir, Timeout: 160 * time.Second, ResumeSessionID: prior, ResumeExpected: prior != "", IsolatedToolBoundary: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		messages, result := collectSandboxSession(ctx, t, session)
-		if result.Status != "completed" {
-			t.Fatalf("refresh continuity: status=%s error=%s", result.Status, result.Error)
-		}
-		data, err := os.ReadFile(filepath.Join(env.WorkDir, artifact))
-		tools := 0
-		for _, message := range messages {
-			if message.Type == agent.MessageToolUse {
-				tools++
-			}
-		}
-		if err != nil || string(data) != canary || tools == 0 || result.SessionID == "" || (prior != "" && (result.SessionID != prior || result.ResumeRejected)) {
-			t.Fatalf("refresh continuity artifact/session failed: read=%v tools=%d before=%s after=%s", err, tools, prior, result.SessionID)
-		}
-		return result
-	}
-	fresh := turn("", "Use a shell tool to read input.txt so its bytes appear in the tool output, then write those exact bytes to before.txt. Remember the bytes for a later turn. Then say done.", "before.txt")
-	_ = os.Remove(filepath.Join(env.WorkDir, "input.txt"))
-	_ = os.Remove(filepath.Join(env.WorkDir, "before.txt"))
-	canonical, err := filepath.EvalSymlinks(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prefix := filepath.Dir(filepath.Dir(canonical))
-	probe := `import fs from 'node:fs/promises';
-import path from 'node:path';
-import {pathToFileURL} from 'node:url';
-const out=process.env.NATIVE_REFRESH_OUT;
-try {
- const prefix=process.env.NATIVE_MCODE_PREFIX;
- const release=(await fs.readFile(path.join(prefix,'current'),'utf8')).trim();
- const chunks=path.join(prefix,'releases',release,'lib/node_modules/@minimax-ai/code/chunks');
- let file;
- for(const name of await fs.readdir(chunks)){
-  if(name.endsWith('.js')&&(await fs.readFile(path.join(chunks,name),'utf8')).includes('Shared MCode OAuth requires all three public OAuth endpoints')){file=path.join(chunks,name);break;}
- }
- if(!file)throw new Error('OAuth module unavailable');
- const mod=await import(pathToFileURL(file));
- const Manager=Object.values(mod).find(value=>typeof value==='function'&&typeof value.prototype?.getAccessToken==='function'&&typeof value.prototype?.login==='function');
- const dataDir=process.env.MINIMAX_DATA_DIR;
- const preferences=JSON.parse(await fs.readFile(path.join(dataDir,'preferences/mcode-region.json'),'utf8'));
- const region=preferences.regions.prod;
- if(region!=='cn'&&region!=='en')throw new Error('OAuth region missing');
- const ns=mod.b({dataDir,buildEnv:'prod',region});
- const manager=new Manager({namespace:ns,credentialStore:mod.m({authHome:ns.namespaceHome}),oauthClient:new mod.e(mod.f(process.env,ns)),initialize:()=>mod.c(ns)});
- const before=await manager.getStatus();
- await fs.writeFile(out+'.ready','ready');
- for(let i=0; i<3000; i++){try{await fs.stat(out+'.go');break;}catch{await new Promise(resolve=>setTimeout(resolve,10));}}
- await manager.getAccessToken({requiredScopes:['agent.default'],minValidityMs:86400000});
- const after=await manager.getStatus();
- await fs.writeFile(out,JSON.stringify({status:after.status,before:before.generation,after:after.generation}));
- process.exit(0);
-} catch(error){console.error('Native OAuth probe failed: '+(error.code??error.name));process.exit(1);}
-`
-	nativeEnv := prepare("refresh-worker")
-	hostDir := t.TempDir()
-	nativeScript := filepath.Join(nativeEnv.WorkDir, "refresh.mjs")
-	hostScript := filepath.Join(hostDir, "refresh.mjs")
-	_ = os.WriteFile(nativeScript, []byte(probe), 0600)
-	_ = os.WriteFile(hostScript, []byte(probe), 0600)
-	nativeOut := filepath.Join(nativeEnv.WorkDir, "refresh.json")
-	hostOut := filepath.Join(hostDir, "refresh.json")
-	nativeVars := maps.Clone(runtime.Env)
-	nativeVars["NODE_OPTIONS"] = "--import=" + nativeScript
-	nativeVars["NATIVE_MCODE_PREFIX"] = prefix
-	nativeVars["NATIVE_REFRESH_OUT"] = nativeOut
-	backend, err := d.sandboxedBackend("mcode", agent.Config{ExecutablePath: executable, TaskID: "native-auth-probe", Env: nativeVars, Logger: d.logger}, nativeEnv, "", "", fmt.Sprintf("native-auth-probe-%d", time.Now().UnixNano()), nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
-	defer cancel()
-	// The preload uses MCode's original interpreter and public OAuth manager,
-	// then exits before ACP initialization. Its artifact, not the ACP outcome,
-	// proves refresh; the real resumed model turn below proves continuity.
-	nativeSession, err := backend.Execute(ctx, "OAuth refresh probe", agent.ExecOptions{Cwd: nativeEnv.WorkDir, Timeout: 55 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	host := exec.CommandContext(ctx, executable, "--version")
-	host.Dir = hostDir
-	host.Env = append(os.Environ(), "NODE_OPTIONS=--import="+hostScript, "MINIMAX_DATA_DIR="+runtime.Env["MINIMAX_DATA_DIR"], "MAVIS_DATA_DIR="+runtime.Env["MAVIS_DATA_DIR"], "NATIVE_MCODE_PREFIX="+prefix, "NATIVE_REFRESH_OUT="+hostOut)
-	var hostError bytes.Buffer
-	host.Stderr = &hostError
-	if err := host.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer host.Process.Kill()
-	for _, out := range []string{nativeOut, hostOut} {
-		deadline := time.Now().Add(30 * time.Second)
-		ready := false
-		for time.Now().Before(deadline) {
-			if _, err := os.Stat(out + ".ready"); err == nil {
-				ready = true
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		if !ready {
-			t.Fatalf("OAuth refresh participant did not reach barrier: %s", filepath.Base(out))
-		}
-	}
-	for _, out := range []string{nativeOut, hostOut} {
-		if err := os.WriteFile(out+".go", []byte("go"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := host.Wait(); err != nil {
-		t.Fatalf("native host OAuth refresh failed: %v: %s", err, hostError.String())
-	}
-	_, _ = collectSandboxSession(ctx, t, nativeSession)
-	for _, out := range []string{nativeOut, hostOut} {
-		data, err := os.ReadFile(out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var status struct {
-			Status        string `json:"status"`
-			Before, After int64
-		}
-		if err := json.Unmarshal(data, &status); err != nil {
-			t.Fatal(err)
-		}
-		if status.Status != "authenticated" || status.After <= status.Before {
-			t.Fatalf("native OAuth generation did not rotate: %+v", status)
-		}
-		t.Logf("OAuth refresh authenticated generation=%d->%d", status.Before, status.After)
-	}
-	resumed := turn(fresh.SessionID, "Use a shell tool to write the original remembered canary from our earlier conversation to after.txt. Do not read session files. Then say done.", "after.txt")
-	t.Logf("refresh continuity artifact verified session=%s", resumed.SessionID)
-}
-
-// The host counterpart uses MCode's normal headless CLI, rather than starting
-// another ACP client with Multica's application identity outside the sandbox.
-func runRealNativeMcodeHostExec(ctx context.Context, executable, cwd string, env map[string]string, prompt string) (agent.Result, int, error) {
-	cmd := exec.CommandContext(ctx, executable, "exec", "--cwd", cwd, "--permission", "full", "--output-format", "stream-json", "--timeout", "220s", "--input", "-")
-	cmd.Dir = cwd
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = os.Environ()
-	for key, value := range env {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = io.Discard
-	err := cmd.Run()
-	result := agent.Result{Status: "failed"}
-	seen := map[string]bool{}
-	scanner := bufio.NewScanner(&stdout)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
-	var visit func(any)
-	visit = func(value any) {
-		switch object := value.(type) {
-		case map[string]any:
-			if object["type"] == "tool_call" {
-				if id, ok := object["id"].(string); ok && id != "" {
-					seen[id] = true
-				}
-			}
-			if object["type"] == "exec.result" {
-				if id, ok := object["sessionId"].(string); ok {
-					result.SessionID = id
-				}
-				if object["status"] == "succeeded" {
-					result.Status = "completed"
-				} else if status, ok := object["status"].(string); ok {
-					result.Error = "mcode exec status: " + status
-				}
-			}
-			for _, child := range object {
-				visit(child)
-			}
-		case []any:
-			for _, child := range object {
-				visit(child)
-			}
-		}
-	}
-	for scanner.Scan() {
-		var frame any
-		if json.Unmarshal(scanner.Bytes(), &frame) == nil {
-			visit(frame)
-		}
-	}
-	if err != nil {
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("mcode exec exited: %v", err)
-	}
-	if scanner.Err() != nil {
-		return result, len(seen), scanner.Err()
-	}
-	return result, len(seen), err
 }

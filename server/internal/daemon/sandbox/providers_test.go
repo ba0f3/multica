@@ -30,7 +30,7 @@ func TestProviderSupportsIsolatedTools(t *testing.T) {
 }
 
 func TestProviderSupportsNativeHost(t *testing.T) {
-	admitted := map[string]bool{"codex": true, "cursor": true, "opencode": true, "mcode": true}
+	admitted := map[string]bool{"codex": true, "cursor": true, "opencode": true}
 	for _, provider := range append(allSupportedProviders(), "", "nonsense") {
 		if got := ProviderSupportsNativeHost(provider); got != admitted[provider] {
 			t.Fatalf("native %q=%v", provider, got)

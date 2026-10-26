@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -72,7 +70,6 @@ func NewNativeRuntimeResolver(detect NativeVersionDetector) *NativeRuntimeResolv
 var nativeProfileEnvKeys = []string{
 	"CODEX_HOME", "CURSOR_DATA_DIR", "CURSOR_CONFIG_DIR", "OPENCODE_CONFIG_DIR",
 	"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
-	"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR",
 }
 
 func (r *NativeRuntimeResolver) Resolve(ctx context.Context, request NativeRuntimeRequest) (NativeRuntime, error) {
@@ -108,9 +105,6 @@ func (r *NativeRuntimeResolver) Resolve(ctx context.Context, request NativeRunti
 	if strings.TrimSpace(result.Version) == "" {
 		return NativeRuntime{}, fmt.Errorf("native sandbox: %s did not report a version", request.Provider)
 	}
-	if err := validateNativeRuntimeVersion(request.Provider, result.Version); err != nil {
-		return NativeRuntime{}, err
-	}
 
 	r.entries[key] = nativeRuntimeEntry{runtime: cloneNativeRuntime(result), watch: watch}
 	return result, nil
@@ -118,6 +112,9 @@ func (r *NativeRuntimeResolver) Resolve(ctx context.Context, request NativeRunti
 
 func normalizeNativeRuntimeRequest(request NativeRuntimeRequest) (NativeRuntimeRequest, error) {
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	if request.Provider == "mcode" {
+		return request, fmt.Errorf("native sandbox: MCode is not supported; use MiniMax through OpenCode")
+	}
 	if !ProviderSupportsNativeHost(request.Provider) {
 		return request, fmt.Errorf("native sandbox: provider %q is not supported", request.Provider)
 	}
@@ -232,33 +229,6 @@ func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []
 	return result, watch, nil
 }
 
-var nativeMcodeVersionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+].*)?$`)
-
-func validateNativeRuntimeVersion(provider, version string) error {
-	if provider != "mcode" {
-		return nil
-	}
-	match := nativeMcodeVersionPattern.FindStringSubmatch(version)
-	if len(match) != 4 {
-		return fmt.Errorf("native MCode requires a recognized CLI version, got %q", version)
-	}
-	parts := [3]int{}
-	for i := range parts {
-		number, err := strconv.Atoi(match[i+1])
-		if err != nil {
-			return fmt.Errorf("native MCode version is invalid")
-		}
-		parts[i] = number
-	}
-	if parts[0] == 0 && (parts[1] < 6 || parts[1] == 6 && parts[2] < 13) {
-		return fmt.Errorf("native MCode requires 0.6.13 or newer: %s creates its migration lock beside the profile, outside the permitted write paths; upgrade MCode with its updater or explicitly select the docker backend", version)
-	}
-	if parts == [3]int{0, 6, 13} {
-		return fmt.Errorf("native MCode %s is unavailable: its PID-based recovery can release a live host session lease from a private PID namespace; explicitly select the docker backend until a namespace-safe MCode release is verified", version)
-	}
-	return nil
-}
-
 func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]string, error) {
 	choose := func(key, fallback string) string {
 		if value := request.Env[key]; value != "" {
@@ -288,19 +258,6 @@ func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]
 			config = choose("OPENCODE_CONFIG_DIR", selected)
 		}
 		return []string{filepath.Join(dataHome, "opencode"), config, filepath.Join(stateHome, "opencode"), filepath.Join(cacheHome, "opencode")}, nil
-	case "mcode":
-		data := request.Env["MINIMAX_DATA_DIR"]
-		if data == "" {
-			data = request.Env["MAVIS_DATA_DIR"]
-		}
-		if data == "" {
-			data = filepath.Join(home, ".minimax")
-		}
-		result.Env["MINIMAX_DATA_DIR"] = data
-		result.Env["MAVIS_DATA_DIR"] = data
-		result.ProfileLimit = 1
-		result.PrivatePaths = append(result.PrivatePaths, filepath.Join(data, "run"))
-		return []string{data}, nil
 	default:
 		return nil, fmt.Errorf("native sandbox: unsupported profile")
 	}
@@ -400,9 +357,6 @@ func nativeResolveLinks(path string) (string, []NativeLink, error) {
 	return "", nil, fmt.Errorf("native sandbox: too many symlinks")
 }
 
-var nativeReleaseName = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,99}$`)
-var nativeMcodeNode = regexp.MustCompile(`(?m)^node=['"]([^'"\r\n]+)['"]`)
-
 func resolveNativeInstallation(request NativeRuntimeRequest, executable string, result *NativeRuntime, watch *[]nativeWatch) error {
 	if err := grantNativeProgram(request, executable, result, watch, nil); err != nil {
 		return err
@@ -443,43 +397,7 @@ func resolveNativeInstallation(request NativeRuntimeRequest, executable string, 
 			return err
 		}
 	}
-	if request.Provider == "mcode" {
-		prefix := filepath.Dir(filepath.Dir(executable))
-		pointer := filepath.Join(prefix, "current")
-		data, err := os.ReadFile(pointer)
-		if err != nil {
-			return fmt.Errorf("native sandbox: unsupported MCode installation; current release pointer is required: %w", err)
-		}
-		release := strings.TrimSpace(string(data))
-		if !nativeReleaseName.MatchString(release) {
-			return fmt.Errorf("native sandbox: invalid MCode current release pointer")
-		}
-		root := filepath.Join(prefix, "releases", release)
-		launcher := filepath.Join(root, ".mcode-launcher")
-		text, err := os.ReadFile(launcher)
-		if err != nil {
-			return err
-		}
-		match := nativeMcodeNode.FindSubmatch(text)
-		if len(match) != 2 {
-			return fmt.Errorf("native sandbox: MCode launcher does not declare its Node runtime")
-		}
-		node := string(match[1])
-		if err := grantNativeProgram(request, node, result, watch, nil); err != nil {
-			return err
-		}
-		result.BinDirs = appendNativeDir(result.BinDirs, filepath.Dir(node))
-		if _, err := grantNativeReadOnly(request, root, result, watch); err != nil {
-			return err
-		}
-		if _, err := grantNativeReadOnly(request, pointer, result, watch); err != nil {
-			return err
-		}
-		if err := watchNativePath(watch, launcher); err != nil {
-			return err
-		}
-		result.PrivatePaths = append(result.PrivatePaths, filepath.Join(prefix, ".mcode-active"))
-	}
+
 	return resolveNativeNodePackage(request, executable, result, watch)
 }
 

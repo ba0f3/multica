@@ -52,7 +52,7 @@ func (d *Daemon) nativeRuntime(ctx context.Context, provider, executable string)
 	return runtime, scope, nil
 }
 
-var nativeSelectorKeys = []string{"CODEX_HOME", "CURSOR_DATA_DIR", "CURSOR_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"}
+var nativeSelectorKeys = []string{"CODEX_HOME", "CURSOR_DATA_DIR", "CURSOR_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}
 
 func (d *Daemon) nativeRuntimeRequest(provider, executable string) (sandbox.NativeRuntimeRequest, error) {
 	home, err := os.UserHomeDir()

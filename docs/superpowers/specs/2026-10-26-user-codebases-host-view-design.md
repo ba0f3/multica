@@ -35,10 +35,10 @@ Keep current network policy, no-new-privileges, capability dropping and configur
 
 ## MCode compatibility decision
 
-Installed MCode0.6.13 checks host-process leases with `kill(pid, 0)` and can invalidate a live host session from a private PID namespace. Read-only mounts do not change this. The user explicitly chose to keep private PID namespaces and leave MCode0.6.13 unsupported. Keep its refusal until a namespace-safe provider mechanism is verified.
+The native backend supports Codex, Cursor and OpenCode with private PID namespaces. MCode is excluded before any account/profile access or version probe, regardless of version. Use MiniMax through OpenCode instead.
 
 ## Verification and delivery
 
-Default tests use fake providers. Test two users sharing a URL, same-user concurrent tasks, fresh fetch/ref, lost Git access, ownership/reuse/alternates, symlink aliases, hidden sibling code, read-only host files, allowed profile writes, management socket denial and lifecycle/cgroup limits. Synthetic Git round trips exercise checkout, pull, push and uncached refs in Docker and native mode. Real supported-provider tests may run only on k7 under the existing explicit opt-in; no remote garlic activity. MCode0.6.13 remains refused and is covered by a default regression.
+Default tests use fake providers. Test two users sharing a URL, same-user concurrent tasks, fresh fetch/ref, lost Git access, ownership/reuse/alternates, symlink aliases, hidden sibling code, read-only host files, allowed profile writes, management socket denial and lifecycle/cgroup limits. Synthetic Git round trips exercise checkout, pull, push and uncached refs in Docker and native mode. Real supported-provider tests may run only on k7 under the existing explicit opt-in; no remote garlic activity. Native MCode remains refused and is covered by a default regression.
 
 Commit locally after verification. Do not merge, push, tag, publish or change garlic.

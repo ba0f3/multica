@@ -1,6 +1,6 @@
 # Tool isolation (Git security MVP)
 
-Multica runs agent CLIs inside a worker boundary. Docker is the default and admits every supported backend and built-in runtime. Linux native execution uses `MULTICA_TASK_SANDBOX=bwrap` and the original Codex, Cursor or OpenCode installation and profile. MCode has a native resolver, but known incompatible releases fail preflight. Native rollout remains opt-in because the full four-provider acceptance matrix has not passed.
+Multica runs agent CLIs inside a worker boundary. Docker is the default and admits every supported backend and built-in runtime. Linux native execution uses `MULTICA_TASK_SANDBOX=bwrap` and the original Codex, Cursor or OpenCode installation and profile. MCode is not supported by the native backend; use MiniMax through OpenCode. Native rollout remains opt-in.
 
 Once selected, a sandbox backend fails closed. It never falls back to host execution or another backend. Network access retains the existing host policy; egress filtering is a separate follow-up.
 
@@ -28,7 +28,7 @@ Once selected, a sandbox backend fails closed. It never falls back to host execu
 
 Zero resource values retain the configured unlimited behavior. Positive values must be enforced. A CLI upgrade invalidates cached runtime metadata on the next task. Cached resource preflight is tied to the tools, configured limits and user-manager connection.
 
-Runtime and profile selection uses the daemon account's HOME and provider selectors, including `CODEX_HOME`, Cursor config/data directories, OpenCode XDG directories, and MCode data directories. A task's custom environment or the person pressing rerun cannot replace this selection.
+Runtime and profile selection uses the daemon account's HOME and provider selectors, including `CODEX_HOME`, Cursor config/data directories, OpenCode XDG directories. A task's custom environment or the person pressing rerun cannot replace this selection.
 
 ### Filesystem and shared profiles
 
@@ -38,7 +38,7 @@ Only the current task's checkout, temporary files, output, API configuration and
 
 Provider credential secrecy is currently deferred. Other provider configuration may be readable through the host view. This is a filesystem-write and managed-code boundary; it does not prevent credential reading or data exfiltration. New host control sockets must remain under the masked management roots; enumerating existing socket paths cannot hide future sockets created elsewhere. Profile state and vendor locks remain shared at their original paths. Task temporary storage is removed after reaping; output and task build caches follow normal environment retention.
 
-Codex receives task settings and disabled-skill policies through thread RPC without rewriting shared `config.toml`. Existing native exclusions are preserved, and authorized universal skill inputs are read-only. Cursor keeps its original data directory and uses project-local managed MCP configuration. Existing runtime-plus-agent MCP merging remains unchanged. MCode installer `.mcode-active` state is private to each sandbox. Profile leases serialize MCode workers across daemon profiles and release only after attempt cleanup; vendor auth and database locks remain beside the state they protect.
+Codex receives task settings and disabled-skill policies through thread RPC without rewriting shared `config.toml`. Existing native exclusions are preserved, and authorized universal skill inputs are read-only. Cursor keeps its original data directory and uses project-local managed MCP configuration. Existing runtime-plus-agent MCP merging remains unchanged.
 
 Each native attempt has private user, PID, IPC and UTS namespaces, no capabilities, and `no_new_privs`. A user-systemd scope owns all descendants. Completion, cancellation, timeout and daemon death stop the attempt before releasing its profile lease. The workdir and original session store remain available for resume.
 
@@ -48,12 +48,11 @@ Each native attempt has private user, PID, IPC and UTS namespaces, no capabiliti
 | --- | --- |
 | Missing bubblewrap, namespaces, user manager or cgroup controls | Enable the named host prerequisite and retry, or explicitly select Docker |
 | Original interpreter or library unavailable | Repair the provider installation using its installer; do not move the launcher or replace Node |
-| MCode before 0.6.13 | Its sibling migration lock cannot fit the permitted profile grants; use Docker or test a newer installation |
-| MCode 0.6.13 | Native execution is rejected because PID-based recovery can release a live host lease; use Docker until a namespace-safe release passes acceptance |
+| MCode | Select OpenCode and configure MiniMax there; native MCode is unsupported |
 | Provider requests login on both host and worker | Authenticate the selected daemon account with the provider CLI; native preparation does not manufacture login state |
 | Unsupported model or provider quota | Check the selected account and model on the provider; startup timing alone does not establish an auth failure |
 
-There is no automatic fallback. Other providers retain Docker execution. A later MCode version requires real continuity, shared-lock, refresh and host-coexistence acceptance before support is claimed.
+There is no automatic fallback. Other providers retain Docker execution. Changing MCode versions does not enable native support.
 
 ### Timing
 
@@ -61,13 +60,13 @@ Logs tag monotonic measurements with task, attempt, provider and backend. `repo_
 
 The warm-launch acceptance test runs 100 fake workers through the production launcher and requires worker-ready p95 at most 250 ms. It checks a fresh artifact and completed scope cleanup after every attempt. This threshold does not promise a model response time.
 
-The current host-view policy must pass the synthetic filesystem probes, bind-mount alias denial, scoped-cache ownership tests and authenticated Git round trips. Real-provider acceptance covers Codex, Cursor and OpenCode. MCode0.6.13 is intentionally unsupported with private PID namespaces. Local k7 verification does not establish acceptance on garlic; do not change the native default based on local tests alone.
+The current host-view policy must pass the synthetic filesystem probes, bind-mount alias denial, scoped-cache ownership tests and authenticated Git round trips. Real-provider acceptance covers Codex, Cursor and OpenCode. MCode is intentionally unsupported by the native backend. Local k7 verification does not establish acceptance on garlic; do not change the native default based on local tests alone.
 
 ## Scope
 
 | Layer | What it does |
 | --- | --- |
-| Provider gate | Docker admits every supported backend and built-in runtime. Native resolution is limited to Codex, Cursor, OpenCode and MCode, with incompatible versions rejected before launch. |
+| Provider gate | Docker admits every supported backend and built-in runtime. Native resolution is limited to Codex, Cursor and OpenCode. |
 | Worker boundary | The worker, adapter, CLI, MCP servers, hooks and tools run inside the selected boundary before the CLI reads repository configuration. Session IPC and Git signing use task-scoped channels. |
 | Repo cache mounts | Before launch, the daemon strictly fetches each `task.Repos` repo into the workspace bare cache and binds only those caches read-only at their host paths (`<cache>:<cache>:ro`). A read-only `repo-cache.json` manifest lists the allowed URLs, refs, resolved SHAs, and cache paths. Unrelated sibling repositories and shared checkouts are not mounted; a reused workdir may add read-only caches named by its own alternates, still under the workspace cache root. |
 | In-worker repo checkout | `multica repo checkout` reads the task manifest instead of the host daemon, creates a private `.git` in the task workdir with `objects/info/alternates` pointing at the mounted cache, sets `origin` to the real URL, and copies the cache's remote refs. The cache is never written or hardlinked. Both backends use this manifest and checkout path; cache fetch semantics are unchanged. |
@@ -183,7 +182,7 @@ Default Go tests use fake or missing CLI paths. Kernel boundary and launch probe
 MULTICA_BWRAP_SMOKE=1 bash scripts/go-test-with-agent-cli-guard.sh -- go -C server test ./internal/daemon -run '^TestNativeWarmWorkerLaunchLatency$' -count=1 -v
 ```
 
-`make test-agent-native-workers` explicitly uses the current user's real accounts. Tests require `agentintegration`, `MULTICA_RUN_REAL_AGENT_SMOKE=1`, an explicit `MULTICA_REAL_AGENT_HOME` and a built `MULTICA_NATIVE_SMOKE_WORKER`; the Make target supplies these. `MULTICA_SMOKE_MODEL_<PROVIDER>` selects an account-accessible model. `MULTICA_SMOKE_MCODE_REFRESH=1` adds concurrent vendor OAuth refresh and subsequent session resume. MCode0.6.13 is intentionally refused; its refusal is covered by default tests. Enable real MCode acceptance only after a namespace-safe release is supported.
+`make test-agent-native-workers` explicitly uses the current user's real accounts. Tests require `agentintegration`, `MULTICA_RUN_REAL_AGENT_SMOKE=1`, an explicit `MULTICA_REAL_AGENT_HOME` and a built `MULTICA_NATIVE_SMOKE_WORKER`; the Make target supplies these. `MULTICA_SMOKE_MODEL_<PROVIDER>` selects an account-accessible model. The native MCode rejection is covered by a default test before any account profile or version probe is accessed.
 
 Fresh, resumed, restarted and provider-switched sessions must create exact tool artifacts. Resume also checks the same session ID and a remembered canary whose input file was removed. Host coexistence and two workers sharing a profile are separate cases. A local HTTP tool barrier requires overlapping active tool requests; successful sequential tasks do not satisfy coexistence. Run the supported-provider matrix on both reference hosts before changing the default.
 

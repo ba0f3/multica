@@ -6,9 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
+
+var nativePackageComponent = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,99}$`)
 
 func grantNativeReadOnly(request NativeRuntimeRequest, path string, result *NativeRuntime, watch *[]nativeWatch) (string, error) {
 	if err := validateNativeGrant(request, path); err != nil {
@@ -192,7 +195,7 @@ func resolveNativeNodePackage(request NativeRuntimeRequest, executable string, r
 			continue
 		}
 		base := filepath.Base(name)
-		if !nativeReleaseName.MatchString(base) || strings.TrimPrefix(name, "@openai/") != base {
+		if !nativePackageComponent.MatchString(base) || strings.TrimPrefix(name, "@openai/") != base {
 			continue
 		}
 		dependency := filepath.Join(filepath.Dir(root), base)

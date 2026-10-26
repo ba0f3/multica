@@ -10,7 +10,7 @@ import (
 // Each admitted provider requires a verified installation and profile resolver.
 func ProviderSupportsNativeHost(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "codex", "cursor", "opencode", "mcode":
+	case "codex", "cursor", "opencode":
 		return true
 	default:
 		return false

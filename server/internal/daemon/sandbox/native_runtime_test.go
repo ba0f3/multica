@@ -71,7 +71,7 @@ func newNativeInstallFixture(t *testing.T, provider string) nativeInstallFixture
 }
 
 func TestNativeRuntimeKeepsOriginalLauncherAndProfile(t *testing.T) {
-	for _, provider := range []string{"codex", "cursor", "opencode", "mcode"} {
+	for _, provider := range []string{"codex", "cursor", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			fixture := newNativeInstallFixture(t, provider)
 			resolver := NewNativeRuntimeResolver(func(_ context.Context, gotProvider, executable string) (string, error) {
@@ -181,27 +181,6 @@ func TestNativeRuntimeRejectsUntrustedProfileEscape(t *testing.T) {
 	}
 }
 
-func TestNativeRuntimeDeclaresMcodeLockScope(t *testing.T) {
-	fixture := newNativeInstallFixture(t, "mcode")
-	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.7.0", nil })
-	got, err := resolver.Resolve(t.Context(), fixture.request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.ProfileLimit != 1 {
-		t.Fatalf("unverified MCode concurrency = %d, want one attempt", got.ProfileLimit)
-	}
-	found := false
-	for _, path := range got.PrivatePaths {
-		if strings.HasSuffix(path, "/.mcode-active") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("MCode install activity markers would be shared across PID namespaces")
-	}
-}
-
 func TestNativeRuntimeProtectsCodeStoredInsideTheProfile(t *testing.T) {
 	fixture := newNativeInstallFixture(t, "codex")
 	packages := filepath.Join(fixture.profile, "packages")
@@ -272,7 +251,7 @@ func TestNativeRuntimeInvalidatesRetargetedParentSymlink(t *testing.T) {
 }
 
 func TestNativeRuntimeProfileLeaseIdentitySurvivesHomeAliases(t *testing.T) {
-	fixture := newNativeInstallFixture(t, "mcode")
+	fixture := newNativeInstallFixture(t, "codex")
 	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.7.0", nil })
 	first, err := resolver.Resolve(t.Context(), fixture.request)
 	if err != nil {
@@ -288,37 +267,7 @@ func TestNativeRuntimeProfileLeaseIdentitySurvivesHomeAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	if second.ProfileKey != first.ProfileKey {
-		t.Fatal("the same physical MCode profile could acquire two independent attempt leases")
-	}
-}
-
-func TestNativeRuntimeRejectsMcodeSiblingMigrationLockVersions(t *testing.T) {
-	fixture := newNativeInstallFixture(t, "mcode")
-	for _, version := range []string{"0.6.12", "0.6.13", "0.7.0", "1.0.0"} {
-		t.Run(version, func(t *testing.T) {
-			resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return version, nil })
-			_, err := resolver.Resolve(t.Context(), fixture.request)
-			if version == "0.6.12" {
-				if err == nil || !strings.Contains(err.Error(), "0.6.13") || !strings.Contains(err.Error(), "migration lock") {
-					t.Fatalf("unsafe native MCode did not explain recovery: %v", err)
-				}
-			} else if version == "0.6.13" {
-				if err == nil || !strings.Contains(err.Error(), "live host") {
-					t.Fatalf("cross-namespace lease recovery was allowed: %v", err)
-				}
-			} else if err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestNativeRuntimeRejectsMcodeCrossNamespaceLeaseRecovery(t *testing.T) {
-	fixture := newNativeInstallFixture(t, "mcode")
-	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "0.6.13", nil })
-	_, err := resolver.Resolve(t.Context(), fixture.request)
-	if err == nil || !strings.Contains(err.Error(), "live host") || !strings.Contains(err.Error(), "docker") {
-		t.Fatalf("unsafe cross-namespace lease recovery was allowed: %v", err)
+		t.Fatal("the same physical provider profile could acquire two independent attempt leases")
 	}
 }
 
@@ -450,4 +399,26 @@ func TestNativeUniversalSkillInstallInvalidatesAbsentGrant(t *testing.T) {
 		}
 	}
 	t.Fatal("first universal skill installation remains invisible until restart")
+}
+
+func TestNativeMcodeRefusedBeforeAccessingItsProfile(t *testing.T) {
+	fixture := newNativeInstallFixture(t, "mcode")
+	if err := os.RemoveAll(fixture.profile); err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	resolver := NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) {
+		probes++
+		return "9.0.0", nil
+	})
+	_, err := resolver.Resolve(t.Context(), fixture.request)
+	if err == nil || !strings.Contains(err.Error(), "OpenCode") {
+		t.Fatalf("MCode must direct the user to OpenCode: %v", err)
+	}
+	if probes != 0 {
+		t.Fatal("unsupported MCode reached a CLI version probe")
+	}
+	if _, err := os.Stat(fixture.profile); !os.IsNotExist(err) {
+		t.Fatalf("unsupported MCode created its account profile: %v", err)
+	}
 }
