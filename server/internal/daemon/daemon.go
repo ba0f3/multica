@@ -8958,6 +8958,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentCustomEnv = task.Agent.CustomEnv
 	}
 	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, env.HermesHome, d.logger)
+	if d.cfg.SandboxEnabled {
+		gitEnv, err := taskWorkerGitEnvironment(task, gitSocketPath, env)
+		if err != nil {
+			return TaskResult{}, fmt.Errorf("prepare worker Git transport: %w", err)
+		}
+		for key, value := range gitEnv {
+			agentEnv[key] = value
+		}
+	}
 	if provider == "reasonix" {
 		reasonixStateHome, err := prepareReasonixTaskStateHome(d.cfg.Profile, task.RuntimeID, task.AgentID)
 		if err != nil {

@@ -31,6 +31,21 @@ func taskRepoGitEnvironment(task Task, socketPath string) []string {
 			count, _ = strconv.Atoi(value)
 		}
 	}
+	for _, rewrite := range taskGitURLRewrites(task, socketPath) {
+		env = append(env, "GIT_CONFIG_KEY_"+strconv.Itoa(count)+"="+rewrite.key, "GIT_CONFIG_VALUE_"+strconv.Itoa(count)+"="+rewrite.value)
+		count++
+	}
+	return append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(count))
+}
+
+type gitURLRewrite struct{ key, value string }
+
+func taskGitURLRewrites(task Task, socketPath string) []gitURLRewrite {
+	binding := pickGitIdentity(task)
+	if socketPath == "" || binding == nil {
+		return nil
+	}
+	var rewrites []gitURLRewrite
 	endpoint := url.URL{Scheme: "ssh", User: url.User("git"), Host: binding.Host, Path: "/"}
 	// Older servers omit the port; SSH's standard port remains the default.
 	if binding.Port != 0 && binding.Port != 22 {
@@ -47,13 +62,9 @@ func taskRepoGitEnvironment(task Task, socketPath string) []string {
 			continue
 		}
 		seen[prefix] = true
-		env = append(env,
-			"GIT_CONFIG_KEY_"+strconv.Itoa(count)+"=url."+endpoint.String()+".insteadOf",
-			"GIT_CONFIG_VALUE_"+strconv.Itoa(count)+"="+prefix,
-		)
-		count++
+		rewrites = append(rewrites, gitURLRewrite{key: "url." + endpoint.String() + ".insteadOf", value: prefix})
 	}
-	return append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(count))
+	return rewrites
 }
 
 // serverGitSigner forwards signature requests to the server.
@@ -62,21 +73,25 @@ func taskRepoGitEnvironment(task Task, socketPath string) []string {
 // bytes, and receives the signature. That is what keeps a compromised runner
 // from reading a key out of the socket it was given.
 type serverGitSigner struct {
-	client    *Client
-	leaseID   string
-	publicKey string
+	client      *Client
+	leaseID     string
+	publicKey   string
+	daemonToken string
 }
 
 func (s *serverGitSigner) PublicKey() string { return s.publicKey }
 
 func (s *serverGitSigner) Sign(ctx context.Context, data []byte) ([]byte, error) {
-	return s.client.SignGitData(ctx, s.leaseID, data)
+	return s.client.SignGitData(ctx, s.leaseID, data, s.daemonToken)
 }
 
 // validateGitCredentialForTask requires a signing socket only when a matching
 // verified credential was supplied. Missing credentials do not block startup.
 func validateGitCredentialForTask(task Task, gitSocketPath string) error {
 	if binding := pickGitIdentity(task); binding != nil && gitSocketPath == "" {
+		if task.GitSigningDaemonToken == "" {
+			return fmt.Errorf("git signing is unavailable for %s: the task has no supervisor authorization; update the backend and daemon, then retry the task", binding.Host)
+		}
 		return fmt.Errorf(
 			"git signing is unavailable for %s; Check connection on your Git credential or retry the task",
 			binding.Host,
@@ -142,7 +157,11 @@ func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot
 	if binding == nil || d.client == nil {
 		return "", func() {}
 	}
-	lease, err := d.client.OpenGitSigningLease(ctx, task.ID, attemptID, binding.ProviderID)
+	if task.GitSigningDaemonToken == "" {
+		d.logger.Warn("git: task has no supervisor signing authorization; update backend and daemon", "task_id", task.ID)
+		return "", func() {}
+	}
+	lease, err := d.client.OpenGitSigningLease(ctx, task.ID, attemptID, binding.ProviderID, task.GitSigningDaemonToken)
 	if err != nil {
 		d.logger.Warn("git: could not open a signing lease", "task_id", task.ID, "error", err)
 		return "", func() {}
@@ -165,9 +184,10 @@ func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot
 		SocketPath: filepath.Join(socketDir, "agent.sock"),
 		PublicKey:  lease.PublicKey,
 		Signer: &serverGitSigner{
-			client:    d.client,
-			leaseID:   lease.LeaseID,
-			publicKey: lease.PublicKey,
+			client:      d.client,
+			leaseID:     lease.LeaseID,
+			publicKey:   lease.PublicKey,
+			daemonToken: task.GitSigningDaemonToken,
 		},
 	})
 	if err != nil {

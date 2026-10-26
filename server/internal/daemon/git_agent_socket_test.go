@@ -74,10 +74,60 @@ func fakeGitSigningServer(t *testing.T, signer ssh.Signer) *httptest.Server {
 	return server
 }
 
+func TestGitSigningUsesClaimDaemonTokenWithoutChangingOwnerClient(t *testing.T) {
+	_, private, err := generateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingServer := fakeGitSigningServer(t, signer)
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer mdt_task_fixture" {
+			http.Error(w, "daemon token required", http.StatusForbidden)
+			return
+		}
+		signingServer.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	profile := gitAgentTestProfile(t)
+	d := newGitAgentTestDaemon(t, server.URL, profile)
+	d.client.SetToken("mul_owner_fixture")
+	task := gitAgentTestTask()
+	task.GitSigningDaemonToken = "mdt_task_fixture"
+	socket, stop := d.startGitAgentSocket(t.Context(), task, profile, "task-credential")
+	t.Cleanup(stop)
+	if socket == "" {
+		t.Fatal("task Git signing lease was not opened with its daemon credential")
+	}
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := agent.NewClient(conn)
+	data := []byte("task ssh authentication")
+	sig, err := client.Sign(signer.PublicKey(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signer.PublicKey().Verify(data, sig); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || d.client.Token() != "mul_owner_fixture" {
+		t.Fatalf("lease/sign requests=%d or owner client was changed", len(paths))
+	}
+}
+
 func gitAgentTestTask() Task {
 	return Task{
-		ID:    "task-1",
-		Repos: []RepoData{{URL: "git@github.com:acme/api.git"}},
+		ID:                    "task-1",
+		GitSigningDaemonToken: "mdt_fixture",
+		Repos:                 []RepoData{{URL: "git@github.com:acme/api.git"}},
 		GitIdentities: []GitIdentityBinding{
 			{ProviderID: "provider-1", Host: "github.com", IdentityID: "identity-1", Generation: 1},
 		},

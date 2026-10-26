@@ -113,11 +113,11 @@ func TestRemoteMCPDaemonTokenForClaim(t *testing.T) {
 		WorkspaceID: parseUUID(testWorkspaceID),
 		DaemonID:    strToText("daemon-remote-mcp"),
 	}
-	raw, params, err := remoteMCPDaemonTokenForClaim(AgentTaskResponse{
+	raw, params, err := taskDaemonTokenForClaim(AgentTaskResponse{
 		RemoteMCPConnections: []remotemcp.Connection{{ContributionKey: "mobbin"}},
 	}, runtime)
 	if err != nil {
-		t.Fatalf("remoteMCPDaemonTokenForClaim: %v", err)
+		t.Fatalf("taskDaemonTokenForClaim: %v", err)
 	}
 	if !strings.HasPrefix(raw, "mdt_") {
 		t.Fatalf("raw token has unexpected prefix")
@@ -131,6 +131,26 @@ func TestRemoteMCPDaemonTokenForClaim(t *testing.T) {
 	remaining := time.Until(params[0].ExpiresAt.Time)
 	if remaining < 23*time.Hour || remaining > 24*time.Hour {
 		t.Fatalf("daemon token lifetime = %s, want about 24h", remaining)
+	}
+}
+
+func TestGitClaimGetsSupervisorTokenWithoutRemoteMCP(t *testing.T) {
+	runtime := db.AgentRuntime{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		DaemonID:    strToText("daemon-git"),
+		OwnerID:     parseUUID(testUserID),
+	}
+	raw, params, err := taskDaemonTokenForClaim(AgentTaskResponse{
+		GitIdentities: []GitIdentityBinding{{ProviderID: "git-provider"}},
+	}, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(raw, "mdt_") || len(params) != 1 {
+		t.Fatal("Git-only claim did not receive a supervisor daemon token")
+	}
+	if params[0].TokenHash != auth.HashToken(raw) || params[0].OwnerID != runtime.OwnerID || params[0].DaemonID != runtime.DaemonID.String {
+		t.Fatal("Git supervisor token lost its runtime owner/daemon binding")
 	}
 }
 

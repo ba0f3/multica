@@ -151,6 +151,7 @@ func testDockerRepoCacheTaskSigning(t *testing.T, host string, port int) {
 	d.repoCache = repocache.New(filepath.Join(root, ".repos"), newDiscardLogger())
 	task := dockerTask("01a17196-8dad-7bc4-8d82-4b441e147f5e", []RepoData{{URL: "https://" + host + "/hai-tac/gms.git"}})
 	task.GitIdentities = []GitIdentityBinding{{ProviderID: "provider", Host: host, Port: port}}
+	task.GitSigningDaemonToken = "mdt_cache_fixture"
 	result, err := d.runTask(context.Background(), task, "codex", 0, newDiscardLogger())
 	if err != nil {
 		t.Fatalf("cold private clone failed: %v", err)

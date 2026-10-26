@@ -251,7 +251,7 @@ func TestDaemonToken_OldOwnersCredentialCannotReachReplacementOwner(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, params, err := remoteMCPDaemonTokenForClaim(AgentTaskResponse{
+	raw, params, err := taskDaemonTokenForClaim(AgentTaskResponse{
 		RemoteMCPConnections: []remotemcp.Connection{{ContributionKey: "reuse"}},
 	}, old)
 	if err != nil || len(params) != 1 {
@@ -364,7 +364,7 @@ func TestDaemonToken_ReplacedOwnerAndUnboundTokensCannotRegisterOrAct(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw, params, err := remoteMCPDaemonTokenForClaim(AgentTaskResponse{
+			raw, params, err := taskDaemonTokenForClaim(AgentTaskResponse{
 				RemoteMCPConnections: []remotemcp.Connection{{ContributionKey: "reuse-reg"}},
 			}, old)
 			if err != nil {

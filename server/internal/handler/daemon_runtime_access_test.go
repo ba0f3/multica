@@ -302,7 +302,7 @@ func (h *Handler) finalizeClaimDeliveryForTestWithRuntime(
 	if terr != nil {
 		return resp, deliveredCommentIDs, agentSkillCount, builtinSkillCount, nil, fmt.Errorf("generate token: %w", terr)
 	}
-	remoteMCPToken, daemonTokens, derr := remoteMCPDaemonTokenForClaim(resp, runtime)
+	remoteMCPToken, daemonTokens, derr := taskDaemonTokenForClaim(resp, runtime)
 	if derr != nil {
 		return resp, deliveredCommentIDs, agentSkillCount, builtinSkillCount, nil, fmt.Errorf("remote mcp token: %w", derr)
 	}

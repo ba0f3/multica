@@ -83,6 +83,22 @@ Codex, Cursor and OpenCode passed fresh, worker resume, restart, provider change
 | Provider prep | Docker prepares task-local provider state. Native mode uses selected original profiles without copying profiles, importing credentials or editing credential databases. |
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
 
+## Checkout, pull and push
+
+The daemon fetches the task's repositories before launch and records the resolved commits in the read-only cache manifest. `multica repo checkout <url>` creates a private checkout and task branch at that snapshot. An explicit `--ref` can fetch a branch absent from the cache. Reusing a checkout preserves its branch, commits and dirty files; `--fresh` is the explicit destructive reset.
+
+`git fetch`, `git pull --ff-only origin <branch>` and `git push -u origin HEAD` contact the real remote from the worker. They write only the checkout's Git database. HTTPS URLs for the selected credential's provider are rewritten to its SSH host and port in the task environment. Public HTTPS repositories continue to work without a Git identity.
+
+Git authentication uses the task originator's verified Git credential, independently of the agent provider's login. A server-issued supervisor token opens the signing lease and authorizes signatures. This token stays in the daemon; the worker receives only its per-attempt SSH agent socket. The private key stays on the server. Rerunning another person's task does not borrow the runtime owner's key.
+
+Docker maps the daemon's numeric UID/GID through private read-only passwd/group files, so OpenSSH can resolve its local user. The signing socket is mounted at exactly `SSH_AUTH_SOCK`, regardless of its host basename. Named Docker users must already exist in the image; numeric overrides must specify both IDs as `UID:GID`.
+
+Workers receive a read-only copy of public entries from the daemon's `~/.ssh/known_hosts` and `/etc/ssh/ssh_known_hosts`. SSH runs in batch mode with strict host-key checking, without the host SSH config or private-key files. Trust the Git server's SSH host key on the daemon host before starting tasks. Git access still requires that the originator's public key has repository access at the provider.
+
+Deploy the backend and daemon together for supervisor Git authorization. No database migration or worker image change is required for this transport fix. An old backend that omits the signing token produces an explicit upgrade error.
+
+The synthetic Docker/native Git tests described in `AGENTS.md` verify checkout, pull of an uncached commit, push, checkout of an uncached branch and unchanged cache refs using an ephemeral SSH Git server. They do not access real accounts or publish repository changes.
+
 ## Codex in Docker
 
 - Per-task `CODEX_HOME` is prepared under the task env root.

@@ -257,6 +257,9 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 		return nil, err
 	}
 	extras = append(extras, sandbox.Mount{Source: cacheDir, Target: cacheDir})
+	if env.GitKnownHostsPath != "" {
+		extras = append(extras, sandbox.Mount{Source: env.GitKnownHostsPath, Target: env.GitKnownHostsPath, ReadOnly: true})
+	}
 	if env.WorkerCABundlePath != "" {
 		extras = append(extras, sandbox.Mount{Source: env.WorkerCABundlePath, Target: env.WorkerCABundlePath, ReadOnly: true})
 	}

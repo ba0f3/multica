@@ -1444,10 +1444,10 @@ type GitSigningLease struct {
 //
 // The daemon names the provider; the server chooses the user, the identity
 // and the generation from the task's originator.
-func (c *Client) OpenGitSigningLease(ctx context.Context, taskID, attemptID, providerID string) (*GitSigningLease, error) {
+func (c *Client) OpenGitSigningLease(ctx context.Context, taskID, attemptID, providerID, daemonToken string) (*GitSigningLease, error) {
 	var lease GitSigningLease
 	path := fmt.Sprintf("/api/daemon/tasks/%s/git-signing-lease", url.PathEscape(taskID))
-	if err := c.postJSON(ctx, path, map[string]string{
+	if err := c.postJSONWithToken(ctx, path, daemonToken, map[string]string{
 		"provider_id": providerID,
 		"attempt_id":  attemptID,
 	}, &lease); err != nil {
@@ -1460,11 +1460,11 @@ func (c *Client) OpenGitSigningLease(ctx context.Context, taskID, attemptID, pro
 }
 
 // SignGitData asks the server to sign bytes with a lease's key.
-func (c *Client) SignGitData(ctx context.Context, leaseID string, data []byte) ([]byte, error) {
+func (c *Client) SignGitData(ctx context.Context, leaseID string, data []byte, daemonToken string) ([]byte, error) {
 	var response struct {
 		Signature string `json:"signature"`
 	}
-	if err := c.postJSON(ctx, "/api/daemon/git-signatures", map[string]string{
+	if err := c.postJSONWithToken(ctx, "/api/daemon/git-signatures", daemonToken, map[string]string{
 		"lease_id": leaseID,
 		"data":     base64.StdEncoding.EncodeToString(data),
 	}, &response); err != nil {

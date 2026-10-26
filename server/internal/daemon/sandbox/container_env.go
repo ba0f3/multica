@@ -12,6 +12,14 @@ import (
 // which the daemon writes and the worker CLI reads.
 const RepoManifestPath = HomePath + "/.multica/" + workercheckout.ManifestFileName
 
+const GitKnownHostsPath = HomePath + "/.multica/git-known-hosts"
+
+// GitSSHCommand restricts SSH to the task socket and public host trust file.
+func GitSSHCommand(knownHostsPath string) string {
+	quoted := "'" + strings.ReplaceAll(knownHostsPath, "'", "'\\''") + "'"
+	return "ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o IdentityFile=none -o UserKnownHostsFile=" + quoted
+}
+
 // RepoCABundlePath is the in-container path of the CA bundle the worker's
 // git/curl/node/python must trust for private Git hosts.
 const RepoCABundlePath = HomePath + "/.multica/ca-bundle.pem"
@@ -50,7 +58,7 @@ func ContainerEnv(env map[string]string) map[string]string {
 	// never depend on the daemon's later runTask assignment order.
 	rewritten["MULTICA_ISOLATED_TOOL_BOUNDARY"] = "1"
 	rewritten["MULTICA_HOST_REPO_CHECKOUT"] = "disabled"
-	if _, ok := rewritten["SSH_AUTH_SOCK"]; ok {
+	if rewritten["SSH_AUTH_SOCK"] != "" {
 		rewritten["SSH_AUTH_SOCK"] = AgentSocketPath
 	}
 	if _, ok := rewritten["CLAUDE_CODE_TMPDIR"]; ok {

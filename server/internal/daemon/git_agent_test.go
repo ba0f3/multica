@@ -127,6 +127,15 @@ func TestValidateGitCredentialForTaskRejectsUnavailableSigning(t *testing.T) {
 	}
 }
 
+func TestMissingGitSupervisorAuthorizationExplainsUpgrade(t *testing.T) {
+	task := gitAgentTestTask()
+	task.GitSigningDaemonToken = ""
+	err := validateGitCredentialForTask(task, "")
+	if err == nil || !strings.Contains(err.Error(), "update the backend and daemon") || strings.Contains(err.Error(), "Check connection") {
+		t.Fatalf("missing supervisor authorization must identify deployment recovery: %v", err)
+	}
+}
+
 func TestValidateGitCredentialForTaskAllowsReadyCredential(t *testing.T) {
 	task := Task{
 		Repos: []RepoData{{URL: "git@github.com:acme/api.git"}},

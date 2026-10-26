@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,27 @@ func TestDockerBackendBuildsRunWithPrivateMounts(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("docker argv missing %q:\n%s", want, joined)
 		}
+	}
+}
+
+func TestDockerBackendMapsNumericTaskUserForSSH(t *testing.T) {
+	_, _, joined := dockerBackendArgv(t, nil, nil)
+	var passwdPath string
+	for _, bind := range dockerBinds(joined) {
+		if path, ok := strings.CutSuffix(bind, ":/etc/passwd:ro"); ok {
+			passwdPath = path
+		}
+	}
+	if passwdPath == "" {
+		t.Fatal("numeric Docker task user has no passwd mapping; ssh getpwuid will fail")
+	}
+	data, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("agent:x:%d:%d::/home/agent:/bin/bash", os.Getuid(), os.Getgid())
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("passwd lacks current numeric task identity %q", want)
 	}
 }
 

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/middleware"
 
 	"github.com/multica-ai/multica/server/internal/r2dgit"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -16,6 +19,43 @@ import (
 
 func jsonUnmarshal(data []byte, out any) error {
 	return json.Unmarshal(data, out)
+}
+
+func TestClaimedGitDaemonTokenAuthenticatesSigningEndpoint(t *testing.T) {
+	installGitSigningService(t)
+	provider := newGitTestProvider(t, "github", "github.com")
+	recorder := httptest.NewRecorder()
+	testHandler.GenerateGitIdentity(recorder, gitRequest(t, http.MethodPost, "/api/me/git-identities", `{"provider_id":"`+provider+`","request_id":"claim-signing"}`, testUserID))
+	var identity r2dgit.PublicIdentity
+	if err := json.Unmarshal(recorder.Body.Bytes(), &identity); err != nil {
+		t.Fatal(err)
+	}
+	verify := gitRequest(t, http.MethodPost, "/api/me/git-identities/"+identity.ID+"/"+itoa(identity.Generation)+"/verify", "", testUserID)
+	verify = testutil.WithURLParams(verify, "identityId", identity.ID, "generation", itoa(identity.Generation))
+	testutil.Call(t, testHandler.VerifyGitIdentity, verify).Want(http.StatusOK)
+	runtime := dbfx.Runtime(t, "Git-only claim", testutil.Cols{"daemon_id": testDaemonID})
+	agent := dbfx.Agent(t, "Git-only claim agent", runtime)
+	issue := dbfx.Issue(t, "Git-only claim issue")
+	task := dbfx.Task(t, agent, testutil.Cols{"runtime_id": runtime, "issue_id": issue, "status": "queued", "originator_user_id": testUserID, "accountable_user_id": testUserID})
+	claim := withURLParam(newRequest(http.MethodPost, "/api/daemon/runtimes/"+runtime+"/tasks/claim", map[string]any{}), "runtimeId", runtime)
+	var response struct {
+		Task *AgentTaskResponse `json:"task"`
+	}
+	testutil.Call(t, testHandler.ClaimTaskByRuntime, claim).Want(http.StatusOK).JSON(&response)
+	if response.Task == nil || response.Task.ID != task || response.Task.GitSigningDaemonToken == "" || response.Task.RemoteMCPDaemonToken != "" {
+		t.Fatal("Git-only task claim did not isolate supervisor authorization")
+	}
+	token := response.Task.GitSigningDaemonToken
+	stored, err := testHandler.Queries.GetDaemonTokenByHash(context.Background(), auth.HashToken(token))
+	if err != nil || stored.DaemonID != testDaemonID || uuidToString(stored.OwnerID) != testUserID {
+		t.Fatal("claimed signing credential was not persisted with its owner/daemon")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/tasks/"+task+"/git-signing-lease", strings.NewReader(`{"provider_id":"`+provider+`","attempt_id":"claim-test"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req = testutil.WithURLParams(req, "taskId", task)
+	protected := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.OpenGitSigningLease))
+	testutil.Call(t, protected.ServeHTTP, req).Want(http.StatusOK)
 }
 
 // dbRuntimeForTask loads the runtime row a task is bound to.

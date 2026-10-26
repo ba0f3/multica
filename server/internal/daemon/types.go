@@ -89,6 +89,8 @@ type Task struct {
 	// RemoteMCPDaemonToken stays inside the daemon and authenticates the local
 	// broker's credential-resolution calls. It must never enter agent env/config.
 	RemoteMCPDaemonToken string `json:"remote_mcp_daemon_token,omitempty"`
+	// GitSigningDaemonToken authorizes supervisor-only Git lease/signature calls.
+	GitSigningDaemonToken string `json:"git_signing_daemon_token,omitempty"`
 	// PluginHookTools are this workspace's agent-trigger plugin hooks, which
 	// the local MCP server presents to the agent as tools. Resolved by the
 	// server at claim time; the daemon never reads plugin state itself.

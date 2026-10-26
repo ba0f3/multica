@@ -85,7 +85,7 @@ func (d *Daemon) dockerBackend(
 		if err := os.MkdirAll(socketDir, 0o700); err != nil {
 			return nil, fmt.Errorf("%w: create signing socket dir: %w", errSandboxUnavailable, err)
 		}
-		binds = append(binds, sandbox.DockerBind(socketDir, filepath.Dir(sandbox.AgentSocketPath), "rw"))
+		binds = append(binds, sandbox.DockerBind(agentSocket, sandbox.AgentSocketPath, "rw"))
 	}
 
 	agentConfig := config
@@ -191,6 +191,10 @@ func (d *Daemon) dockerBackend(
 			containerEnv[key] = value
 		}
 	}
+	if env.GitKnownHostsPath != "" {
+		binds = append(binds, sandbox.DockerBind(env.GitKnownHostsPath, sandbox.GitKnownHostsPath, "ro"))
+		containerEnv["GIT_SSH_COMMAND"] = sandbox.GitSSHCommand(sandbox.GitKnownHostsPath)
+	}
 
 	dockerUser := strings.TrimSpace(d.cfg.DockerTaskUser)
 	if dockerUser == "" {
@@ -199,6 +203,11 @@ func (d *Daemon) dockerBackend(
 		// when the image runs as a fixed non-root user.
 		dockerUser = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	}
+	identityBinds, err := sandbox.DockerUserIdentityBinds(env.RootDir, dockerUser)
+	if err != nil {
+		return nil, fmt.Errorf("%w: prepare Docker user: %w", errSandboxUnavailable, err)
+	}
+	binds = append(binds, identityBinds...)
 
 	spec := sandbox.DockerRunSpec{
 		DockerPath:    dockerPath,

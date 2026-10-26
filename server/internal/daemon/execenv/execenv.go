@@ -270,6 +270,7 @@ type SkillFileContextForEnv struct {
 type Environment struct {
 	CodexDisabledSkillPaths []string
 	NativeProfile           *NativeProfile
+	GitKnownHostsPath       string
 	// RootDir is the top-level env directory ({workspacesRoot}/{task_id_short}/).
 	RootDir string
 	// WorkDir is the directory to pass as Cwd to the agent. Normally

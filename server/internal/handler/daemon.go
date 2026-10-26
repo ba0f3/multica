@@ -2253,9 +2253,9 @@ func (h *Handler) ClaimTasksByRuntime(w http.ResponseWriter, r *http.Request) {
 				"task_id", uuidToString(task.ID), "error", terr)
 			continue
 		}
-		remoteMCPToken, daemonTokens, derr := remoteMCPDaemonTokenForClaim(resp, rt)
+		supervisorToken, daemonTokens, derr := taskDaemonTokenForClaim(resp, rt)
 		if derr != nil {
-			slog.Error("batch claim: generate Remote MCP daemon token failed; requeueing claim",
+			slog.Error("batch claim: generate task supervisor token failed; requeueing claim",
 				"task_id", uuidToString(task.ID), "error", derr)
 			continue
 		}
@@ -2290,7 +2290,7 @@ func (h *Handler) ClaimTasksByRuntime(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		resp.AuthToken = tokenStr
-		resp.RemoteMCPDaemonToken = remoteMCPToken
+		setTaskDaemonTokens(&resp, supervisorToken)
 		resp.DeliveredCommentIDs = uuidStringsOrEmpty(receipt)
 		out = append(out, resp)
 	}
@@ -2653,20 +2653,27 @@ func (h *Handler) rejectClaimOnWorkspaceMismatch(ctx context.Context, task *db.A
 	}
 }
 
-// remoteMCPDaemonTokenForClaim prepares the short-lived credential the daemon
-// uses to resolve write-only Remote MCP secrets for this task. The raw token is
-// returned only in the claim response; its hash is committed atomically with
-// the task-scoped agent token by FinalizeTaskClaim.
-func remoteMCPDaemonTokenForClaim(resp AgentTaskResponse, runtime db.AgentRuntime) (string, []db.CreateDaemonTokenParams, error) {
-	if len(resp.RemoteMCPConnections) == 0 {
+func setTaskDaemonTokens(resp *AgentTaskResponse, token string) {
+	if len(resp.RemoteMCPConnections) > 0 {
+		resp.RemoteMCPDaemonToken = token
+	}
+	if len(resp.GitIdentities) > 0 {
+		resp.GitSigningDaemonToken = token
+	}
+}
+
+// taskDaemonTokenForClaim authorizes supervisor-only MCP and Git requests.
+// Its hash is persisted atomically with the task claim and owner binding.
+func taskDaemonTokenForClaim(resp AgentTaskResponse, runtime db.AgentRuntime) (string, []db.CreateDaemonTokenParams, error) {
+	if len(resp.RemoteMCPConnections) == 0 && len(resp.GitIdentities) == 0 {
 		return "", nil, nil
 	}
 	if !runtime.DaemonID.Valid || strings.TrimSpace(runtime.DaemonID.String) == "" {
-		return "", nil, errors.New("runtime daemon_id is required for Remote MCP")
+		return "", nil, errors.New("runtime daemon_id is required for task supervisor authorization")
 	}
 	raw, err := auth.GenerateDaemonToken()
 	if err != nil {
-		return "", nil, fmt.Errorf("generate Remote MCP daemon token: %w", err)
+		return "", nil, fmt.Errorf("generate task supervisor daemon token: %w", err)
 	}
 	return raw, []db.CreateDaemonTokenParams{{
 		TokenHash:   auth.HashToken(raw),
@@ -4331,10 +4338,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to mint task token")
 		return
 	}
-	remoteMCPToken, daemonTokens, derr := remoteMCPDaemonTokenForClaim(resp, runtime)
+	supervisorToken, daemonTokens, derr := taskDaemonTokenForClaim(resp, runtime)
 	if derr != nil {
-		outcome = "error_remote_mcp_token"
-		slog.Error("task claim: failed to generate Remote MCP daemon token",
+		outcome = "error_task_daemon_token"
+		slog.Error("task claim: failed to generate task supervisor token",
 			"task_id", uuidToString(task.ID), "error", derr)
 		requeueFailedClaim("remote_mcp_token_generation")
 		writeError(w, http.StatusInternalServerError, "failed to mint Remote MCP daemon token")
@@ -4376,7 +4383,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.AuthToken = tokenStr
-	resp.RemoteMCPDaemonToken = remoteMCPToken
+	setTaskDaemonTokens(&resp, supervisorToken)
 	task.DeliveredCommentIds = receipt
 	resp.DeliveredCommentIDs = uuidStringsOrEmpty(receipt)
 
