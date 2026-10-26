@@ -35,7 +35,7 @@ func TestBwrapSmokeRunsAWorkerInTheBoundary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "visible.txt"), []byte("inside"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// The fake host home remains absent; only the named provider profile is shared.
+	// The original home is read-only, with explicit provider state and admin masks.
 	hostHome := filepath.Join(root, "host-home")
 	for _, dir := range []string{
 		filepath.Join(hostHome, ".ssh"),
@@ -97,7 +97,7 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 		TempDir:        temp,
 		CheckoutDir:    checkout,
 		RuntimeRoots:   []string{"/usr", "/bin", "/lib", "/lib64", "/etc"},
-		ForbiddenRoots: []string{workspaces, hostHome},
+		ForbiddenRoots: []string{workspaces, filepath.Join(hostHome, ".ssh"), filepath.Join(hostHome, ".multica")},
 		AllowedRoots:   []string{filepath.Join(hostHome, ".claude")},
 		ExtraMounts:    []Mount{{Source: filepath.Join(hostHome, ".claude"), Target: filepath.Join(hostHome, ".claude")}},
 		Env:            map[string]string{},
@@ -135,13 +135,13 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 		"home=" + hostHome,
 		"file=inside",
 		"can_write=yes",
-		"secret=BLOCKED",
-		"siblings=BLOCKED",
-		// Only the provider configuration is granted from the host home.
+		"secret=host secret",
+		"siblings=task-1",
+		// Host administrative data stays hidden.
 		"ssh=0",
 		"multica=BLOCKED",
 		"claude=provider-config",
-		"bashrc=MISSING",
+		"bashrc=shell-config",
 		"home_write=DENIED",
 	} {
 		if !strings.Contains(report, want) {

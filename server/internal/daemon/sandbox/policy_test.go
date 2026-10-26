@@ -3,12 +3,16 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func newTestPolicy(t *testing.T) Policy {
 	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("native host-view policy requires Linux")
+	}
 	root := t.TempDir()
 	workspaces := filepath.Join(root, "workspaces")
 	taskRoot := filepath.Join(workspaces, "acme", "task-1")

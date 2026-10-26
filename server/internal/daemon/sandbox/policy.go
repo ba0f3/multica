@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -29,8 +30,8 @@ type Mount struct {
 
 type Policy struct {
 	TaskRoot string
-	// HomeDir is private task storage. HostHome is only the original pathname
-	// at which that empty directory is mounted, never a home mount source.
+	// HomeDir is task storage for runtimes without an original host HOME.
+	// HostHome selects the original read-only HOME; explicit profile grants are writable.
 	HomeDir           string
 	HostHome          string
 	TempDir           string
@@ -76,10 +77,19 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 			allowedExact[filepath.Clean(path)] = struct{}{}
 		}
 	}
-	args := []string{"--clearenv", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--new-session", "--die-with-parent", "--cap-drop", "ALL", "--proc", "/proc", "--dev", "/dev"}
+	args := []string{"--clearenv", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--new-session", "--die-with-parent", "--cap-drop", "ALL"}
+	hostArgs, masks, err := hostViewArgs(policy)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, hostArgs...)
+	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/run", "--dir", "/run/multica", "--tmpfs", "/sys")
 	for _, path := range policy.RuntimeRoots {
 		if err := checkMountSource(path, policy, allowedExact); err != nil {
 			return nil, err
+		}
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			continue
 		}
 		args = append(args, "--ro-bind", path, path)
 	}
@@ -90,11 +100,19 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	if err := nativeAbsolutePath(checkoutTarget); err != nil {
 		return nil, err
 	}
-	for _, mount := range []Mount{{Source: policy.TempDir, Target: sandboxTemp}, {Source: policy.HomeDir, Target: homeTarget}, {Source: policy.CheckoutDir, Target: checkoutTarget}} {
+	baseMounts := []Mount{{Source: policy.TaskRoot, Target: policy.TaskRoot, ReadOnly: true}, {Source: policy.TempDir, Target: sandboxTemp}, {Source: policy.CheckoutDir, Target: checkoutTarget}}
+	if policy.HostHome == "" {
+		baseMounts = append(baseMounts, Mount{Source: policy.HomeDir, Target: homeTarget})
+	}
+	for _, mount := range baseMounts {
 		if err := checkMountSource(mount.Source, policy, allowedExact); err != nil {
 			return nil, err
 		}
-		args = append(args, "--bind", mount.Source, mount.Target)
+		flag := "--bind"
+		if mount.ReadOnly {
+			flag = "--ro-bind"
+		}
+		args = append(args, flag, mount.Source, mount.Target)
 	}
 	if policy.OutputDir != "" {
 		if err := checkMountSource(policy.OutputDir, policy, allowedExact); err != nil {
@@ -106,6 +124,9 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	// Links are created while HOME is still private. Creating them after a
 	// shared profile bind could write into the host's installation or profile.
 	for _, link := range links {
+		if _, err := os.Lstat(link.Path); err == nil && !isUnder(link.Path, "/run") {
+			continue
+		}
 		inherited := false
 		for _, root := range policy.RuntimeRoots {
 			if isUnder(link.Path, root) {
@@ -154,7 +175,10 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	args = append(args, "--ro-bind", self, sandboxWorker)
 	// Seal the empty root and home after mountpoints/links have been created.
 	// Explicit child mounts keep their own writable flags.
-	args = append(args, "--remount-ro", homeTarget, "--remount-ro", "/")
+	for _, path := range masks {
+		args = append(args, "--remount-ro", path)
+	}
+	args = append(args, "--remount-ro", "/sys", "--remount-ro", "/")
 	env := make(map[string]string, len(policy.Env)+3)
 	for key, value := range policy.Env {
 		env[key] = value
@@ -231,7 +255,7 @@ func checkMountSource(source string, policy Policy, allowedExact map[string]stru
 }
 
 func isUnder(path, root string) bool {
-	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+	return path == root || (root == string(filepath.Separator) && filepath.IsAbs(path)) || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 func sortedKeys(values map[string]string) []string {

@@ -1,5 +1,7 @@
 # Sandbox trên host cho agent CLI
 
+Filesystem và repo ownership được thay bằng [user codebases and read-only host view](./2026-10-26-user-codebases-host-view-design.md). Giữ PID namespace riêng; MCode0.6.13 chưa được hỗ trợ.
+
 Mục tiêu: bỏ việc tạo Docker container cho mỗi task trên Linux, giữ nguyên bộ cài và phiên đăng nhập của CLI, đồng thời giới hạn filesystem và process của task.
 
 1. **Backend và phạm vi**

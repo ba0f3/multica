@@ -23,7 +23,7 @@ func newNativePolicy(t *testing.T) Policy {
 	return policy
 }
 
-func TestNativePolicyUsesAnEmptyHomeAtTheOriginalPath(t *testing.T) {
+func TestNativePolicyPreservesOriginalHomeAndExplicitWritableGrants(t *testing.T) {
 	policy := newNativePolicy(t)
 	args, err := BuildArgs(policy, testSelf(t))
 	if err != nil {
@@ -32,8 +32,8 @@ func TestNativePolicyUsesAnEmptyHomeAtTheOriginalPath(t *testing.T) {
 	if argsContain(args, "--ro-bind", policy.HostHome, policy.HostHome) || argsContain(args, "--bind", policy.HostHome, policy.HostHome) {
 		t.Fatal("the native boundary mounted the host home")
 	}
-	if !argsContain(args, "--bind", policy.HomeDir, policy.HostHome) || !argsContain(args, "--setenv", "HOME", policy.HostHome) {
-		t.Fatal("the private home does not preserve the native HOME pathname")
+	if argsContain(args, "--bind", policy.HomeDir, policy.HostHome) || !argsContain(args, "--setenv", "HOME", policy.HostHome) {
+		t.Fatal("the original read-only HOME was replaced or lost")
 	}
 }
 

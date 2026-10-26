@@ -237,7 +237,7 @@ func TestRealNativeTaskAfterWorkerFailure(t *testing.T) {
 // removed from the workspace before resume, and checked through a tool artifact.
 func TestRealProviderNativeWorkers(t *testing.T) {
 	_, worker := realNativeSmokeInputs(t)
-	for _, provider := range []string{"codex", "cursor", "opencode", "mcode"} {
+	for _, provider := range []string{"codex", "cursor", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			binary := provider
 			if provider == "cursor" {
@@ -339,7 +339,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 					}
 				}
 				name := "output-" + round + ".txt"
-				prompt := "Use a shell tool to write the exact original canary bytes from our earlier conversation to " + name + " in the current workspace. Do not read old session files. Do not call external services or Multica commands. Then say done."
+				prompt := "Use a shell tool to write the exact original canary bytes from our earlier conversation to " + name + " in the current workspace. Use printf '%s' so the file contains no trailing newline. Do not read old session files. Do not call external services or Multica commands. Then say done."
 				if prior == "" {
 					if err := os.WriteFile(filepath.Join(env.WorkDir, "input.txt"), []byte(canary), 0600); err != nil {
 						t.Fatal(err)
@@ -455,7 +455,7 @@ func TestRealNativeOpenCodeHostWorkerContinuity(t *testing.T) {
 
 func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 	_, worker := realNativeSmokeInputs(t)
-	for _, provider := range []string{"codex", "cursor", "opencode", "mcode"} {
+	for _, provider := range []string{"codex", "cursor", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			binary := provider
 			if provider == "cursor" {

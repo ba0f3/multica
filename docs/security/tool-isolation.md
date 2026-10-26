@@ -32,11 +32,11 @@ Runtime and profile selection uses the daemon account's HOME and provider select
 
 ### Filesystem and shared profiles
 
-Native workers see a fresh empty home at the original HOME pathname, followed by explicit grants. The whole host home is never mounted. Original executables, launcher links, interpreters and ELF dependencies remain at their original paths and are read-only. Standalone programs use individual file grants; recognized provider package trees supply required companions. Env shebangs resolve through the trusted daemon PATH, and unsupported layouts fail explicitly. The resolver does not rewrite provider launchers or substitute Node.
+Native workers inherit the host filesystem read-only at its original paths. The managed workspaces root, other users' repository stores and task environments, daemon administrative configuration, SSH key directories and Docker configuration are masked. Masks cover canonical paths, symlinks and bind-mount aliases. `/proc` and `/dev` are rebuilt; `/run` and `/sys` do not expose host management state. Existing filesystem Unix sockets are masked because a read-only socket still accepts control RPCs. Explicitly shared provider profiles remain one account trust domain.
 
-Only selected profile directories are shared read-write. Task workdir, temporary files, output and task API configuration have their own mounts. Private home, temporary and marker storage is removed after each attempt is reaped. Output and task-owned build caches remain under the environment root for reuse and normal environment GC. Default npm cache, GOCACHE and GOPATH locations use those task caches; host caches are not mounted. Recognized original Node and Go installations supply read-only toolchain code. Selected repository caches and the checkout manifest are read-only. Host SSH keys, Git credential stores, administrator tokens, other task directories, Docker sockets and keyring sockets are absent. Resolver and hosts files retain the host's DNS configuration, including systemd resolver symlinks.
+Only the current task's checkout, temporary files, output, API configuration and build caches are writable, alongside the selected provider profile directories needed for authentication and sessions. The task root and selected repository caches are read-only. The root view preserves original executables, Node runtimes, package files and shared libraries; installation metadata is still tracked for version invalidation and to protect code nested inside writable profiles. The daemon does not rewrite vendor launchers or substitute Node.
 
-The selected profile is a shared account trust domain. An agent can read that profile's credentials and sessions. Principals without permission to use the account must not share its profile. This boundary does not promise credential isolation or prevention of data exfiltration.
+Provider credential secrecy is currently deferred. Other provider configuration may be readable through the host view. This is a filesystem-write and managed-code boundary; it does not prevent credential reading or data exfiltration. New host control sockets must remain under the masked management roots; enumerating existing socket paths cannot hide future sockets created elsewhere. Profile state and vendor locks remain shared at their original paths. Task temporary storage is removed after reaping; output and task build caches follow normal environment retention.
 
 Codex receives task settings and disabled-skill policies through thread RPC without rewriting shared `config.toml`. Existing native exclusions are preserved, and authorized universal skill inputs are read-only. Cursor keeps its original data directory and uses project-local managed MCP configuration. Existing runtime-plus-agent MCP merging remains unchanged. MCode installer `.mcode-active` state is private to each sandbox. Profile leases serialize MCode workers across daemon profiles and release only after attempt cleanup; vendor auth and database locks remain beside the state they protect.
 
@@ -61,14 +61,7 @@ Logs tag monotonic measurements with task, attempt, provider and backend. `repo_
 
 The warm-launch acceptance test runs 100 fake workers through the production launcher and requires worker-ready p95 at most 250 ms. It checks a fresh artifact and completed scope cleanup after every attempt. This threshold does not promise a model response time.
 
-Measured on 2026-10-26 with the production launcher and test-created worker scripts:
-
-| Host | Warm attempts | p50 | p95 | Maximum |
-| --- | --- | --- | --- | --- |
-| k7 | 100 | 70.9 ms | 81.9 ms | 91.3 ms |
-| garlic | 100 | 58.1 ms | 62.4 ms | 80.5 ms |
-
-Codex, Cursor and OpenCode passed fresh, worker resume, restart, provider change, and a new task after cancellation on both hosts. All three also passed a host plus two same-profile workers. OpenCode used the account-accessible `opencode-go/deepseek-v4.1-flash` model; these results do not establish availability of other model routes. MCode is not accepted for native rollout: 0.6.13 can invalidate a live host lease, and the selected garlic profile also requires host login.
+The current host-view policy must pass the synthetic filesystem probes, bind-mount alias denial, scoped-cache ownership tests and authenticated Git round trips. Real-provider acceptance covers Codex, Cursor and OpenCode. MCode0.6.13 is intentionally unsupported with private PID namespaces. Local k7 verification does not establish acceptance on garlic; do not change the native default based on local tests alone.
 
 ## Scope
 
@@ -84,6 +77,10 @@ Codex, Cursor and OpenCode passed fresh, worker resume, restart, provider change
 | Launch argv | OpenCode rejects `--server` and forces `--standalone` on 2.x inside the boundary (`server/pkg/agent/opencode_isolated.go`). |
 
 ## Checkout, pull and push
+
+Base repositories are private to the task's proven execution user at `.repos/<workspace_id>/<execution_user_id>/<canonical_repo>.git`. The server sends `execution_user_id` independently of Git signing. The daemon uses the originator on the claimed task, including reruns; it never substitutes the person pressing rerun or its own account. A code task without a proven user fails with an upgrade/retry instruction. Workspace registration refreshes metadata and settings without cloning repositories as the daemon owner.
+
+Every task checkout has its own Git database and branch. Fetch and ref resolution happen with task credentials before a snapshot is admitted. Parallel users sharing a remote URL have independent stores, locks and dependency records. Extra Git alternates and reused workdirs must match workspace and execution user. Legacy shared caches are not seeded into new stores, and missing/foreign user ownership starts a fresh environment without deleting prior work. Normal GC still applies to terminal environments with valid existing ownership proof.
 
 The daemon fetches the task's repositories before launch and records the resolved commits in the read-only cache manifest. `multica repo checkout <url>` creates a private checkout and task branch at that snapshot. An explicit `--ref` can fetch a branch absent from the cache. Reusing a checkout preserves its branch, commits and dirty files; `--fresh` is the explicit destructive reset.
 
@@ -186,9 +183,9 @@ Default Go tests use fake or missing CLI paths. Kernel boundary and launch probe
 MULTICA_BWRAP_SMOKE=1 bash scripts/go-test-with-agent-cli-guard.sh -- go -C server test ./internal/daemon -run '^TestNativeWarmWorkerLaunchLatency$' -count=1 -v
 ```
 
-`make test-agent-native-workers` explicitly uses the current user's real accounts. Tests require `agentintegration`, `MULTICA_RUN_REAL_AGENT_SMOKE=1`, an explicit `MULTICA_REAL_AGENT_HOME` and a built `MULTICA_NATIVE_SMOKE_WORKER`; the Make target supplies these. `MULTICA_SMOKE_MODEL_<PROVIDER>` selects an account-accessible model. `MULTICA_SMOKE_MCODE_REFRESH=1` adds concurrent vendor OAuth refresh and subsequent session resume. Incompatible MCode releases fail acceptance rather than silently skipping it.
+`make test-agent-native-workers` explicitly uses the current user's real accounts. Tests require `agentintegration`, `MULTICA_RUN_REAL_AGENT_SMOKE=1`, an explicit `MULTICA_REAL_AGENT_HOME` and a built `MULTICA_NATIVE_SMOKE_WORKER`; the Make target supplies these. `MULTICA_SMOKE_MODEL_<PROVIDER>` selects an account-accessible model. `MULTICA_SMOKE_MCODE_REFRESH=1` adds concurrent vendor OAuth refresh and subsequent session resume. MCode0.6.13 is intentionally refused; its refusal is covered by default tests. Enable real MCode acceptance only after a namespace-safe release is supported.
 
-Fresh, resumed, restarted and provider-switched sessions must create exact tool artifacts. Resume also checks the same session ID and a remembered canary whose input file was removed. Host coexistence and two workers sharing a profile are separate cases. A local HTTP tool barrier requires overlapping active tool requests; successful sequential tasks do not satisfy coexistence. Run the matrix on both reference hosts before changing the default.
+Fresh, resumed, restarted and provider-switched sessions must create exact tool artifacts. Resume also checks the same session ID and a remembered canary whose input file was removed. Host coexistence and two workers sharing a profile are separate cases. A local HTTP tool barrier requires overlapping active tool requests; successful sequential tasks do not satisfy coexistence. Run the supported-provider matrix on both reference hosts before changing the default.
 
 Automated:
 
