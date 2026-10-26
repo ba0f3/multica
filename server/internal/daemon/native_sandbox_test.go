@@ -22,21 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-type fakeNativeScope struct {
-	err     error
-	stopped int
-}
-
-func (s *fakeNativeScope) Preflight(context.Context) error { return s.err }
-func (s *fakeNativeScope) Command(_ string, argv []string) (*exec.Cmd, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return exec.Command(argv[0], argv[1:]...), nil
-}
-func (s *fakeNativeScope) Stop(context.Context, string) error { s.stopped++; return nil }
-
-func TestNativeBackendPreservesFourProviderPathsAndWarmResolution(t *testing.T) {
+func TestNativeBackendPreservesSupportedProviderPathsAndWarmResolution(t *testing.T) {
 	for _, provider := range []string{"codex", "cursor", "opencode"} {
 		t.Run(provider, func(t *testing.T) {
 			home := t.TempDir()
@@ -133,11 +119,13 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"resul
 }
 
 func TestNativeBackendFailsClosedWhenResourcePreflightFails(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	d := newSandboxTestDaemon(t, "bwrap")
 	d.nativeScope = &fakeNativeScope{err: errors.New("memory controller unavailable")}
 	d.nativeResolver = sandbox.NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { return "fixture", nil })
 	exe := filepath.Join(t.TempDir(), "cli")
 	_ = os.WriteFile(exe, []byte("#!/bin/sh\n"), 0700)
+	d.cfg.BwrapPath = exe
 	_, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, newSandboxTestEnv(t), "", "", "attempt", nil, nil)
 	if !errors.Is(err, errSandboxUnavailable) || !strings.Contains(err.Error(), "memory controller") {
 		t.Fatalf("preflight did not fail closed: %v", err)

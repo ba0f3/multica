@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,20 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
+
+type fakeNativeScope struct {
+	err     error
+	stopped int
+}
+
+func (s *fakeNativeScope) Preflight(context.Context) error { return s.err }
+func (s *fakeNativeScope) Command(_ string, argv []string) (*exec.Cmd, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return exec.Command(argv[0], argv[1:]...), nil
+}
+func (s *fakeNativeScope) Stop(context.Context, string) error { s.stopped++; return nil }
 
 func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
