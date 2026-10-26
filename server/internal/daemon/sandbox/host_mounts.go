@@ -24,6 +24,7 @@ func hostMountAliases(paths []string) ([]string, error) {
 		mounts = append(mounts, hostMount{device: fields[2], root: decode.Replace(fields[3]), target: decode.Replace(fields[4])})
 	}
 	result := append([]string(nil), paths...)
+	seeds := make(map[string]bool)
 	for _, path := range paths {
 		if path == "" {
 			continue
@@ -35,10 +36,20 @@ func hostMountAliases(paths []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		seeds[canonical] = true
+		// Mountinfo already names canonical mountpoints. Do not resolve a child
+		// through its host permissions: another readable alias may exist elsewhere.
+		for _, mount := range mounts {
+			if isUnder(mount.target, canonical) {
+				seeds[mount.target] = true
+			}
+		}
+	}
+	for canonical := range seeds {
 		var source *hostMount
 		for i := range mounts {
 			m := &mounts[i]
-			if isUnder(canonical, m.target) && (source == nil || len(m.target) > len(source.target)) {
+			if isUnder(canonical, m.target) && (source == nil || len(m.target) >= len(source.target)) {
 				source = m
 			}
 		}

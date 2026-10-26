@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -872,13 +871,7 @@ func (c *Cache) CreateWorktreeContext(ctx context.Context, params WorktreeParams
 		if ctx.Err() != nil {
 			return nil, context.Cause(ctx)
 		}
-		// Non-fatal: preserve cached state and continue, but make the warning
-		// loud enough that it's findable in the daemon log. The agent will
-		// receive an older snapshot than the remote head.
-		c.logger.Warn("repo checkout: fetch failed, agent will see possibly stale code",
-			"url", params.RepoURL,
-			"error", err,
-		)
+		return nil, fmt.Errorf("fetch latest repository state: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
@@ -1048,8 +1041,8 @@ const (
 )
 
 // createOrUpdateIsolatedCheckout keeps Git metadata inside the task workdir.
-// The fresh path uses a local clone, so immutable Git objects are hard-linked
-// (copied on Windows, see localCloneArgs) from the daemon's cache while refs,
+// The fresh path copies immutable Git objects without hardlinks from the
+// daemon's cache, while refs,
 // index, logs, config, and new objects remain private to the task checkout.
 // The temporary cache remote is then replaced with the real repository URL so
 // an agent's normal fetch / push commands still target GitHub rather than the
@@ -1176,22 +1169,11 @@ func sameResolvedPath(a, b string) bool {
 	return clean(a) == clean(b)
 }
 
-// localCloneArgs builds the `git clone --local` invocation that seeds a fresh
-// isolated checkout from the shared bare cache.
-//
-// On Windows the clone also passes --no-hardlinks. A local clone hardlinks
-// .git/objects whenever it can, but an NTFS hard link only exists within a
-// single volume and every link shares one underlying file *and* one security
-// descriptor. Copying the objects instead keeps a cache and workdir that live
-// on different drives working, and stops a task checkout — whose tree the
-// sandbox makes writable — from re-permissioning the daemon-owned cache's
-// object files. The cost is extra disk and a slower first checkout on Windows.
-func localCloneArgs(goos, barePath, checkoutPath string) []string {
-	args := []string{"clone", "--local", "--no-checkout", "--no-tags"}
-	if goos == "windows" {
-		args = append(args, "--no-hardlinks")
-	}
-	return append(args, "--origin", isolatedCacheRemoteName, barePath, checkoutPath)
+// localCloneArgs copies objects for host checkouts. Writable task objects must
+// never be hardlinks to the base, regardless of the filesystem or platform.
+// Docker and native workers use read-only alternates instead.
+func localCloneArgs(barePath, checkoutPath string) []string {
+	return []string{"clone", "--local", "--no-hardlinks", "--no-checkout", "--no-tags", "--origin", isolatedCacheRemoteName, barePath, checkoutPath}
 }
 
 // createIsolatedCheckout seeds a new isolated checkout from the cache. A
@@ -1204,7 +1186,7 @@ func createIsolatedCheckout(barePath, repoURL, checkoutPath, branchName, baseRef
 func createIsolatedCheckoutContext(ctx context.Context, barePath, repoURL, checkoutPath, branchName, baseRef, baseCommit, carryBranch string) (_ string, retErr error) {
 	if out, err := runGitCombinedOutputContext(
 		ctx,
-		localCloneArgs(runtime.GOOS, barePath, checkoutPath)...,
+		localCloneArgs(barePath, checkoutPath)...,
 	); err != nil {
 		// Do not remove checkoutPath here. A different repository with the
 		// same basename could have won the path race after our pre-check; Git

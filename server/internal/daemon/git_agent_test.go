@@ -177,3 +177,29 @@ func TestTaskRepoGitDoesNotReadOwnerCredentials(t *testing.T) {
 		t.Fatalf("task inherited owner Git credentials: %q %v", out, err)
 	}
 }
+
+func TestTaskRepositorySSHRetainsSystemPublicTrust(t *testing.T) {
+	t.Setenv("GIT_SSH_COMMAND", "")
+	env := taskRepoGitEnvironment(Task{}, "")
+	command := ""
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "GIT_SSH_COMMAND="); ok {
+			command = value
+		}
+	}
+	cmd := exec.Command("sh", "-c", command+" -G example.invalid")
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "globalknownhostsfile ") {
+			if strings.Contains(line, "/etc/ssh/ssh_known_hosts") {
+				return
+			}
+			t.Fatalf("repository preparation lost system public host trust: %s", line)
+		}
+	}
+	t.Fatal("SSH did not report effective system host trust")
+}

@@ -1065,43 +1065,11 @@ func TestCreateWorktreeMigratesLinkedWorktreeToIsolatedMetadata(t *testing.T) {
 	}
 }
 
-func TestLocalCloneArgsOnlyDisablesHardlinksOnWindows(t *testing.T) {
-	t.Parallel()
-	const barePath, checkoutPath = "/cache/repo.git", "/task/repo"
-
-	for _, tt := range []struct {
-		goos          string
-		wantNoHardlnk bool
-	}{
-		{goos: "windows", wantNoHardlnk: true},
-		{goos: "linux"},
-		{goos: "darwin"},
-	} {
-		t.Run(tt.goos, func(t *testing.T) {
-			t.Parallel()
-			args := localCloneArgs(tt.goos, barePath, checkoutPath)
-			got := false
-			for _, arg := range args {
-				if arg == "--no-hardlinks" {
-					got = true
-				}
-			}
-			if got != tt.wantNoHardlnk {
-				t.Fatalf("localCloneArgs(%q) --no-hardlinks = %v, want %v (args: %v)", tt.goos, got, tt.wantNoHardlnk, args)
-			}
-			// Inserting a flag must never displace the trailing operands.
-			if src, dst := args[len(args)-2], args[len(args)-1]; src != barePath || dst != checkoutPath {
-				t.Fatalf("localCloneArgs(%q) operands = %q %q, want %q %q", tt.goos, src, dst, barePath, checkoutPath)
-			}
-		})
-	}
-}
-
 // TestIsolatedCheckoutCloneWithoutHardlinksIsIndependent runs the exact clone
-// invocation Windows Codex tasks now use (multica-ai/multica#6449) and proves
+// invocation host tasks use and proves
 // it still yields a usable checkout whose object files are private copies
 // rather than links back into the daemon-owned cache. Kept platform-agnostic
-// so Linux/macOS CI guards the Windows-only flag.
+// so every platform guards independent object storage.
 func TestIsolatedCheckoutCloneWithoutHardlinksIsIndependent(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
@@ -1113,7 +1081,7 @@ func TestIsolatedCheckoutCloneWithoutHardlinksIsIndependent(t *testing.T) {
 	baseCommit := gitRefCommit(t, barePath, getRemoteDefaultBranch(barePath))
 	checkoutPath := filepath.Join(t.TempDir(), "repo")
 
-	if out, err := runGitCombinedOutput(localCloneArgs("windows", barePath, checkoutPath)...); err != nil {
+	if out, err := runGitCombinedOutput(localCloneArgs(barePath, checkoutPath)...); err != nil {
 		t.Fatalf("windows-shaped local clone failed: %s: %v", strings.TrimSpace(string(out)), err)
 	}
 	if out, err := runGitCombinedOutput("-C", checkoutPath, "checkout", "--detach", baseCommit); err != nil {

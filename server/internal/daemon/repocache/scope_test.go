@@ -110,3 +110,58 @@ func TestRepositoryEntryCannotAliasAnotherUser(t *testing.T) {
 		t.Fatal("Alice's repository alias fetched into Bob's store")
 	}
 }
+
+func TestPrivateCheckoutCannotModifyBaseObjects(t *testing.T) {
+	remote := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	scope := Scope{WorkspaceID: "workspace", UserID: "alice"}
+	if err := cache.Sync(scope, []RepoInfo{{URL: remote}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := cache.CreateWorktree(WorktreeParams{Scope: scope, RepoURL: remote, WorkDir: t.TempDir(), TaskID: "task", AgentName: "agent", IsolatedGitMetadata: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := gitHead(t, remote)
+	relative := filepath.Join("objects", sha[:2], sha[2:])
+	baseFile := filepath.Join(cache.BarePath(scope, remote), relative)
+	checkoutFile := filepath.Join(result.Path, ".git", relative)
+	original, err := os.ReadFile(baseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(checkoutFile, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checkoutFile, []byte("task-local corruption"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(baseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatal("writing a private checkout object corrupted its base")
+	}
+}
+
+func TestHostCheckoutFailsClosedAfterAccessLoss(t *testing.T) {
+	remote := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	scope := Scope{WorkspaceID: "workspace", UserID: "alice"}
+	if err := cache.Sync(scope, []RepoInfo{{URL: remote}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(remote, remote+"-unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	result, err := cache.CreateWorktree(WorktreeParams{Scope: scope, RepoURL: remote, WorkDir: work, TaskID: "task", AgentName: "agent", IsolatedGitMetadata: true})
+	if err == nil || result != nil {
+		t.Fatalf("checkout succeeded with stale code after fetch failed: %+v %v", result, err)
+	}
+	entries, err := os.ReadDir(work)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed fetch changed the checkout: %v %v", entries, err)
+	}
+}

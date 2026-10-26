@@ -13,7 +13,6 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/gitagent"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
-	"github.com/multica-ai/multica/server/internal/daemon/sandbox"
 )
 
 // taskRepoGitEnvironment supplies cache Git calls with the task's signing
@@ -23,8 +22,7 @@ func taskRepoGitEnvironment(task Task, socketPath string) []string {
 	// Never borrow the daemon owner's SSH agent for a task.
 	env = append(env, "SSH_AUTH_SOCK="+socketPath, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 	if os.Getenv("GIT_SSH_COMMAND") == "" {
-		home, _ := os.UserHomeDir()
-		env = append(env, "GIT_SSH_COMMAND="+sandbox.GitSSHCommand(filepath.Join(home, ".ssh", "known_hosts")))
+		env = append(env, "GIT_SSH_COMMAND=ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentityFile=none")
 	}
 	binding := pickGitIdentity(task)
 	if socketPath == "" || binding == nil {

@@ -29,7 +29,6 @@ func newTestPolicy(t *testing.T) Policy {
 		HomeDir:        home,
 		TempDir:        temp,
 		CheckoutDir:    checkout,
-		RuntimeRoots:   []string{filepath.Join(root, "usr"), filepath.Join(root, "etc")},
 		ForbiddenRoots: []string{workspaces, filepath.Join(root, "home", "someone")},
 		Env:            map[string]string{"PATH": "/usr/bin:/bin", "HOME": "/home/agent"},
 	}
@@ -99,11 +98,10 @@ func TestBuildArgsMountsOnlyTheTaskAndTheRuntime(t *testing.T) {
 	if !argsContain(args, "--bind", policy.TempDir, "/tmp") {
 		t.Error("the private temp directory is not mounted at /tmp")
 	}
-	for _, runtimeRoot := range policy.RuntimeRoots {
-		if !argsContain(args, "--ro-bind", runtimeRoot, runtimeRoot) {
-			t.Errorf("the runtime root %s is not mounted read-only", runtimeRoot)
-		}
+	if !argsContain(args, "--ro-bind", "/usr", "/usr") {
+		t.Error("host runtime is not read-only")
 	}
+
 	if argsContain(args, "--ro-bind", "/", "/") {
 		t.Error("argv exposes the whole filesystem read-only")
 	}

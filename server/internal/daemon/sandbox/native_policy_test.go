@@ -29,8 +29,8 @@ func TestNativePolicyPreservesOriginalHomeAndExplicitWritableGrants(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if argsContain(args, "--ro-bind", policy.HostHome, policy.HostHome) || argsContain(args, "--bind", policy.HostHome, policy.HostHome) {
-		t.Fatal("the native boundary mounted the host home")
+	if !argsContain(args, "--ro-bind", policy.HostHome, policy.HostHome) || argsContain(args, "--bind", policy.HostHome, policy.HostHome) {
+		t.Fatal("the original home is not read-only")
 	}
 	if argsContain(args, "--bind", policy.HomeDir, policy.HostHome) || !argsContain(args, "--setenv", "HOME", policy.HostHome) {
 		t.Fatal("the original read-only HOME was replaced or lost")
@@ -73,7 +73,7 @@ func TestNativePolicyRejectsTargetSymlinkEscape(t *testing.T) {
 
 func TestNativePolicyRejectsAnAncestorOfTheHostHome(t *testing.T) {
 	policy := newNativePolicy(t)
-	policy.RuntimeRoots = append(policy.RuntimeRoots, filepath.Dir(policy.HostHome))
+	policy.ExtraMounts = []Mount{{Source: filepath.Dir(policy.HostHome), Target: "/opt/broad"}}
 	if _, err := BuildArgs(policy, testSelf(t)); err == nil {
 		t.Fatal("a broad runtime mount exposed the host home through its parent")
 	}
@@ -84,12 +84,7 @@ func TestNativePolicyRealFilesystemBoundary(t *testing.T) {
 		t.Skip("set MULTICA_BWRAP_SMOKE=1 for the real boundary with synthetic data")
 	}
 	policy := newNativePolicy(t)
-	policy.RuntimeRoots = nil
-	for _, path := range []string{"/usr", "/bin", "/lib", "/lib64", "/etc"} {
-		if _, err := os.Stat(path); err == nil {
-			policy.RuntimeRoots = append(policy.RuntimeRoots, path)
-		}
-	}
+
 	profile := filepath.Join(policy.HostHome, ".codex")
 	code := filepath.Join(profile, "packages")
 	cache := filepath.Join(filepath.Dir(policy.TaskRoot), "repo-cache")

@@ -39,7 +39,6 @@ type Policy struct {
 	CheckoutDir       string
 	CheckoutTarget    string
 	Command           []string
-	RuntimeRoots      []string
 	ExtraMounts       []Mount
 	Links             []NativeLink
 	AgentSocket       string
@@ -78,21 +77,23 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		}
 	}
 	args := []string{"--clearenv", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--new-session", "--die-with-parent", "--cap-drop", "ALL"}
-	hostArgs, masks, err := hostViewArgs(policy)
+	view, err := hostViewArgs(policy)
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, hostArgs...)
+	args = append(args, view.args...)
 	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/run", "--dir", "/run/multica", "--tmpfs", "/sys")
-	for _, path := range policy.RuntimeRoots {
-		if err := checkMountSource(path, policy, allowedExact); err != nil {
-			return nil, err
-		}
-		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		args = append(args, "--ro-bind", path, path)
+	if err := checkMountSource(policy.TempDir, policy, allowedExact); err != nil {
+		return nil, err
 	}
+	args = append(args, "--bind", policy.TempDir, sandboxTemp)
+	if policy.HostHome != "" {
+		args = append(args, "--ro-bind", homeTarget, homeTarget)
+	}
+	for _, mask := range view.early {
+		args = appendHostMask(args, mask)
+	}
+
 	checkoutTarget := policy.CheckoutTarget
 	if checkoutTarget == "" {
 		checkoutTarget = sandboxRepo
@@ -100,7 +101,7 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	if err := nativeAbsolutePath(checkoutTarget); err != nil {
 		return nil, err
 	}
-	baseMounts := []Mount{{Source: policy.TaskRoot, Target: policy.TaskRoot, ReadOnly: true}, {Source: policy.TempDir, Target: sandboxTemp}, {Source: policy.CheckoutDir, Target: checkoutTarget}}
+	baseMounts := []Mount{{Source: policy.TaskRoot, Target: policy.TaskRoot, ReadOnly: true}, {Source: policy.CheckoutDir, Target: checkoutTarget}}
 	if policy.HostHome == "" {
 		baseMounts = append(baseMounts, Mount{Source: policy.HomeDir, Target: homeTarget})
 	}
@@ -121,22 +122,22 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		args = append(args, "--bind", policy.OutputDir, "/workspace/output")
 	}
 
-	// Links are created while HOME is still private. Creating them after a
-	// shared profile bind could write into the host's installation or profile.
+	// Create missing links before writable profile grants so link creation cannot
+	// modify the host installation or shared profile.
 	for _, link := range links {
-		if _, err := os.Lstat(link.Path); err == nil && !isUnder(link.Path, "/run") {
-			continue
-		}
-		inherited := false
-		for _, root := range policy.RuntimeRoots {
-			if isUnder(link.Path, root) {
-				inherited = true
-				break
+		if _, err := os.Lstat(link.Path); err == nil {
+			inherited := !underPrivateView(link.Path) || (view.home != "" && isUnder(link.Path, view.home))
+			for _, mask := range view.early {
+				if link.Path == mask.path || mask.directory && isUnder(link.Path, mask.path) {
+					inherited = false
+					break
+				}
+			}
+			if inherited {
+				continue
 			}
 		}
-		if inherited {
-			continue
-		}
+
 		if err := nativeAbsolutePath(link.Path); err != nil || link.Target == "" {
 			return nil, fmt.Errorf("sandbox: invalid native installation link %q", link.Path)
 		}
@@ -163,6 +164,17 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 		}
 		args = append(args, flag, mount.Source, mount.Target)
 	}
+	grants := append([]Mount{{Source: policy.TempDir, Target: sandboxTemp}}, baseMounts...)
+	if policy.OutputDir != "" {
+		grants = append(grants, Mount{Source: policy.OutputDir, Target: "/workspace/output"})
+	}
+	grants = append(grants, mounts...)
+	for _, mask := range view.finalMasks(grants) {
+		args = appendHostMask(args, mask)
+		if mask.directory {
+			args = append(args, "--remount-ro", mask.path)
+		}
+	}
 	if policy.AgentSocket != "" {
 		if err := checkMountSource(policy.AgentSocket, policy, allowedExact); err != nil {
 			return nil, err
@@ -175,7 +187,7 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	args = append(args, "--ro-bind", self, sandboxWorker)
 	// Seal the empty root and home after mountpoints/links have been created.
 	// Explicit child mounts keep their own writable flags.
-	for _, path := range masks {
+	for _, path := range view.seals {
 		args = append(args, "--remount-ro", path)
 	}
 	args = append(args, "--remount-ro", "/sys", "--remount-ro", "/")

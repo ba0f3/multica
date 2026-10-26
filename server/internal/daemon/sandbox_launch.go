@@ -83,20 +83,6 @@ func (d *Daemon) sandboxedBackend(
 	}
 }
 
-// sandboxRuntimeRoots lists the read-only system roots the agent CLI needs to
-// execute. Only roots that exist are included: a missing one is a host
-// difference, not a reason to refuse the run.
-func sandboxRuntimeRoots() []string {
-	candidates := []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"}
-	roots := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			roots = append(roots, candidate)
-		}
-	}
-	return roots
-}
-
 // extraMountSources lists the sources of the per-task extra mounts.
 func extraMountSources(mounts []sandbox.Mount) []string {
 	sources := make([]string, 0, len(mounts))

@@ -21,7 +21,11 @@ func TestBwrapSmokeRunsAWorkerInTheBoundary(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skipf("bwrap is not installed: %v", err)
 	}
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/var/tmp", "multica-bwrap-smoke-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	workspaces := filepath.Join(root, "workspaces")
 	taskRoot := filepath.Join(workspaces, "task-1")
 	checkout := filepath.Join(taskRoot, "workdir")
@@ -58,7 +62,7 @@ func TestBwrapSmokeRunsAWorkerInTheBoundary(t *testing.T) {
 		}
 	}
 
-	// A sibling task and a host secret the boundary must not expose.
+	// A sibling task is hidden; an ordinary host file is visible read-only.
 	sibling := filepath.Join(workspaces, "task-2", "workdir")
 	if err := os.MkdirAll(sibling, 0o755); err != nil {
 		t.Fatalf("mkdir sibling: %v", err)
@@ -91,12 +95,12 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed","Output":"ok"}}'
 	}
 
 	policy := Policy{
-		TaskRoot:       taskRoot,
-		HomeDir:        home,
-		HostHome:       hostHome,
-		TempDir:        temp,
-		CheckoutDir:    checkout,
-		RuntimeRoots:   []string{"/usr", "/bin", "/lib", "/lib64", "/etc"},
+		TaskRoot:    taskRoot,
+		HomeDir:     home,
+		HostHome:    hostHome,
+		TempDir:     temp,
+		CheckoutDir: checkout,
+
 		ForbiddenRoots: []string{workspaces, filepath.Join(hostHome, ".ssh"), filepath.Join(hostHome, ".multica")},
 		AllowedRoots:   []string{filepath.Join(hostHome, ".claude")},
 		ExtraMounts:    []Mount{{Source: filepath.Join(hostHome, ".claude"), Target: filepath.Join(hostHome, ".claude")}},
