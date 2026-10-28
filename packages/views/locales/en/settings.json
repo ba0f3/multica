@@ -168,10 +168,11 @@
     "language": {
       "title": "Language",
       "english": "English",
-      "chinese": "\u4e2d\u6587",
-      "korean": "\ud55c\uad6d\uc5b4",
-      "japanese": "\u65e5\u672c\u8a9e",
-      "french": "Fran\u00e7ais",
+      "chinese": "简体中文",
+      "chinese_traditional": "繁體中文",
+      "korean": "한국어",
+      "japanese": "日本語",
+      "french": "Français",
       "sync_failed": "Language saved on this device, but failed to sync to your account. Other devices may show the previous language."
     },
     "timezone": {
