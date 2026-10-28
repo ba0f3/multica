@@ -15,7 +15,7 @@ The user chose one codebase per execution user, with independent task checkouts,
 
 1. One writable checkout per user/repo: rejected because the user chose concurrent task checkouts.
 2. Per-user bases and private task checkouts: selected explicitly by the user. Costs one initial clone and retained cache per user/repo.
-3. A shared workspace-wide base: replaced because it mixes code ownership and authentication domains.
+3. A shared workspace-wide base: rejected. A user must not gain access to another user's cached private code merely because both tasks name the same remote URL. Read-only mounts prevent writes but still permit reading cached objects. Keep per-user stores despite the initial clone time and duplicate storage for users working on the same repo.
 
 ## Repository behavior
 
