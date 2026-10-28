@@ -225,6 +225,33 @@ func (s *Service) OpenSigningLease(ctx context.Context, taskID, attemptID, provi
 	}, nil
 }
 
+// RenewSigningLease extends an active daemon's lease without signing data.
+func (s *Service) RenewSigningLease(ctx context.Context, leaseID, daemonID string) error {
+	if !s.available() {
+		return ErrUnavailable
+	}
+	now := s.now().UTC()
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	lease, ok := s.leases[leaseID]
+	if !ok || daemonID == "" || lease.DaemonID != daemonID || !now.Before(lease.ExpiresAt) {
+		return ErrScope
+	}
+	if lease.Revoked {
+		return ErrRevoked
+	}
+	key, err := s.store.GetKey(ctx, lease.IdentityID, lease.Generation)
+	if err != nil || key.State != Ready {
+		return ErrRevoked
+	}
+	next := now.Add(s.leaseTTL)
+	if cap := lease.IssuedAt.Add(maxSigningLeaseLifetime); next.After(cap) {
+		next = cap
+	}
+	lease.ExpiresAt = next
+	return nil
+}
+
 // Sign signs data with the key a lease is bound to.
 //
 // The key is re-read before every signature: a lease that was issued before

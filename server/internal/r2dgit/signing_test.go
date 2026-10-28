@@ -371,3 +371,25 @@ func TestRotationStopsThePreviousGeneration(t *testing.T) {
 		t.Fatalf("a lease of the previous generation still signs: err = %v, want %v", err, ErrRevoked)
 	}
 }
+
+func TestRenewSigningLeaseKeepsIdleAttemptAndRejectsRevocation(t *testing.T) {
+	service, store, _, clock := signingTestService(t)
+	store.originators["task-1"] = "user-a"
+	identity := readyIdentity(t, service, "user-a")
+	lease, err := service.OpenSigningLease(t.Context(), "task-1", "attempt-1", "provider-1", "daemon-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	*clock = clock.Add(45 * time.Second)
+	if err := service.RenewSigningLease(t.Context(), lease.LeaseID, "daemon-1"); err != nil {
+		t.Fatal(err)
+	}
+	*clock = clock.Add(45 * time.Second)
+	if _, err := service.Sign(t.Context(), lease.LeaseID, "daemon-1", []byte("ssh")); err != nil {
+		t.Fatal(err)
+	}
+	service.RevokeSigningLeases(identity.ID)
+	if err := service.RenewSigningLease(t.Context(), lease.LeaseID, "daemon-1"); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("renew revoked lease: %v", err)
+	}
+}

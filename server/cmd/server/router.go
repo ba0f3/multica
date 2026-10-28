@@ -1607,6 +1607,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// reaches the runner.
 		r.Post("/tasks/{taskId}/git-signing-lease", h.OpenGitSigningLease)
 		r.Post("/git-signatures", h.SignGitData)
+		r.Post("/git-signing-lease/renew", h.RenewGitSigningLease)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
 		r.Post("/tasks/{taskId}/supplements/claim", h.ClaimTaskSupplement)
 		r.Post("/tasks/{taskId}/supplements/{commentId}/ack", h.AckTaskSupplement)

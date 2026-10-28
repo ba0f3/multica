@@ -106,3 +106,26 @@ func (h *Handler) SignGitData(w http.ResponseWriter, r *http.Request) {
 		"signature": base64.StdEncoding.EncodeToString(signature),
 	})
 }
+
+// RenewGitSigningLease keeps a running daemon's signing permission alive.
+func (h *Handler) RenewGitSigningLease(w http.ResponseWriter, r *http.Request) {
+	daemonID, ok := h.requireDaemonSigningAccess(w, r)
+	if !ok {
+		return
+	}
+	service, ok := h.gitService(w)
+	if !ok {
+		return
+	}
+	var body struct {
+		LeaseID string `json:"lease_id"`
+	}
+	if !gitJSONBody(w, r, &body) {
+		return
+	}
+	if err := service.RenewSigningLease(r.Context(), body.LeaseID, daemonID); err != nil {
+		gitServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

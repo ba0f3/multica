@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/daemon/gitagent"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
@@ -197,7 +198,24 @@ func (d *Daemon) startGitAgentSocket(ctx context.Context, task Task, profileRoot
 		d.logger.Warn("git: could not start the per-task signing socket", "task_id", task.ID, "error", err)
 		return "", func() {}
 	}
+	renewCtx, stopRenew := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-renewCtx.Done():
+				return
+			case <-ticker.C:
+				err := d.client.postJSONWithToken(renewCtx, "/api/daemon/git-signing-lease/renew", task.GitSigningDaemonToken, map[string]string{"lease_id": lease.LeaseID}, nil)
+				if err != nil && renewCtx.Err() == nil {
+					d.logger.Warn("git: could not renew signing lease", "task_id", task.ID, "error", err)
+				}
+			}
+		}
+	}()
 	return socket.Path(), func() {
+		stopRenew()
 		_ = socket.Close()
 		_ = os.RemoveAll(socketDir)
 	}
