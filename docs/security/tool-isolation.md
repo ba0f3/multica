@@ -22,9 +22,9 @@ Once selected, a sandbox backend fails closed. It never falls back to host execu
 | Variable | Native behavior |
 | --- | --- |
 | `MULTICA_BWRAP_PATH` | Optional bubblewrap executable path; otherwise `bwrap` on the daemon's PATH |
-| `MULTICA_DOCKER_TASK_MEMORY` | Memory limit, also applied to native scopes, for example `2g` |
+| `MULTICA_TASK_MEMORY` | Memory limit for each task; default `4g`, `0` disables the limit |
 | `MULTICA_DOCKER_TASK_PIDS_LIMIT` | Process limit, for example `512` |
-| `MULTICA_DOCKER_TASK_NANO_CPUS` | CPU quota in nanocpus, for example `2000000000` for two CPUs |
+| `MULTICA_TASK_NANO_CPUS` | CPU quota in nanocpus; default `2000000000` (two CPUs), `0` disables the limit |
 
 Zero resource values retain the configured unlimited behavior. Positive values must be enforced. A CLI upgrade invalidates cached runtime metadata on the next task. Cached resource preflight is tied to the tools, configured limits and user-manager connection.
 

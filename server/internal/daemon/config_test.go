@@ -1924,3 +1924,49 @@ func TestApplyOpenclawOverride_CLITimeout(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadConfigTaskPrepareTimeout(t *testing.T) {
+	stageFakeAgent(t)
+	redirectTestHome(t, t.TempDir())
+	t.Setenv("SHELL", filepath.Join(t.TempDir(), "missing-shell"))
+	overrides := Overrides{ServerURL: "http://localhost:0", WorkspacesRoot: t.TempDir()}
+	for _, tc := range []struct {
+		value   string
+		want    time.Duration
+		invalid bool
+	}{
+		{"", 30 * time.Minute, false}, {"45m", 45 * time.Minute, false}, {"0", 0, true}, {"bad", 0, true},
+	} {
+		t.Setenv("MULTICA_TASK_PREPARE_TIMEOUT", tc.value)
+		cfg, err := LoadConfig(overrides)
+		if tc.invalid {
+			if err == nil {
+				t.Fatalf("%q accepted", tc.value)
+			}
+			continue
+		}
+		if err != nil || cfg.TaskPrepareTimeout != tc.want {
+			t.Fatalf("%q: got %s, error %v", tc.value, cfg.TaskPrepareTimeout, err)
+		}
+	}
+}
+
+func TestLoadConfigTaskResourceLimits(t *testing.T) {
+	stageFakeAgent(t)
+	redirectTestHome(t, t.TempDir())
+	t.Setenv("SHELL", filepath.Join(t.TempDir(), "missing-shell"))
+	overrides := Overrides{ServerURL: "http://localhost:0", WorkspacesRoot: t.TempDir()}
+	for _, tc := range []struct {
+		memory, cpus        string
+		wantMemory, wantCPU int64
+	}{
+		{"", "", 4 << 30, 2000000000}, {"8g", "1500000000", 8 << 30, 1500000000}, {"0", "0", 0, 0},
+	} {
+		t.Setenv("MULTICA_TASK_MEMORY", tc.memory)
+		t.Setenv("MULTICA_TASK_NANO_CPUS", tc.cpus)
+		cfg, err := LoadConfig(overrides)
+		if err != nil || cfg.DockerMemoryBytes != tc.wantMemory || cfg.DockerNanoCPUs != tc.wantCPU {
+			t.Fatalf("memory=%q cpu=%q: got %d/%d error %v", tc.memory, tc.cpus, cfg.DockerMemoryBytes, cfg.DockerNanoCPUs, err)
+		}
+	}
+}

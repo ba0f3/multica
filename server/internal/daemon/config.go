@@ -162,6 +162,7 @@ type Config struct {
 	PollInterval                   time.Duration
 	WSClaimPollInterval            time.Duration // upper bound for healthy WS batch-claim safety polls; actual sleeps use downward-only jitter
 	HeartbeatInterval              time.Duration
+	TaskPrepareTimeout             time.Duration
 	AgentTimeout                   time.Duration
 	CodexSemanticInactivityTimeout time.Duration
 	// CodexFirstTurnNoProgressTimeout is an explicit override for the Codex
@@ -348,6 +349,14 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 	if overrides.HeartbeatInterval > 0 {
 		heartbeatInterval = overrides.HeartbeatInterval
+	}
+
+	prepareTimeout, err := durationFromEnv("MULTICA_TASK_PREPARE_TIMEOUT", defaultTaskPrepareTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if prepareTimeout <= 0 {
+		return Config{}, fmt.Errorf("MULTICA_TASK_PREPARE_TIMEOUT must be positive (got %s)", prepareTimeout)
 	}
 
 	agentTimeout, err := durationFromEnv("MULTICA_AGENT_TIMEOUT", DefaultAgentTimeout)
@@ -577,12 +586,26 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			sandboxBackend = "docker"
 		}
 	}
-	dockerMemory, err := parseDockerMemoryBytes(os.Getenv("MULTICA_DOCKER_TASK_MEMORY"))
+	memoryValue := strings.TrimSpace(os.Getenv("MULTICA_TASK_MEMORY"))
+	if memoryValue == "" {
+		memoryValue = "4g"
+	}
+	dockerMemory, err := parseDockerMemoryBytes(memoryValue)
 	if err != nil {
-		return Config{}, fmt.Errorf("MULTICA_DOCKER_TASK_MEMORY: %w", err)
+		return Config{}, fmt.Errorf("MULTICA_TASK_MEMORY: %w", err)
 	}
 	dockerPIDs, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_PIDS_LIMIT")), 10, 64)
-	dockerNanoCPUs, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("MULTICA_DOCKER_TASK_NANO_CPUS")), 10, 64)
+	cpuValue := strings.TrimSpace(os.Getenv("MULTICA_TASK_NANO_CPUS"))
+	if cpuValue == "" {
+		cpuValue = "2000000000"
+	}
+	dockerNanoCPUs, err := strconv.ParseInt(cpuValue, 10, 64)
+	if err != nil || dockerNanoCPUs < 0 {
+		return Config{}, fmt.Errorf("MULTICA_TASK_NANO_CPUS must be a non-negative integer")
+	}
+	if dockerMemory < 0 {
+		return Config{}, fmt.Errorf("MULTICA_TASK_MEMORY must be non-negative")
+	}
 
 	// GC config: env > defaults
 	gcEnabled := true
@@ -708,6 +731,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		PollInterval:                    pollInterval,
 		WSClaimPollInterval:             wsClaimPollInterval,
 		HeartbeatInterval:               heartbeatInterval,
+		TaskPrepareTimeout:              prepareTimeout,
 		AgentTimeout:                    agentTimeout,
 		CodexSemanticInactivityTimeout:  codexSemanticInactivityTimeout,
 		CodexFirstTurnNoProgressTimeout: codexFirstTurnNoProgressTimeout,

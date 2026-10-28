@@ -93,7 +93,7 @@ const (
 	// execution-environment setup, and the StartTask request itself. It is
 	// intentionally independent from AgentTimeout, which only governs the
 	// provider process after the task reaches running.
-	defaultTaskPrepareTimeout = 5 * time.Minute
+	defaultTaskPrepareTimeout = 30 * time.Minute
 	// pendingWorkHeartbeatTimeout bounds the out-of-band heartbeat a
 	// server-pushed daemon:pending_work hint triggers (MUL-5444). Short on
 	// purpose: the hint is only a latency optimisation, and the scheduled
@@ -816,7 +816,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		taskSupplementPollInterval:  defaultTaskSupplementPollInterval,
 		taskSupplementReadyInterval: defaultTaskSupplementReadyInterval,
 		envRootBusyWait:             15 * time.Second,
-		taskPrepareTimeout:          defaultTaskPrepareTimeout,
+		taskPrepareTimeout:          cfg.TaskPrepareTimeout,
 		prepareLeaseRefresh:         taskPrepareLeaseRefresh,
 		reconcile:                   newReconcileBroadcaster(),
 		workspaceChanges:            newWorkspaceChangeSignal(),
@@ -8000,6 +8000,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		returnErr = fmt.Errorf("%w after %s", errTaskPrepareTimeout, prepareTimeout)
 	}()
 
+	stopPrepareLease := d.startTaskPrepareLeaseExtender(prepareCtx, task, taskLog)
+	defer stopPrepareLease()
+
 	// task.Repos is the authoritative repo list for this task — when the
 	// claimed task belongs to a project with github_repo resources the server
 	// has already narrowed it to project repos only. Make sure those URLs are
@@ -8111,9 +8114,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	phaseRecorder.Mark(taskPhaseRuntimeResolved)
 	timing.Mark("runtime_ready")
-
-	stopPrepareLease := d.startTaskPrepareLeaseExtender(prepareCtx, task, taskLog)
-	defer stopPrepareLease()
 
 	if err := d.ensureTaskSkillBundles(prepareCtx, &task); err != nil {
 		return TaskResult{}, err

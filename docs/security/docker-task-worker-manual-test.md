@@ -83,7 +83,7 @@ export MULTICA_TASK_PROTECTED=1
 # Optional if you tagged ghcr.io/ba0f3/multica-task-worker:latest locally:
 # export MULTICA_DOCKER_TASK_IMAGE=multica/task-worker:local
 # Optional limits (verify with docker inspect during a run):
-export MULTICA_DOCKER_TASK_MEMORY=4294967296
+export MULTICA_TASK_MEMORY=4294967296
 export MULTICA_DOCKER_TASK_PIDS_LIMIT=512
 export MULTICA_DOCKER_TASK_NETWORK=bridge
 # Optional: additional CA the worker must trust at runtime (public cert material).

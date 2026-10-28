@@ -69,7 +69,7 @@ const (
 	// CLI can answer; 1s is already below every measured healthy host.
 	openclawCLIMinTimeout = time.Second
 	// openclawCLIMaxTimeout keeps config discovery inside the outer task
-	// preparation budget (daemon.defaultTaskPrepareTimeout, 5 minutes). The
+	// preparation budget (daemon.defaultTaskPrepareTimeout). The
 	// worst case is openclawMaxCLIDeadlinesPerPreparation serial steps, so the
 	// ceiling is set so that even then (3 x 60s = 3m) the failure surfaces as a
 	// specific, actionable CLI timeout with room to spare, instead of colliding
