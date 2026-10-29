@@ -1,8 +1,11 @@
 package r2dgit
 
 import (
+	"bytes"
 	cryptorand "crypto/rand"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"testing"
 
@@ -164,4 +167,95 @@ func parseGeneratedKey(t *testing.T) ssh.PublicKey {
 		t.Fatalf("parse authorized key: %v", err)
 	}
 	return key
+}
+
+func TestSSHVerifierProviderShellGreeting(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, greeting, login string
+		stderr                      bool
+		exit                        uint32
+		wantErr                     bool
+	}{
+		{"github stdout", "github", githubBannerFixture, "octocat", false, 1, false},
+		{"github stderr", "github", githubBannerFixture, "octocat", true, 1, false},
+		{"gitea stdout", "gitea", giteaBannerFixture, "alice", false, 0, false},
+		{"github wrong status", "github", githubBannerFixture, "", false, 0, true},
+		{"github invalid greeting", "github", "Invalid command: true", "", false, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			material, err := GenerateKeyMaterial(cryptorand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signer, err := ssh.ParsePrivateKey(material.Private)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			config := &ssh.ServerConfig{PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+				if meta.User() != "git" || !bytes.Equal(key.Marshal(), signer.PublicKey().Marshal()) {
+					return nil, errors.New("unexpected identity")
+				}
+				return nil, nil
+			}}
+			config.AddHostKey(signer)
+			done := make(chan error, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					done <- err
+					return
+				}
+				defer conn.Close()
+				server, channels, requests, err := ssh.NewServerConn(conn, config)
+				if err != nil {
+					done <- err
+					return
+				}
+				defer server.Close()
+				go ssh.DiscardRequests(requests)
+				incoming := <-channels
+				channel, reqs, err := incoming.Accept()
+				if err != nil {
+					done <- err
+					return
+				}
+				defer channel.Close()
+				req := <-reqs
+				req.Reply(true, nil)
+				if req.Type != "shell" {
+					fmt.Fprintln(channel.Stderr(), "Invalid command: true")
+					channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+					done <- fmt.Errorf("expected shell request, got %s", req.Type)
+					return
+				}
+				var output io.Writer = channel
+				if tc.stderr {
+					output = channel.Stderr()
+				}
+				fmt.Fprintln(output, tc.greeting)
+				channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{tc.exit}))
+				done <- nil
+			}()
+			custody := newFakeCustody()
+			custody.signing = true
+			custody.stored["ref"] = material
+			address := listener.Addr().(*net.TCPAddr)
+			login, err := NewSSHVerifier(custody).Verify(t.Context(), Provider{Kind: tc.kind, Host: "127.0.0.1", Port: address.Port, HostPins: []string{ssh.FingerprintSHA256(signer.PublicKey())}}, "ref", 1)
+			if serverErr := <-done; serverErr != nil {
+				t.Error(serverErr)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, ErrIdentity) {
+					t.Fatalf("error = %v, want ErrIdentity", err)
+				}
+			} else if err != nil || login != tc.login {
+				t.Fatalf("login = %q, error = %v", login, err)
+			}
+		})
+	}
 }

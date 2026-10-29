@@ -97,18 +97,16 @@ func pinnedHostKeyCallback(pins []string) (ssh.HostKeyCallback, error) {
 // It opens a fresh connection per verification and never reuses a session,
 // so a revoked key cannot keep an authenticated channel alive.
 type SSHVerifier struct {
-	custody   SigningCustody
-	timeout   time.Duration
-	execProbe string
+	custody SigningCustody
+	timeout time.Duration
 }
 
 // NewSSHVerifier builds a verifier that signs the provider handshake with the
 // key held in custody.
 func NewSSHVerifier(custody SigningCustody) *SSHVerifier {
 	return &SSHVerifier{
-		custody:   custody,
-		timeout:   15 * time.Second,
-		execProbe: "true",
+		custody: custody,
+		timeout: 15 * time.Second,
 	}
 }
 
@@ -134,6 +132,7 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 
 	var banner strings.Builder
 	var stderr strings.Builder
+	var stdout strings.Builder
 	var login string
 	var exitCode int
 
@@ -166,7 +165,10 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 		}
 		defer session.Close()
 		session.Stderr = &stderr
-		if err := startProviderVerifySession(provider.Kind, session, v.execProbe); err != nil {
+		session.Stdout = &stdout
+		// Account verification uses the no-command request sent by ssh -T.
+		// An exec request such as true is not a supported GitHub Git command.
+		if err := session.Shell(); err != nil {
 			return ErrProvider
 		}
 		waitErr := session.Wait()
@@ -176,7 +178,7 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 			return ErrProvider
 		}
 
-		for _, candidate := range []string{banner.String(), stderr.String()} {
+		for _, candidate := range []string{banner.String(), stdout.String(), stderr.String()} {
 			if strings.TrimSpace(candidate) == "" {
 				continue
 			}
@@ -199,17 +201,4 @@ func (v *SSHVerifier) Verify(ctx context.Context, provider Provider, secretRef s
 		return "", ErrIdentity
 	}
 	return login, nil
-}
-
-// startProviderVerifySession opens the provider check the way each host
-// expects. Gitea only prints its authentication banner when
-// SSH_ORIGINAL_COMMAND is empty (as with `ssh -T`), so a remote `true`
-// command makes serv reject the session before any banner is sent.
-func startProviderVerifySession(kind string, session *ssh.Session, execProbe string) error {
-	switch kind {
-	case "gitea":
-		return session.Shell()
-	default:
-		return session.Start(execProbe)
-	}
 }
