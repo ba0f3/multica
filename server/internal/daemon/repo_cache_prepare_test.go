@@ -749,3 +749,104 @@ func TestConcurrentUsersReceiveSeparateTaskCaches(t *testing.T) {
 		t.Fatalf("tasks did not create separate user bases: Alice=%s Bob=%s", alice, bob)
 	}
 }
+
+func TestPreparedTaskRepositoriesExcludeDeniedReposAndPriorCheckout(t *testing.T) {
+	d := &Daemon{repoCache: repocache.New(t.TempDir(), newDiscardLogger())}
+	task := Task{WorkspaceID: "ws", ExecutionUserID: "user", PriorWorkDir: "/old/workdir", PriorSessionID: "old-session", Repos: []RepoData{{URL: "https://example.com/good"}, {URL: "https://example.com/denied"}}}
+	task.ProjectResources = []ProjectResourceData{
+		{ID: "denied", ResourceType: "github_repo", ResourceRef: json.RawMessage(`{"url":"git@example.com:denied"}`)},
+		{ID: "good", ResourceType: "github_repo", ResourceRef: json.RawMessage(`{"url":"https://example.com/good"}`)},
+		{ID: "link", ResourceType: "link", ResourceRef: json.RawMessage(`{"url":"https://example.com/docs"}`)},
+	}
+	task = d.taskWithPreparedRepos(task, []workercheckout.Entry{{URL: task.Repos[0].URL}})
+	if len(task.ProjectResources) != 2 || task.ProjectResources[0].ID != "good" || task.ProjectResources[1].ID != "link" {
+		t.Fatalf("project resources: %+v", task.ProjectResources)
+	}
+	if len(task.Repos) != 1 || task.PriorWorkDir != "" || task.PriorSessionID != "" {
+		t.Fatalf("unsafe task: %+v", task)
+	}
+	prompt := BuildPrompt(task, "codex")
+	if !strings.Contains(prompt, "https://example.com/denied") || !strings.Contains(prompt, "unavailable") {
+		t.Fatalf("missing repo warning: %s", prompt)
+	}
+}
+
+func TestRunTaskSkipsDeniedMountAndDoesNotReuseOldWorkdir(t *testing.T) {
+	cache := &fakePrepareCache{}
+	d, root, argvRecord := newDockerTaskDaemon(t, cache)
+	realCache := repocache.New(filepath.Join(root, ".repos"), newDiscardLogger())
+	cache.barePathFn = realCache.BarePath
+	scope := repocache.Scope{WorkspaceID: "ws-1", UserID: "test-user"}
+	const good = "https://example.com/good"
+	const denied = "https://example.com/denied"
+	goodPath := createBareRepoDir(t, realCache.BarePath(scope, good))
+	deniedPath := createBareRepoDir(t, realCache.BarePath(scope, denied))
+	cache.prepared = []repocache.PreparedRepo{{URL: good, CommitSHA: fakeCommitSHA, BarePath: goodPath}, {URL: denied, CommitSHA: fakeCommitSHA, BarePath: deniedPath}}
+	repos := []RepoData{{URL: good}, {URL: denied}}
+	old, err := d.runTask(t.Context(), dockerTask("prior", repos), "codex", 0, newDiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old.WorkDir, "private-code"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cache.prepareFn = func(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+		return cache.prepared[:1], &repocache.AccessFailures{Repos: []string{denied}, Causes: []error{errors.New("Permission denied (publickey)")}}
+	}
+	task := dockerTask("next", repos)
+	task.PriorWorkDir, task.PriorSessionID = old.WorkDir, "old-session"
+	result, err := d.runTask(t.Context(), task, "codex", 0, newDiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "completed" || result.WorkDir == old.WorkDir {
+		t.Fatalf("did not start fresh: %+v", result)
+	}
+	manifest := readManifestRepos(t, filepath.Join(result.EnvRoot, workercheckout.ManifestFileName))
+	if len(manifest) != 1 || manifest[0].URL != good {
+		t.Fatalf("manifest: %+v", manifest)
+	}
+	args, err := os.ReadFile(argvRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(args), deniedPath) || strings.Contains(string(args), old.WorkDir) {
+		t.Fatalf("denied code mounted: %s", args)
+	}
+	if _, err := os.Stat(filepath.Join(old.WorkDir, "private-code")); err != nil {
+		t.Fatalf("old work lost: %v", err)
+	}
+	cache.prepareFn = func(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+		return nil, &repocache.AccessFailures{Repos: []string{denied}, Causes: []error{errors.New("Permission denied (publickey)")}}
+	}
+	if _, err := d.prepareTaskRepoCaches(t.Context(), dockerTask("all-denied", []RepoData{{URL: denied}})); err == nil || !strings.Contains(err.Error(), "no accessible repositories") {
+		t.Fatalf("all-denied: %v", err)
+	}
+}
+
+func TestChatStartsWithoutPreparingAnyRepository(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cache := &fakePrepareCache{prepareFn: func(context.Context, repocache.Scope, []repocache.RepoInfo) ([]repocache.PreparedRepo, error) {
+		t.Fatal("chat must not prepare repositories")
+		return nil, nil
+	}}
+	d, _, _ := newDockerTaskDaemon(t, cache)
+	d.activeStores = make(map[string]int)
+	task := dockerTask("chat-task", []RepoData{{URL: "https://example.com/private"}})
+	task.ChatSessionID = "chat-1"
+	task.GitIdentities = []GitIdentityBinding{{Host: "example.com", ProviderID: "unavailable"}}
+	result, err := d.runTask(t.Context(), task, "codex", 0, newDiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "completed" || cache.prepareCount() != 0 {
+		t.Fatalf("chat failed: %+v", result)
+	}
+	repos := readManifestRepos(t, filepath.Join(result.EnvRoot, workercheckout.ManifestFileName))
+	if len(repos) != 1 || !repos[0].OnDemand || repos[0].CachePath != "" {
+		t.Fatalf("chat manifest: %+v", repos)
+	}
+	if len(cache.recordedDependents()) != 0 {
+		t.Fatal("chat pinned repository caches")
+	}
+}

@@ -243,6 +243,9 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 		return nil, err
 	}
 	for _, entry := range repos {
+		if entry.OnDemand {
+			continue
+		}
 		extras = append(extras, sandbox.Mount{Source: entry.CachePath, Target: entry.CachePath, ReadOnly: true})
 	}
 	for _, path := range extraCachePaths {

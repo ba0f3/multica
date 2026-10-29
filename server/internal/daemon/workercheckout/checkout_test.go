@@ -526,3 +526,31 @@ func TestCheckoutsShareCacheWithoutCrossTalk(t *testing.T) {
 	assertObjectsAreNotHardLinked(t, entry.CachePath, a.Path)
 	assertObjectsAreNotHardLinked(t, entry.CachePath, b.Path)
 }
+
+func TestOnDemandCheckoutClonesOnlyWhenRequestedAndKeepsLocalWork(t *testing.T) {
+	remote := testRemote(t)
+	workdir := t.TempDir()
+	entry := Entry{URL: remote, OnDemand: true}
+	opts := Options{AgentName: testAgentName, TaskID: testTaskID}
+	result, err := Checkout(t.Context(), workdir, entry, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(result.Path, ".git", "objects", "info", "alternates")); !os.IsNotExist(err) {
+		t.Fatalf("on-demand clone borrows cache objects: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(result.Path, "local-work"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	addCommit(t, remote, "update")
+	again, err := Checkout(t.Context(), workdir, entry, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Kept || again.Behind != 1 {
+		t.Fatalf("reuse: %+v", again)
+	}
+	if _, err := os.Stat(filepath.Join(result.Path, "local-work")); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -273,6 +273,9 @@ func repoCacheOverlapError(repos []workercheckout.Entry, extraCachePaths []strin
 		return nil
 	}
 	for _, entry := range repos {
+		if entry.OnDemand {
+			continue
+		}
 		if err := check(entry.CachePath); err != nil {
 			return err
 		}

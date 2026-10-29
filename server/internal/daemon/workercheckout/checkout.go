@@ -54,6 +54,9 @@ func Checkout(ctx context.Context, workDir string, entry Entry, opts Options) (R
 	if err := ValidateEntry(entry); err != nil {
 		return Result{}, err
 	}
+	if entry.OnDemand {
+		return checkoutRemote(ctx, workDir, entry, opts)
+	}
 	target := filepath.Join(workDir, repocache.RepoDirName(entry.URL))
 	branch := repocache.BranchName(opts.AgentName, opts.TaskID)
 
@@ -327,4 +330,76 @@ func gitCombined(ctx context.Context, dir string, args ...string) (string, error
 		return strings.TrimSpace(string(out)), fmt.Errorf("git %v: %s: %w", args, strings.TrimSpace(string(out)), err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// checkoutRemote keeps chat startup independent of repository availability.
+// The allowlisted remote is contacted only after the agent requests checkout.
+func checkoutRemote(ctx context.Context, workDir string, entry Entry, opts Options) (Result, error) {
+	target := filepath.Join(workDir, repocache.RepoDirName(entry.URL))
+	existing, err := isExistingCheckout(target)
+	if err != nil {
+		return Result{}, err
+	}
+	if existing {
+		origin, err := gitOutput(ctx, target, "remote", "get-url", "origin")
+		if err != nil {
+			return Result{}, err
+		}
+		if origin != entry.URL {
+			return Result{}, fmt.Errorf("checkout origin %q does not match %q", origin, entry.URL)
+		}
+		if err := runGit(ctx, target, "fetch", "--prune", "origin"); err != nil {
+			return Result{}, err
+		}
+		if err := runGit(ctx, target, "remote", "set-head", "origin", "--auto"); err != nil {
+			return Result{}, err
+		}
+	} else {
+		if _, err := os.Lstat(target); err == nil {
+			return Result{}, fmt.Errorf("checkout target already exists: %s", target)
+		} else if !os.IsNotExist(err) {
+			return Result{}, err
+		}
+		// Remove only the new checkout if cloning or resolving its base fails.
+		complete := false
+		defer func() {
+			if !complete {
+				_ = os.RemoveAll(target)
+			}
+		}()
+		if err := runGit(ctx, workDir, "clone", "--no-checkout", "--", entry.URL, target); err != nil {
+			return Result{}, err
+		}
+		result, err := finishRemoteCheckout(ctx, target, entry, opts, false)
+		complete = err == nil
+		return result, err
+	}
+	return finishRemoteCheckout(ctx, target, entry, opts, true)
+}
+
+func finishRemoteCheckout(ctx context.Context, target string, entry Entry, opts Options, existing bool) (Result, error) {
+	ref := opts.Ref
+	if ref == "" {
+		ref = entry.Ref
+	}
+	if ref == "" {
+		ref = "refs/remotes/origin/HEAD"
+	}
+	sha, err := resolveCommit(ctx, target, "refs/remotes/origin/"+strings.TrimPrefix(ref, "refs/heads/"))
+	if err != nil {
+		sha, err = resolveSHA(ctx, target, entry, ref)
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	entry.CommitSHA = sha
+	opts.Ref = ""
+	branch := repocache.BranchName(opts.AgentName, opts.TaskID)
+	if existing {
+		return updateExistingCheckout(ctx, target, entry, opts, branch)
+	}
+	if err := runGit(ctx, target, "checkout", "-q", "-B", branch, sha); err != nil {
+		return Result{}, err
+	}
+	return Result{Path: target, Branch: branch, BaseSHA: sha}, nil
 }

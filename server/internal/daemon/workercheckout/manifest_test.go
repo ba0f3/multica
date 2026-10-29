@@ -312,3 +312,26 @@ func writeManifestJSON(t *testing.T, contents string) string {
 	}
 	return path
 }
+
+func TestOnDemandManifestDoesNotRequireACache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	entry := Entry{URL: "https://example.invalid/private.git", Ref: "feature", OnDemand: true}
+	if err := WriteManifest(path, Manifest{Repos: []Entry{entry}}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Find(manifest, entry.URL)
+	if err != nil || got != entry {
+		t.Fatalf("entry=%+v err=%v", got, err)
+	}
+	if _, err := Find(manifest, "https://example.invalid/other.git"); err == nil {
+		t.Fatal("unlisted remote accepted")
+	}
+	entry.CachePath = t.TempDir()
+	if err := ValidateEntry(entry); err == nil {
+		t.Fatal("on-demand entry grants a cache path")
+	}
+}

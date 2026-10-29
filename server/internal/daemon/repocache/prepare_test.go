@@ -2,6 +2,7 @@ package repocache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -353,5 +354,68 @@ func TestPrepareBatchFailureReturnsNoPartialRepositories(t *testing.T) {
 	got, err := cache.Prepare(context.Background(), Scope{WorkspaceID: "ws-1", UserID: "test-user"}, repos)
 	if err == nil || !strings.Contains(err.Error(), second) || got != nil {
 		t.Fatalf("expected strict batch failure, got=%v err=%v", got, err)
+	}
+}
+
+func TestPrepareSkipsDeniedRepoWithoutCancellingAccessibleRepo(t *testing.T) {
+	cache := New(t.TempDir(), testLogger())
+	script := filepath.Join(t.TempDir(), "ssh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'git@example.test: Permission denied (publickey).' >&2\nexit 255\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithGitEnvironment(t.Context(), append(GitEnv(), "GIT_SSH_COMMAND="+script))
+	good := createTestRepo(t)
+	denied := "ssh://git@example.test/private.git"
+	got, err := cache.Prepare(ctx, Scope{WorkspaceID: "ws", UserID: "user"}, []RepoInfo{{URL: denied}, {URL: good}})
+	var access *AccessFailures
+	if !errors.As(err, &access) || len(access.Repos) != 1 || access.Repos[0] != denied {
+		t.Fatalf("access failures: %v", err)
+	}
+	if len(got) != 1 || got[0].URL != good {
+		t.Fatalf("accessible repo lost: %+v", got)
+	}
+}
+
+func TestRepositoryAccessDeniedClassification(t *testing.T) {
+	for _, tc := range []struct {
+		message string
+		denied  bool
+	}{
+		{"Permission denied (publickey)", true},
+		{"remote: Repository not found.", true},
+		{"fatal: Authentication failed", true},
+		{"fatal: could not read Username for 'https://git.example': terminal prompts disabled", true},
+		{"The requested URL returned error: 403", true},
+		{"signing failed: agent refused operation; Permission denied (publickey)", false},
+		{"connection timeout", false},
+		{"Could not resolve hostname", false},
+		{"fatal: couldn't find remote ref main", false},
+		{"local filesystem: Permission denied", false},
+	} {
+		if got := repositoryAccessDenied(errors.New(tc.message)); got != tc.denied {
+			t.Errorf("%q: got %v", tc.message, got)
+		}
+	}
+}
+
+func TestPrepareDoesNotServeWarmCacheAfterAccessIsDenied(t *testing.T) {
+	cache := New(t.TempDir(), testLogger())
+	scope := Scope{WorkspaceID: "ws", UserID: "user"}
+	remote := createTestRepo(t)
+	if _, err := cache.Prepare(t.Context(), scope, []RepoInfo{{URL: remote}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit("-C", cache.BarePath(scope, remote), "remote", "set-url", "origin", "ssh://git@example.test/private.git"); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "ssh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'Gitea: User permission denied' >&2\nexit 255\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithGitEnvironment(t.Context(), append(GitEnv(), "GIT_SSH_COMMAND="+script))
+	got, err := cache.Prepare(ctx, scope, []RepoInfo{{URL: remote}})
+	var access *AccessFailures
+	if len(got) != 0 || !errors.As(err, &access) {
+		t.Fatalf("stale cache served: %+v, error=%v", got, err)
 	}
 }

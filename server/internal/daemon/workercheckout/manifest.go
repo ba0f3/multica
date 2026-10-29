@@ -23,9 +23,11 @@ const ManifestFileName = "repo-cache.json"
 // the CLI without an import cycle.
 const taskConfigRootEnv = "MULTICA_TASK_CONFIG_ROOT"
 
-// Entry is one task repo the daemon prepared. CachePath is the absolute host
-// path of the bare cache, which the worker sees at the same path.
+// Entry grants either a prepared cache or an on-demand remote checkout.
+// Cached entries retain the absolute host path inside the worker.
 type Entry struct {
+	// OnDemand authorizes a private remote clone when checkout is requested.
+	OnDemand  bool   `json:"on_demand,omitempty"`
 	URL       string `json:"url"`
 	Ref       string `json:"ref,omitempty"`
 	CommitSHA string `json:"commit_sha"`
@@ -149,6 +151,15 @@ func Find(manifest Manifest, url string) (Entry, error) {
 // object ID, so a tampered manifest cannot point the worker at an arbitrary
 // directory or a truncated commit.
 func ValidateEntry(entry Entry) error {
+	if entry.OnDemand {
+		if strings.TrimSpace(entry.URL) == "" || strings.HasPrefix(entry.URL, "-") {
+			return errors.New("on-demand checkout requires a repository URL")
+		}
+		if entry.CachePath != "" || entry.CommitSHA != "" {
+			return errors.New("on-demand checkout must not grant a cache path or commit")
+		}
+		return nil
+	}
 	if entry.CachePath == "" {
 		return errors.New("cache_path is required")
 	}

@@ -19,14 +19,37 @@ type PreparedRepo struct {
 	BarePath  string // absolute host path of the bare cache
 }
 
-// Prepare makes every repo available in the workspace cache and resolves the
-// commit each one should be checked out at.
-//
-// SyncContext tolerates fetch failures so the daemon can keep working from an
-// older snapshot. Prepare is the strict counterpart used when a task is about
-// to receive code: a failed clone, fetch, or ref resolution returns an error
-// naming the repo URL and no PreparedRepo at all. Callers can therefore trust
-// every returned CommitSHA to reflect the remote state seen by this call.
+// AccessFailures lists repositories whose remote refused access. Prepare may
+// return these alongside successfully refreshed repositories.
+type AccessFailures struct {
+	Repos  []string
+	Causes []error
+}
+
+func (e *AccessFailures) Error() string {
+	return "repository access unavailable: " + strings.Join(e.Repos, ", ")
+}
+func (e *AccessFailures) Unwrap() []error { return e.Causes }
+
+func repositoryAccessDenied(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	// A signing service failure prevents authentication even with a valid key.
+	if strings.Contains(message, "signing failed") || strings.Contains(message, "agent refused operation") {
+		return false
+	}
+	for _, pattern := range []string{"permission denied (publickey", "repository not found", "authentication failed", "could not read username", "requested url returned error: 401", "requested url returned error: 403", "remote: access denied", "remote: you are not allowed", "gitea: unauthorized", "gitea: access denied", "gitea: user permission denied", "gitea: repository does not exist"} {
+		if strings.Contains(message, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// Prepare refreshes repositories independently. Access refusals are returned
+// alongside successful results; transport, ref and local failures remain fatal.
 func (c *Cache) Prepare(ctx context.Context, scope Scope, repos []RepoInfo) ([]PreparedRepo, error) {
 	if err := scope.Validate(); err != nil {
 		return nil, err
@@ -49,22 +72,37 @@ func (c *Cache) Prepare(ctx context.Context, scope Scope, repos []RepoInfo) ([]P
 	}
 
 	prepared := make([]PreparedRepo, len(repos))
-	group, prepareCtx := errgroup.WithContext(ctx)
+	failures := make([]error, len(repos))
+	var group errgroup.Group
 	group.SetLimit(4)
 	for i, repo := range repos {
 		group.Go(func() error {
-			preparedRepo, err := c.prepareRepo(prepareCtx, scope, repo)
-			if err != nil {
-				return fmt.Errorf("prepare repo %s: %w", repo.URL, err)
-			}
-			prepared[i] = preparedRepo
+			prepared[i], failures[i] = c.prepareRepo(ctx, scope, repo)
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
+	_ = group.Wait()
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return prepared, nil
+	available := make([]PreparedRepo, 0, len(repos))
+	access := &AccessFailures{}
+	for i, err := range failures {
+		if err == nil {
+			available = append(available, prepared[i])
+			continue
+		}
+		wrapped := fmt.Errorf("prepare repo %s: %w", repos[i].URL, err)
+		if !repositoryAccessDenied(err) {
+			return nil, wrapped
+		}
+		access.Repos = append(access.Repos, repos[i].URL)
+		access.Causes = append(access.Causes, wrapped)
+	}
+	if len(access.Repos) > 0 {
+		return available, access
+	}
+	return available, nil
 }
 
 // prepareRepo clones or fetches one repo under its lock, then resolves the

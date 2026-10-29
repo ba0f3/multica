@@ -3470,10 +3470,9 @@ func (d *Daemon) usesWorkerRepoCache(provider string) bool {
 // and resolves the commit each should be checked out at, returning one entry
 // per prepared repo for the manifest and Docker mounts.
 //
-// Fetch/ref failures fail the task: unlike the tolerant background sync, a
-// prepare failure means the task is about to receive code, so it must never
-// fall back to a stale snapshot. Each returned BarePath is validated to live
-// strictly inside the resolved workspace cache root before it is trusted.
+// Access refusals may yield a smaller repository set. Other fetch/ref failures
+// fail the task, and inaccessible repositories never use stale snapshots.
+// Each returned BarePath is validated to live strictly inside the resolved workspace cache root before it is trusted.
 func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]workercheckout.Entry, error) {
 	if d.repoCache == nil {
 		return nil, errors.New("repo cache is not configured")
@@ -3514,7 +3513,16 @@ func (d *Daemon) prepareTaskRepoCaches(ctx context.Context, task Task) ([]worker
 	}
 	prepared, err := preparer.Prepare(ctx, task.repoScope(), infos)
 	if err != nil {
-		return nil, taskRepoPrepareError(task, err)
+		var access *repocache.AccessFailures
+		if !errors.As(err, &access) {
+			return nil, taskRepoPrepareError(task, err)
+		}
+		if len(prepared) == 0 {
+			return nil, fmt.Errorf("no accessible repositories remain: %w", taskRepoPrepareError(task, errors.Join(access.Causes...)))
+		}
+		for i, url := range access.Repos {
+			d.logger.Warn("repository unavailable; continuing without it", "task_id", task.ID, "repo", url, "error", access.Causes[i])
+		}
 	}
 
 	root, err := repocache.New(filepath.Join(d.cfg.WorkspacesRoot, ".repos"), d.logger).ScopeRoot(task.repoScope())
@@ -8009,12 +8017,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// in the per-workspace allowlist and the local cache, otherwise
 	// `multica repo checkout` would reject project-only URLs that aren't also
 	// bound at the workspace level.
-	if len(task.Repos) > 0 {
+	if len(task.Repos) > 0 && task.ChatSessionID == "" {
 		if err := task.repoScope().Validate(); err != nil {
 			return TaskResult{}, err
 		}
 	}
-	d.registerTaskRepos(task.repoScope(), task.ID, task.Repos)
 	defer d.clearTaskRepoRefs(task.WorkspaceID, task.ID)
 
 	// Git operations inside this run sign as the human who authorized it,
@@ -8033,7 +8040,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		gitSocketPath = socketPath
 		defer stopGitAgent()
 	}
-	if err := validateGitCredentialForTask(task, gitSocketPath); err != nil {
+	if err := validateGitCredentialForTask(task, gitSocketPath); err != nil && task.ChatSessionID == "" {
 		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
 	}
 	prepareCtx = repocache.WithGitEnvironment(prepareCtx, taskRepoGitEnvironment(task, gitSocketPath))
@@ -8045,13 +8052,26 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var taskRepoCaches []workercheckout.Entry
 	if workerRepoCache {
 		phaseRecorder.Mark(taskPhaseRepoCacheStarted)
-		prepared, prepareErr := d.prepareTaskRepoCaches(prepareCtx, task)
-		if prepareErr != nil {
-			return TaskResult{}, fmt.Errorf("prepare task repo cache: %w", prepareErr)
+		if task.ChatSessionID != "" {
+			for _, repo := range task.Repos {
+				if strings.TrimSpace(repo.URL) != "" {
+					taskRepoCaches = append(taskRepoCaches, workercheckout.Entry{URL: repo.URL, Ref: repo.Ref, OnDemand: true})
+				}
+			}
+			if paths, err := d.repoCachePathsForReusedWorkdir(task.repoScope(), task.PriorWorkDir); err != nil || len(paths) > 0 {
+				task.PriorWorkDir, task.PriorSessionID = "", ""
+			}
+		} else {
+			prepared, prepareErr := d.prepareTaskRepoCaches(prepareCtx, task)
+			if prepareErr != nil {
+				return TaskResult{}, fmt.Errorf("prepare task repo cache: %w", prepareErr)
+			}
+			taskRepoCaches = prepared
+			task = d.taskWithPreparedRepos(task, prepared)
 		}
-		taskRepoCaches = prepared
-
 	}
+
+	d.registerTaskRepos(task.repoScope(), task.ID, task.Repos)
 
 	phaseRecorder.Mark(taskPhaseRepoCacheReady)
 	timing.Mark("repo_ready")
@@ -8657,9 +8677,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// outlive the workdir's use of it.
 	var extraCachePaths []string
 	if workerRepoCache {
-		reused, reusedErr := d.repoCachePathsForReusedWorkdir(task.repoScope(), env.WorkDir)
-		if reusedErr != nil {
-			return TaskResult{}, fmt.Errorf("resolve reused workdir repo cache paths: %w", reusedErr)
+		var reused []string
+		if task.ChatSessionID == "" {
+			var reusedErr error
+			reused, reusedErr = d.repoCachePathsForReusedWorkdir(task.repoScope(), env.WorkDir)
+			if reusedErr != nil {
+				return TaskResult{}, fmt.Errorf("resolve reused workdir repo cache paths: %w", reusedErr)
+			}
 		}
 		extraCachePaths = reused
 
@@ -8673,6 +8697,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		cachePaths := make([]string, 0, len(taskRepoCaches)+len(reused))
 		seenCachePath := make(map[string]struct{}, len(taskRepoCaches)+len(reused))
 		for _, entry := range taskRepoCaches {
+			if entry.OnDemand {
+				continue
+			}
 			if _, dup := seenCachePath[entry.CachePath]; dup {
 				continue
 			}

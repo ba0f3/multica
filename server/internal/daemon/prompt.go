@@ -273,6 +273,16 @@ func BuildPrompt(task Task, provider string, options ...PromptOption) string {
 		apply(&opts)
 	}
 	body := buildPromptBody(task, provider)
+	if task.ChatSessionID != "" {
+		body += "\nCheck out repositories only when needed for the user's chat request. Repository access failures do not block answering unrelated questions.\n"
+	}
+	if len(task.SkippedRepos) > 0 {
+		body += "\nRepository access unavailable for this run (excluded from checkout and mounts):\n"
+		for _, url := range task.SkippedRepos {
+			body += fmt.Sprintf("- %q\n", url)
+		}
+		body += "Continue with the available repositories. Report any work blocked by these exclusions. This run uses a fresh workdir; previous uncommitted work has not been transferred.\n"
+	}
 	// Run-scoped context is appended, never prepended: everything ahead of it
 	// is stable across runs of a resumed session, and appending keeps it after
 	// the cached prefix (MUL-5377).
