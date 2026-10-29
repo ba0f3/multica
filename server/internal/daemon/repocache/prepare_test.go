@@ -382,6 +382,7 @@ func TestRepositoryAccessDeniedClassification(t *testing.T) {
 		denied  bool
 	}{
 		{"Permission denied (publickey)", true},
+		{"error: User key 56:multica has no \"read\" permission for m3/server", true},
 		{"remote: Repository not found.", true},
 		{"fatal: Authentication failed", true},
 		{"fatal: could not read Username for 'https://git.example': terminal prompts disabled", true},

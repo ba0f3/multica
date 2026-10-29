@@ -40,6 +40,9 @@ func repositoryAccessDenied(err error) bool {
 	if strings.Contains(message, "signing failed") || strings.Contains(message, "agent refused operation") {
 		return false
 	}
+	if strings.Contains(message, "user key ") && strings.Contains(message, " has no \"read\" permission for ") {
+		return true
+	}
 	for _, pattern := range []string{"permission denied (publickey", "repository not found", "authentication failed", "could not read username", "requested url returned error: 401", "requested url returned error: 403", "remote: access denied", "remote: you are not allowed", "gitea: unauthorized", "gitea: access denied", "gitea: user permission denied", "gitea: repository does not exist"} {
 		if strings.Contains(message, pattern) {
 			return true
