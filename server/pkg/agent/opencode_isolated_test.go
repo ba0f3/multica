@@ -43,4 +43,14 @@ func TestEnforceOpenCodeIsolatedLaunch(t *testing.T) {
 			t.Fatalf("expected no duplicate standalone flag: %v", args)
 		}
 	})
+
+	t.Run("injects standalone for acp v2", func(t *testing.T) {
+		args, err := enforceOpenCodeIsolatedLaunch([]string{"acp"}, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, standalone := opencodeConnectionFromArgs(args); !standalone {
+			t.Fatalf("expected --standalone in %v", args)
+		}
+	})
 }
