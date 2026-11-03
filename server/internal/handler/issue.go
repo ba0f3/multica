@@ -97,6 +97,9 @@ type IssueResponse struct {
 	Properties  map[string]any          `json:"properties"`
 	Reactions   []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments []AttachmentResponse    `json:"attachments,omitempty"`
+	// RunDispatch reports a blocked assign/promote enqueue after the issue write
+	// succeeded (MUL-4525). Omitted when no run was attempted or one started.
+	RunDispatch *DispatchOutcome `json:"run_dispatch,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -4139,6 +4142,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	)
 	willRun = willRun && !req.SuppressRun
 
+	runStarted, runBlocked := h.runIssueDispatchAfterWrite(r.Context(), r, issue, trigger, willRun, actorType, actorID, handoffNote)
+
 	updatedPayload := map[string]any{
 		"issue":               resp,
 		"assignee_changed":    assigneeChanged,
@@ -4165,7 +4170,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 	}
 	if handoff != nil {
-		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
+		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), runStarted)
+	}
+	if runBlocked != nil {
+		updatedPayload["run_dispatch"] = runBlocked
 	}
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
 	if attachmentsChanged {
@@ -4202,11 +4210,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil && req.StopPreviousAssigneeRuns {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if willRun {
-		if actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID); ok {
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, handoffNote)
-		}
-	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
 	// conditions): the write recorded the change; process it now. A failure
@@ -4215,6 +4218,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.processChildEvents(r.Context(), issue.ParentIssueID, prevIssue.ParentIssueID)
 	}
 
+	resp.RunDispatch = runBlocked
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -4935,6 +4939,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 		)
 		willRun = willRun && !req.Updates.SuppressRun
+		runStarted, runBlocked := h.runIssueDispatchAfterWrite(r.Context(), r, issue, trigger, willRun, actorType, actorID, batchHandoffNote)
 		batchPayload := map[string]any{
 			"issue":                      resp,
 			"assignee_changed":           assigneeChanged,
@@ -4946,7 +4951,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 		}
 		if handoff != nil {
-			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
+			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), runStarted)
+		}
+		if runBlocked != nil {
+			batchPayload["run_dispatch"] = runBlocked
 		}
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, batchPayload)
 
@@ -4958,11 +4966,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// drift, MUL-3375). suppress_run applies batch-wide.
 		if handoff != nil && req.Updates.StopPreviousAssigneeRuns {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
-		}
-		if willRun {
-			if actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID); ok {
-				h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, batchHandoffNote)
-			}
 		}
 
 		// No status change — not even → cancelled — cancels active tasks here,

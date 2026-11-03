@@ -91,6 +91,28 @@ func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger 
 	}
 }
 
+// runIssueDispatchAfterWrite performs the enqueue side effect when willRun is
+// true. It returns whether a run actually started and, when blocked, an outcome
+// for HTTP/WS subscribers (MUL-4525; issue #109 F1).
+func (h *Handler) runIssueDispatchAfterWrite(ctx context.Context, r *http.Request, issue db.Issue, trigger service.IssueRunTrigger, willRun bool, actorType, actorID, handoffNote string) (runStarted bool, blocked *DispatchOutcome) {
+	if !willRun {
+		return false, nil
+	}
+	actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID)
+	if !ok {
+		return false, &DispatchOutcome{
+			Status:     DispatchBlocked,
+			ReasonCode: ReasonInvocationNotAllowed,
+			Target: &DispatchTarget{
+				Type: trigger.AssigneeType,
+				ID:   uuidToString(trigger.AgentID),
+			},
+		}
+	}
+	h.dispatchIssueRun(ctx, issue, trigger, actorUserID, actorType, actorID, handoffNote)
+	return true, nil
+}
+
 // IssueTriggerPreviewRequest asks "if I apply this assignee and/or status to
 // these issues (or create one), which runs will start". All fields are
 // optional; a nil prospective field means "leave unchanged".

@@ -18,6 +18,60 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+// TestUpdateIssue_AgentTerminalTaskReportsBlockedRunDispatch is issue #109 F1:
+// assign/promote must surface a blocked outcome instead of silently skipping enqueue.
+func TestUpdateIssue_AgentTerminalTaskReportsBlockedRunDispatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	userA := seedSecurityTestOwner(t, "assign-block-a")
+	runtimeID := createCascadeFixtureRuntime(t, ctx, "assign block")
+	agentID := seedPublicWorkspaceAgent(t, ctx, runtimeID, userA)
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id)
+		VALUES ($1, 'unassigned', 'todo', 'medium', 'member', $2, 'member', $2)
+		RETURNING id`, testWorkspaceID, userA).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	terminalTaskID := seedIssueTaskWithOriginator(t, ctx, issueID, agentID, runtimeID, userA)
+
+	var before int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&before); err != nil {
+		t.Fatalf("count tasks before: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest("PATCH", "/api/issues/"+issueID, map[string]any{
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	}), "id", issueID)
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Task-ID", terminalTaskID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp IssueResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.RunDispatch == nil || resp.RunDispatch.Status != DispatchBlocked || resp.RunDispatch.ReasonCode != ReasonInvocationNotAllowed {
+		t.Fatalf("run_dispatch = %+v, want blocked/invocation_not_allowed", resp.RunDispatch)
+	}
+	var after int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&after); err != nil {
+		t.Fatalf("count tasks after: %v", err)
+	}
+	if after != before {
+		t.Fatalf("task count changed from %d to %d; must not enqueue", before, after)
+	}
+}
+
 // TestRerunIssue_ExecutionPrincipalOverridesSourceOriginator is issue #109 F1.
 func TestRerunIssue_ExecutionPrincipalOverridesSourceOriginator(t *testing.T) {
 	if testHandler == nil || testPool == nil {

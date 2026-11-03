@@ -165,6 +165,11 @@ func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []
 		if err := os.MkdirAll(path, 0700); err != nil {
 			return NativeRuntime{}, nil, fmt.Errorf("native sandbox profile directory: %w", err)
 		}
+	}
+	if err := seedNativeExecutionProfile(request, profilePaths); err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	for _, path := range profilePaths {
 		resolved, links, err := nativeResolveLinks(path)
 		if err != nil {
 			return NativeRuntime{}, nil, err

@@ -89,6 +89,12 @@ func mirrorProviderTree(src, dst string, skipDirs map[string]bool, logger *slog.
 	})
 }
 
+// MirrorProviderTree copies provider auth/config from src into dst. See
+// mirrorProviderTree for semantics. Exported for native scoped profile seeding.
+func MirrorProviderTree(src, dst string, skipDirs map[string]bool, logger *slog.Logger) error {
+	return mirrorProviderTree(src, dst, skipDirs, logger)
+}
+
 // claudeIsolatedHomeSkipDirs are the bulky Claude Code session/history trees
 // that are not needed for auth and would otherwise grow every task-home copy.
 // Each is matched by its directory basename anywhere under ~/.claude; auth and
