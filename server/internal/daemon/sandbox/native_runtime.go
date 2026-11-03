@@ -290,10 +290,13 @@ func nativeProfilePathSpecs(request NativeRuntimeRequest, result *NativeRuntime)
 			{role: "cursor_config", path: choose("CURSOR_CONFIG_DIR", filepath.Join(home, ".config", "cursor"))},
 			{role: "cursor_compile_cache", path: filepath.Join(home, ".cache", "cursor-compile-cache")},
 		}
-		if !scopedExecutionUser {
-			if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
-				specs = append(specs, nativeProfilePathSpec{role: "cursor_data", path: choose("CURSOR_DATA_DIR", selected)})
+		if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
+			dataPath := selected
+			if scopedExecutionUser {
+				dataPath = filepath.Join(home, ".cursor-data")
 			}
+			result.Env["CURSOR_DATA_DIR"] = dataPath
+			specs = append(specs, nativeProfilePathSpec{role: "cursor_data", path: dataPath})
 		}
 		return specs, nil
 	case "opencode":
