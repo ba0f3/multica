@@ -47,6 +47,10 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		ProviderID string `json:"provider_id"`
+		// Existing daemons send their local attempt id. Accept it for wire
+		// compatibility with the strict JSON decoder, but never use it as
+		// authority: the lease scope comes only from the server task row.
+		AttemptID string `json:"attempt_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
 		return
