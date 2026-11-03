@@ -1,0 +1,50 @@
+name: SSH boundary
+
+on:
+  pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/ssh-boundary.yml'
+  push:
+    branches:
+      - 'cursor/fix-ssh-signing-cross-user-109-5952'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssh-boundary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Prepare ephemeral runner for user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes bubblewrap
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if sysctl kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+      - name: Record tested commit
+        run: git rev-parse HEAD
+      - name: Require the real cross-user filesystem boundary test
+        working-directory: server
+        env:
+          MULTICA_REQUIRE_BWRAP_SECURITY_TESTS: '1'
+        run: go test -count=1 -v ./internal/daemon/sandbox -run '^TestRestrictedView'
+      - name: Signer and socket regression tests
+        working-directory: server
+        run: go test -count=1 ./internal/r2dgit ./internal/daemon/gitagent
