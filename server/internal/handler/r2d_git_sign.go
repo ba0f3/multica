@@ -2,10 +2,12 @@ package handler
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/r2dgit"
 )
 
@@ -45,7 +47,6 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		ProviderID string `json:"provider_id"`
-		AttemptID  string `json:"attempt_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
 		return
@@ -55,7 +56,7 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := service.OpenSigningLease(r.Context(), taskID, body.AttemptID, body.ProviderID, daemonID)
+	lease, err := service.OpenSigningLease(r.Context(), taskID, taskSigningAttemptID(task.Attempt, task.DispatchedAt), body.ProviderID, daemonID)
 	if err != nil {
 		gitServiceError(w, err)
 		return
@@ -63,8 +64,15 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, lease)
 }
 
+func taskSigningAttemptID(attempt int32, dispatchedAt pgtype.Timestamptz) string {
+	if dispatchedAt.Valid {
+		return fmt.Sprintf("%d:%d", attempt, dispatchedAt.Time.UTC().UnixNano())
+	}
+	return fmt.Sprintf("%d:undispatched", attempt)
+}
+
 func (h *Handler) requireGitSigningLeaseTaskEligible(w http.ResponseWriter, r *http.Request, service *r2dgit.Service, leaseID, daemonID string) bool {
-	taskID, err := service.LeaseTaskID(r.Context(), leaseID, daemonID)
+	taskID, leaseAttemptID, err := service.LeaseScope(r.Context(), leaseID, daemonID)
 	if err != nil {
 		gitServiceError(w, err)
 		return false
@@ -78,6 +86,10 @@ func (h *Handler) requireGitSigningLeaseTaskEligible(w http.ResponseWriter, r *h
 	}
 	if !taskEligibleForNewSigningLease(task) {
 		writeErrorCode(w, http.StatusForbidden, "git_signing_unavailable", "Git signing is not available for this task.")
+		return false
+	}
+	if leaseAttemptID != taskSigningAttemptID(task.Attempt, task.DispatchedAt) {
+		writeErrorCode(w, http.StatusForbidden, "git_signing_stale_attempt", "Git signing lease belongs to an older task attempt.")
 		return false
 	}
 	return true
