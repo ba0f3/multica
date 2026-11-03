@@ -77,6 +77,9 @@ type IssueCreateParams struct {
 	DueDate       pgtype.Date
 	OriginType    pgtype.Text
 	OriginID      pgtype.UUID
+	// AuthenticatedTaskID is the server-trusted X-Task-ID for agent creators.
+	// Explicit quick_create origins must match it (issue #109 F2).
+	AuthenticatedTaskID pgtype.UUID
 	AttachmentIDs []pgtype.UUID
 	// LabelIDs are the issue-scoped labels to attach to the new issue. They
 	// are validated and written inside the create transaction (see Create),
@@ -437,6 +440,11 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		})
 		if taskErr != nil {
 			return IssueCreateResult{}, fmt.Errorf("load quick-create origin task: %w", taskErr)
+		}
+		if p.CreatorType == "agent" {
+			if !p.AuthenticatedTaskID.Valid || p.AuthenticatedTaskID != p.OriginID {
+				return IssueCreateResult{}, errors.New("quick-create origin must be the authenticated task")
+			}
 		}
 		if p.CreatorType != "agent" || !p.CreatorID.Valid || p.CreatorID != task.AgentID {
 			return IssueCreateResult{}, errors.New("quick-create origin task does not belong to the creating agent")

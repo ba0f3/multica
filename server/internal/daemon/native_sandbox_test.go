@@ -66,7 +66,7 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"resul
 				t.Fatal(err)
 			}
 			for i := range 2 {
-				backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: exe, TaskID: "task", Env: map[string]string{"HOME": "/other-user", "CODEX_HOME": "/other-user/.codex"}}, env, "", "", "attempt-native", entries, nil)
+				backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: exe, TaskID: "task", Env: map[string]string{"HOME": "/other-user", "CODEX_HOME": "/other-user/.codex"}}, env, "", "", "attempt-native", "", entries, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -105,7 +105,7 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"resul
 			if err := os.WriteFile(exe, []byte("#!/bin/sh\n# upgraded installation\nexit 0\n"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: exe}, env, "", "", "upgraded", entries, nil); err != nil {
+			if _, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: exe}, env, "", "", "upgraded", "", entries, nil); err != nil {
 				t.Fatal(err)
 			}
 			if calls != 2 {
@@ -126,7 +126,7 @@ func TestNativeBackendFailsClosedWhenResourcePreflightFails(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "cli")
 	_ = os.WriteFile(exe, []byte("#!/bin/sh\n"), 0700)
 	d.cfg.BwrapPath = exe
-	_, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, newSandboxTestEnv(t), "", "", "attempt", nil, nil)
+	_, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, newSandboxTestEnv(t), "", "", "attempt", "", nil, nil)
 	if !errors.Is(err, errSandboxUnavailable) || !strings.Contains(err.Error(), "memory controller") {
 		t.Fatalf("preflight did not fail closed: %v", err)
 	}
@@ -214,7 +214,7 @@ printf '%s\n' '{"type":"cli_started"}' '{"type":"result","result":{"Status":"com
 			t.Fatal(err)
 		}
 	}
-	backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe, TaskID: "fake-task"}, env, "", "", "fake-production", nil, nil)
+	backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe, TaskID: "fake-task"}, env, "", "", "fake-production", "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

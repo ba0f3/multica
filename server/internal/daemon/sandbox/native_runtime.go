@@ -15,11 +15,12 @@ import (
 // NativeRuntimeRequest is selected by the daemon from its own runtime account,
 // not from the task's environment or the human who requested a rerun.
 type NativeRuntimeRequest struct {
-	Provider       string
-	Executable     string
-	Home           string
-	Env            map[string]string
-	ForbiddenRoots []string
+	Provider          string
+	Executable        string
+	Home              string
+	ExecutionUserID   string
+	Env               map[string]string
+	ForbiddenRoots    []string
 }
 
 type NativeLink struct {
@@ -151,7 +152,7 @@ func ResolveNativeInstallation(request NativeRuntimeRequest) (NativeRuntime, err
 }
 
 func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []nativeWatch, error) {
-	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, Home: request.Home, Env: make(map[string]string)}
+	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, Home: nativeExecutionProfileHome(request), Env: make(map[string]string)}
 	var watch []nativeWatch
 	profilePaths, err := nativeProfilePaths(request, &result)
 	if err != nil {
@@ -224,12 +225,24 @@ func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []
 		return NativeRuntime{}, nil, err
 	}
 	// HOME aliases must not create independent leases for the same native store.
-	digest := sha256.Sum256([]byte(request.Provider + "\x00" + primary))
+	digest := sha256.Sum256([]byte(request.Provider + "\x00" + primary + "\x00" + request.ExecutionUserID))
 	result.ProfileKey = hex.EncodeToString(digest[:])
 	return result, watch, nil
 }
 
+// nativeExecutionProfileHome scopes provider writable state per execution user
+// so one native task cannot leave executable config for another user's run
+// (issue #109 F4). An empty ExecutionUserID keeps the legacy runtime-home layout.
+func nativeExecutionProfileHome(request NativeRuntimeRequest) string {
+	if strings.TrimSpace(request.ExecutionUserID) == "" {
+		return request.Home
+	}
+	sum := sha256.Sum256([]byte(request.ExecutionUserID))
+	return filepath.Join(request.Home, "multica-native-execution-profiles", hex.EncodeToString(sum[:16]))
+}
+
 func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]string, error) {
+	home := nativeExecutionProfileHome(request)
 	choose := func(key, fallback string) string {
 		if value := request.Env[key]; value != "" {
 			result.Env[key] = value
@@ -238,7 +251,6 @@ func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]
 		result.Env[key] = fallback
 		return fallback
 	}
-	home := request.Home
 	switch request.Provider {
 	case "codex":
 		return []string{choose("CODEX_HOME", filepath.Join(home, ".codex"))}, nil

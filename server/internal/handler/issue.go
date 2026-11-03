@@ -3365,6 +3365,12 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
+	var authenticatedTaskID pgtype.UUID
+	if creatorType == "agent" {
+		if task, ok := h.taskFromRequestHeader(r); ok {
+			authenticatedTaskID = task.ID
+		}
+	}
 
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a
@@ -3463,9 +3469,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ProjectID:      projectID,
 		StartDate:      startDate,
 		DueDate:        dueDate,
-		OriginType:     originType,
-		OriginID:       originID,
-		Stage:          ptrToInt4(req.Stage),
+		OriginType:          originType,
+		OriginID:            originID,
+		AuthenticatedTaskID: authenticatedTaskID,
+		Stage:               ptrToInt4(req.Stage),
 		AttachmentIDs:  attachmentIDs,
 		LabelIDs:       labelIDs,
 		Properties:     properties,
@@ -4192,7 +4199,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
 	if willRun {
-		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
+		actorUserID := h.executionActorUserID(r, actorType, actorID)
+		h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, handoffNote)
 	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
@@ -4947,7 +4955,8 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 		}
 		if willRun {
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
+			actorUserID := h.executionActorUserID(r, actorType, actorID)
+			h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, batchHandoffNote)
 		}
 
 		// No status change — not even → cancelled — cancels active tasks here,

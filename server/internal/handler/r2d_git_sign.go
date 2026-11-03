@@ -34,6 +34,10 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	if !h.requireTaskRuntimeOwnedByDaemon(w, r, task, daemonID) {
 		return
 	}
+	if !taskEligibleForNewSigningLease(task) {
+		writeErrorCode(w, http.StatusForbidden, "git_signing_unavailable", "Git signing is not available for this task.")
+		return
+	}
 	service, ok := h.gitService(w)
 	if !ok {
 		return

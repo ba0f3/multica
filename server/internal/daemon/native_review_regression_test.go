@@ -50,7 +50,7 @@ func nativeReviewFixture(t *testing.T, provider, body string) (*Daemon, *execenv
 
 func runNativeReviewWorker(t *testing.T, d *Daemon, env *execenv.Environment, provider, exe, prompt string) {
 	t.Helper()
-	backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: exe}, env, "", "", "native-review", nil, nil)
+	backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: exe}, env, "", "", "native-review", "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestNativeOriginalEnvInterpreterProbeAndWorker(t *testing.T) {
 		if err := os.Symlink(node, link); err != nil {
 			t.Fatal(err)
 		}
-		runtime, _, err := d.nativeRuntime(t.Context(), "opencode", exe)
+		runtime, _, err := d.nativeRuntime(t.Context(), "opencode", exe, "")
 		if err != nil || runtime.Version != version {
 			t.Fatalf("original interpreter probe after upgrade: version=%s expected=%s err=%v", runtime.Version, version, err)
 		}
@@ -229,7 +229,7 @@ open('/workspace/output/durable-output', 'w').write('keep')`
 				body += "\nimport time\ntime.sleep(60)"
 			}
 			d, env, exe := nativeReviewFixture(t, "opencode", body)
-			backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, env, "", "", "native-storage-"+mode, nil, nil)
+			backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, env, "", "", "native-storage-"+mode, "", nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -276,7 +276,7 @@ open('/workspace/output/durable-output', 'w').write('keep')`
 
 func TestNativePreparationFailureDoesNotRetainAttemptStorage(t *testing.T) {
 	d, env, exe := nativeReviewFixture(t, "opencode", "pass")
-	backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, env, "", filepath.Join(env.RootDir, "missing-agent.sock"), "native-prepare-failed", nil, nil)
+	backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe}, env, "", filepath.Join(env.RootDir, "missing-agent.sock"), "native-prepare-failed", "", nil, nil)
 	if err == nil {
 		_, err = backend.Execute(t.Context(), "must fail preparation", agent.ExecOptions{})
 	}

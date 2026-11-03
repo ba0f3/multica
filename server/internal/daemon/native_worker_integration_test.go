@@ -170,7 +170,7 @@ func TestRealNativeTaskAfterWorkerFailure(t *testing.T) {
 			}
 			root := t.TempDir()
 			d := newRealNativeSmokeDaemon(root, worker)
-			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable)
+			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,7 +180,7 @@ func TestRealNativeTaskAfterWorkerFailure(t *testing.T) {
 			}
 			env.ReleaseLock()
 			config := agent.Config{ExecutablePath: executable, CLIVersion: runtime.Version, Env: runtime.Env, Logger: d.logger, BuiltinRuntime: true}
-			backend, err := d.sandboxedBackend(provider, config, env, "", "", "failed-worker-"+provider, nil, nil)
+			backend, err := d.sandboxedBackend(provider, config, env, "", "", "failed-worker-"+provider, "", nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +201,7 @@ func TestRealNativeTaskAfterWorkerFailure(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(env.WorkDir, "input.txt"), []byte("after-worker-failure"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			backend, err = d.sandboxedBackend(provider, config, env, "", "", "after-failure-"+provider, nil, nil)
+			backend, err = d.sandboxedBackend(provider, config, env, "", "", "after-failure-"+provider, "", nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -244,7 +244,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 			}
 			root := t.TempDir()
 			d := newRealNativeSmokeDaemon(root, worker)
-			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable)
+			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -273,7 +273,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 				if round == "after_failure" {
 					ctx, cancel := context.WithCancel(t.Context())
 					cancel()
-					backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: executable, TaskID: "native-smoke"}, env, "", "", fmt.Sprintf("native-%s-canceled", provider), nil, nil)
+					backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: executable, TaskID: "native-smoke"}, env, "", "", fmt.Sprintf("native-%s-canceled", provider), "", nil, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -295,7 +295,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					otherRuntime, _, err := d.nativeRuntime(t.Context(), other, otherExe)
+					otherRuntime, _, err := d.nativeRuntime(t.Context(), other, otherExe, "")
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -307,7 +307,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 					if err := os.WriteFile(switchInput, []byte("provider-switch"), 0600); err != nil {
 						t.Fatal(err)
 					}
-					otherBackend, err := d.sandboxedBackend(other, agent.Config{ExecutablePath: otherExe, TaskID: "native-switch", Env: otherRuntime.Env, Logger: d.logger, BuiltinRuntime: true}, switched, "", "", fmt.Sprintf("native-switch-%s-%d", provider, time.Now().UnixNano()), nil, nil)
+					otherBackend, err := d.sandboxedBackend(other, agent.Config{ExecutablePath: otherExe, TaskID: "native-switch", Env: otherRuntime.Env, Logger: d.logger, BuiltinRuntime: true}, switched, "", "", fmt.Sprintf("native-switch-%s-%d", provider, time.Now().UnixNano()), "", nil, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -341,7 +341,7 @@ func TestRealProviderNativeWorkers(t *testing.T) {
 					}
 					prompt = "First use a shell tool to run cat input.txt so its literal text appears in the tool output. Then copy its exact bytes into " + name + " in the current workspace. Remember that literal text for a later turn. Do not call external services or Multica commands. Then say done."
 				}
-				backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: executable, TaskID: "native-smoke", Env: selected.Env, Logger: d.logger, BuiltinRuntime: true}, env, "", "", fmt.Sprintf("native-%s-%s-%d", provider, round, time.Now().UnixNano()), nil, nil)
+				backend, err := d.sandboxedBackend(provider, agent.Config{ExecutablePath: executable, TaskID: "native-smoke", Env: selected.Env, Logger: d.logger, BuiltinRuntime: true}, env, "", "", fmt.Sprintf("native-%s-%s-%d", provider, round, time.Now().UnixNano()), "", nil, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -389,7 +389,7 @@ func TestRealNativeOpenCodeHostWorkerContinuity(t *testing.T) {
 	}
 	root := t.TempDir()
 	d := newRealNativeSmokeDaemon(root, worker)
-	runtime, _, err := d.nativeRuntime(t.Context(), "opencode", executable)
+	runtime, _, err := d.nativeRuntime(t.Context(), "opencode", executable, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestRealNativeOpenCodeHostWorkerContinuity(t *testing.T) {
 		config := agent.Config{ExecutablePath: executable, CLIVersion: runtime.Version, Env: runtime.Env, Logger: d.logger, BuiltinRuntime: true, TaskID: "native-bridge"}
 		var backend agent.Backend
 		if kind == "worker_resume" {
-			backend, err = d.sandboxedBackend("opencode", config, env, "", "", "opencode-bridge", nil, nil)
+			backend, err = d.sandboxedBackend("opencode", config, env, "", "", "opencode-bridge", "", nil, nil)
 		} else {
 			backend, err = agent.ResolveBackend("opencode", config)
 		}
@@ -462,7 +462,7 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 			}
 			root := t.TempDir()
 			d := newRealNativeSmokeDaemon(root, worker)
-			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable)
+			runtime, _, err := d.nativeRuntime(t.Context(), provider, executable, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -492,7 +492,7 @@ func TestRealNativeProfileHostAndTwoWorkers(t *testing.T) {
 				if name == "host" {
 					backend, err = agent.ResolveBackend(provider, config)
 				} else {
-					backend, err = d.sandboxedBackend(provider, config, env, "", "", fmt.Sprintf("native-concurrent-%s-%s-%d", provider, name, time.Now().UnixNano()), nil, nil)
+					backend, err = d.sandboxedBackend(provider, config, env, "", "", fmt.Sprintf("native-concurrent-%s-%s-%d", provider, name, time.Now().UnixNano()), "", nil, nil)
 				}
 				if err != nil {
 					t.Fatal(err)

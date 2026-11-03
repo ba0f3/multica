@@ -51,7 +51,7 @@ printf '%s\n' '{"type":"result","result":{"Status":"completed"}}'
 	// The first attempt primes resolver, resource preflight and worker pages.
 	for i := range 101 {
 		attempt := fmt.Sprintf("native-latency-%d-%d", os.Getpid(), i)
-		backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe, TaskID: attempt}, env, "", "", attempt, nil, nil)
+		backend, err := d.sandboxedBackend("opencode", agent.Config{ExecutablePath: exe, TaskID: attempt}, env, "", "", attempt, "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
