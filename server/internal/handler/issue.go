@@ -3528,6 +3528,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			"the target status was archived while this request was in flight; reload the status list and retry")
 		return
 	}
+	if errors.Is(err, service.ErrQuickCreateOriginMismatch) {
+		writeError(w, http.StatusForbidden, "quick-create origin must be the authenticated task")
+		return
+	}
 	if writeIssueCreatePropertyError(w, err) {
 		return
 	}
@@ -4199,8 +4203,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
 	if willRun {
-		actorUserID := h.executionActorUserID(r, actorType, actorID)
-		h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, handoffNote)
+		if actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID); ok {
+			h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, handoffNote)
+		}
 	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
@@ -4955,8 +4960,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 		}
 		if willRun {
-			actorUserID := h.executionActorUserID(r, actorType, actorID)
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, batchHandoffNote)
+			if actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID); ok {
+				h.dispatchIssueRun(r.Context(), issue, trigger, actorUserID, actorType, actorID, batchHandoffNote)
+			}
 		}
 
 		// No status change — not even → cancelled — cancels active tasks here,

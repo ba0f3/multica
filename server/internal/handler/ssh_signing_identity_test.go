@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,6 +52,43 @@ func TestRerunIssue_ExecutionPrincipalOverridesSourceOriginator(t *testing.T) {
 	}
 	if originator != userA {
 		t.Fatalf("rerun originator = %q, want execution principal %q (not source %q)", originator, userA, userB)
+	}
+}
+
+// TestRerunIssue_AgentTerminalTaskRefusesCredentialEnqueue is issue #109 F1
+// (terminal authenticated task must not fall back to issue creator identity).
+func TestRerunIssue_AgentTerminalTaskRefusesCredentialEnqueue(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	userA := seedSecurityTestOwner(t, "ssh-sign-agent-a")
+	userB := seedSecurityTestOwner(t, "ssh-sign-agent-b")
+	runtimeID := createCascadeFixtureRuntime(t, ctx, "ssh-sign agent rerun")
+	agentID := seedPublicWorkspaceAgent(t, ctx, runtimeID, userA)
+
+	issueID := seedMemberIssueAssignedToAgent(t, ctx, userB, agentID)
+	terminalTaskID := seedIssueTaskWithOriginator(t, ctx, issueID, agentID, runtimeID, userA)
+
+	var before int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&before); err != nil {
+		t.Fatalf("count tasks: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest("POST", "/api/issues/"+issueID+"/rerun", nil), "id", issueID)
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Task-ID", terminalTaskID)
+	testHandler.RerunIssue(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("RerunIssue with terminal agent task token: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var after int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&after); err != nil {
+		t.Fatalf("count tasks after: %v", err)
+	}
+	if after != before {
+		t.Fatalf("task count changed from %d to %d; must not enqueue with B's identity", before, after)
 	}
 }
 
@@ -116,7 +154,7 @@ func TestIssueService_QuickCreateOriginMustMatchAuthenticatedTask(t *testing.T) 
 	_, err := testHandler.IssueService.Create(ctx, service.IssueCreateParams{
 		WorkspaceID:         util.MustParseUUID(testWorkspaceID),
 		Title:               "bad origin",
-		Status:              "open",
+		Status:              "todo",
 		Priority:            "medium",
 		CreatorType:         "agent",
 		CreatorID:           util.MustParseUUID(agentID),
@@ -126,6 +164,9 @@ func TestIssueService_QuickCreateOriginMustMatchAuthenticatedTask(t *testing.T) 
 	}, service.IssueCreateOpts{})
 	if err == nil {
 		t.Fatal("expected create to reject foreign quick_create origin")
+	}
+	if !errors.Is(err, service.ErrQuickCreateOriginMismatch) {
+		t.Fatalf("Create: err = %v, want ErrQuickCreateOriginMismatch", err)
 	}
 }
 

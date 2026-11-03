@@ -243,10 +243,13 @@ func nativeExecutionProfileHome(request NativeRuntimeRequest) string {
 
 func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]string, error) {
 	home := nativeExecutionProfileHome(request)
+	scopedExecutionUser := strings.TrimSpace(request.ExecutionUserID) != ""
 	choose := func(key, fallback string) string {
-		if value := request.Env[key]; value != "" {
-			result.Env[key] = value
-			return value
+		if !scopedExecutionUser {
+			if value := request.Env[key]; value != "" {
+				result.Env[key] = value
+				return value
+			}
 		}
 		result.Env[key] = fallback
 		return fallback
@@ -256,8 +259,10 @@ func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]
 		return []string{choose("CODEX_HOME", filepath.Join(home, ".codex"))}, nil
 	case "cursor":
 		paths := []string{filepath.Join(home, ".cursor"), choose("CURSOR_CONFIG_DIR", filepath.Join(home, ".config", "cursor")), filepath.Join(home, ".cache", "cursor-compile-cache")}
-		if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
-			paths = append(paths, choose("CURSOR_DATA_DIR", selected))
+		if !scopedExecutionUser {
+			if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
+				paths = append(paths, choose("CURSOR_DATA_DIR", selected))
+			}
 		}
 		return paths, nil
 	case "opencode":
@@ -266,8 +271,10 @@ func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]
 		stateHome := choose("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 		cacheHome := choose("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 		config := filepath.Join(configHome, "opencode")
-		if selected := request.Env["OPENCODE_CONFIG_DIR"]; selected != "" {
-			config = choose("OPENCODE_CONFIG_DIR", selected)
+		if !scopedExecutionUser {
+			if selected := request.Env["OPENCODE_CONFIG_DIR"]; selected != "" {
+				config = choose("OPENCODE_CONFIG_DIR", selected)
+			}
 		}
 		return []string{filepath.Join(dataHome, "opencode"), config, filepath.Join(stateHome, "opencode"), filepath.Join(cacheHome, "opencode")}, nil
 	default:

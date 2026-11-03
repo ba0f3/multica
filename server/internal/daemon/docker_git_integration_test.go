@@ -156,7 +156,7 @@ func testWorkerGitRoundTrip(t *testing.T, mode string) {
 	} else {
 		d.cfg.TaskSandboxBackend, d.cfg.SandboxSelfPath = "bwrap", os.Getenv("MULTICA_GIT_SMOKE_WORKER")
 		d.cfg.DockerMemoryBytes, d.cfg.DockerPIDsLimit, d.cfg.DockerNanoCPUs = 2<<30, 512, 2e9
-		backend, err := d.bwrapBackend("codex", agent.Config{ExecutablePath: exe, Env: values}, env, profile, socket, fmt.Sprintf("git-%d", time.Now().UnixNano()), []workercheckout.Entry{entry}, nil)
+		backend, err := d.bwrapBackend("codex", agent.Config{ExecutablePath: exe, Env: values}, env, profile, socket, fmt.Sprintf("git-%d", time.Now().UnixNano()), "", []workercheckout.Entry{entry}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

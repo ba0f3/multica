@@ -318,6 +318,17 @@ func (h *Handler) executionActorUserID(r *http.Request, actorType, actorID strin
 	return pgtype.UUID{}
 }
 
+// credentialEnqueueActorUserID resolves the execution principal for a new
+// credential-bearing run. Agent actors without a live authenticated task (including
+// a terminal X-Task-ID) must not enqueue — issue #109 F1.
+func (h *Handler) credentialEnqueueActorUserID(r *http.Request, actorType, actorID string) (pgtype.UUID, bool) {
+	uid := h.executionActorUserID(r, actorType, actorID)
+	if actorType == "agent" && !uid.Valid {
+		return pgtype.UUID{}, false
+	}
+	return uid, true
+}
+
 // requestExecutionUserID names the human behind this HTTP actor for
 // credential-bearing operations (supplement/steering; issue #109 F3).
 func (h *Handler) requestExecutionUserID(r *http.Request, actorType, actorID string) string {

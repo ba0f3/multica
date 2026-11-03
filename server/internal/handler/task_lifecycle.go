@@ -232,7 +232,11 @@ func (h *Handler) rerunIssue(w http.ResponseWriter, r *http.Request, issue db.Is
 	}
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	actorUserID := h.executionActorUserID(r, actorType, actorID)
+	actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID)
+	if !ok {
+		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
+		return
+	}
 
 	// Re-validate the operator's invoke permission on the resolved target agent
 	// before cancelling / creating anything (MUL-4525). Issue visibility does not
