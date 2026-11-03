@@ -541,7 +541,9 @@ func TestPiExecuteTurnErrorGraceWaitsForInFlightTool(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	const grace = 60 * time.Millisecond
+	// Grace must outlast a race-detector stall between tool_execution_end
+	// (which rearms the timer) and the following turn_start (which clears it).
+	const grace = 300 * time.Millisecond
 	script := "#!/bin/sh\n" +
 		"cat > /dev/null\n" +
 		`printf '%s\n' '{"type":"turn_start"}'` + "\n" +

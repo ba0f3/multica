@@ -84,6 +84,27 @@ func closePiReadPipe(pipe io.ReadCloser) {
 	_ = pipe.Close()
 }
 
+// drainPiStderr lets the stderr copier pull any bytes already in the pipe
+// (including a resume-refusal marker) before the read end is closed. Closing
+// first would discard the kernel buffer; never closing would hang when a
+// descendant inherits the write end. A short deadline wakes a blocked Read
+// so Copy can finish or make progress, then Close releases any inherited
+// write-end holders.
+func drainPiStderr(stderr io.ReadCloser, done <-chan struct{}) {
+	const drainWindow = 100 * time.Millisecond
+	if deadlinePipe, ok := stderr.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = deadlinePipe.SetReadDeadline(time.Now().Add(drainWindow))
+	}
+	select {
+	case <-done:
+		closePiReadPipe(stderr)
+		return
+	case <-time.After(drainWindow + 50*time.Millisecond):
+		closePiReadPipe(stderr)
+		<-done
+	}
+}
+
 // observeEvent records a parseable Pi protocol event. Recovery events clear a
 // stale provider error; every other event gives an unresolved error a fresh
 // grace window. Tool accounting is kept inside the adapter so an error timer
@@ -516,7 +537,11 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	}
 	closePipes := func() {
 		closePiReadPipe(stdout)
-		closePiReadPipe(stderrRead)
+		// stderrRead is closed only after drainPiStderr below: closing the
+		// read end discards the kernel pipe buffer, which under scheduling
+		// pressure can drop Pi's resume-refusal marker before
+		// Result.ResumeRejected is decided (release CI flake). Descendants
+		// that inherited stderr are still released by that later close.
 	}
 	finishCleanup := func() error { return cleanup.finish(cmd, closeStdin, closePipes, grace) }
 
@@ -747,7 +772,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		} else {
 			cleanupErr = cleanup.complete(closeStdin, closePipes)
 		}
-		<-stderrDone
+		drainPiStderr(stderrRead, stderrDone)
 
 		waitErr := cmd.Wait()
 		releaseProcessGroup(cmd)

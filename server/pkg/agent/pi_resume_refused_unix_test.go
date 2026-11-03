@@ -43,9 +43,10 @@ func TestPiExecuteReportsRefusedResume(t *testing.T) {
 			}
 
 			// Mirrors Pi's own output: the refusal on stderr, nothing on
-			// stdout, exit 1.
+			// stdout, exit 1. Write stderr before reading stdin so the marker
+			// is in the pipe even if the parent races ahead on cleanup.
 			script := fmt.Sprintf(
-				"#!/bin/sh\ncat >/dev/null\necho %q >&2\nexit 1\n",
+				"#!/bin/sh\nprintf '%%s\\n' %q >&2\ncat >/dev/null\nexit 1\n",
 				piResumeRefusedMarker+": /gone",
 			)
 			fakePath := filepath.Join(base, "pi")
