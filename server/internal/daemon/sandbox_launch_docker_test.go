@@ -110,7 +110,7 @@ func TestDockerBackendBindsClaudeAndAntigravity(t *testing.T) {
 				wantSettingsBind = settings + ":" + sandbox.ClaudeSettingsPath + ":ro"
 			}
 
-			backend, err := daemon.sandboxedBackend(provider, config, env, "", "", "attempt-"+provider, nil, nil)
+			backend, err := daemon.sandboxedBackend(provider, config, env, "", "", "attempt-"+provider, "", nil, nil)
 			if err != nil {
 				t.Fatalf("sandboxedBackend(%s): %v", provider, err)
 			}
@@ -217,7 +217,7 @@ func dockerBackendArgv(t *testing.T, repos []workercheckout.Entry, extraCachePat
 	backend, err := daemon.sandboxedBackend("codex", agent.Config{
 		TaskID:         "task-1",
 		ExecutablePath: fakeCodex,
-	}, env, "", "", "attempt-docker-1", repos, extraCachePaths)
+	}, env, "", "", "attempt-docker-1", "", repos, extraCachePaths)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -267,7 +267,7 @@ func collectSandboxSession(ctx context.Context, t *testing.T, session *agent.Ses
 func TestProtectedModeFailsClosedWithoutSandbox(t *testing.T) {
 	daemon := &Daemon{logger: newDiscardLogger()}
 	daemon.cfg.TaskProtectedMode = true
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{}, newSandboxTestEnv(t), "", "", "attempt-1", "", nil, nil)
 	if err == nil {
 		t.Fatal("expected protected mode to refuse host execution")
 	}
@@ -364,7 +364,7 @@ func TestDockerBackendRejectsRepoCacheOverlappingWorkdir(t *testing.T) {
 		tempDir,                              // equals the temp
 		env.MulticaConfigRoot,                // equals the config root
 	} {
-		_, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-1",
+		_, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1"}, env, "", "", "attempt-1", "",
 			[]workercheckout.Entry{{URL: "https://example.com/a", CachePath: cachePath}}, nil)
 		if err == nil {
 			t.Errorf("cache path %q overlapping a sandbox root was accepted", cachePath)
@@ -559,7 +559,7 @@ func dockerBackendArgvForProvider(t *testing.T, provider string, config agent.Co
 	for _, fn := range setup {
 		fn(env)
 	}
-	backend, err := daemon.sandboxedBackend(provider, config, env, "", "", "attempt-"+provider, nil, nil)
+	backend, err := daemon.sandboxedBackend(provider, config, env, "", "", "attempt-"+provider, "", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend(%s): %v", provider, err)
 	}

@@ -189,11 +189,18 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 	if steer.empty() || len(triggers) == 0 || (actorType != "member" && actorType != "agent") {
 		return triggers, nil
 	}
+	requestExecutionUserID := originatorUserID
+	if actorType == "member" {
+		requestExecutionUserID = actorID
+	}
 	// Each chosen turn names its agent; only a turn of this issue counts.
 	chosen := make(map[string]pgtype.UUID, len(steer.TaskIDs))
 	for _, taskID := range steer.TaskIDs {
 		task, err := h.Queries.GetAgentTask(ctx, taskID)
 		if err != nil || task.IssueID != issue.ID {
+			continue
+		}
+		if !mayControlCredentialTaskForActor(task, requestExecutionUserID) {
 			continue
 		}
 		chosen[uuidToString(task.AgentID)] = task.ID
@@ -207,7 +214,12 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 			running, err := h.Queries.GetRunningTaskForAgentOnIssue(ctx, db.GetRunningTaskForAgentOnIssueParams{
 				IssueID: issue.ID, AgentID: trigger.Agent.ID,
 			})
-			taskID, ok = running, err == nil
+			if err == nil {
+				runTask, loadErr := h.Queries.GetAgentTask(ctx, running)
+				if loadErr == nil && mayControlCredentialTaskForActor(runTask, requestExecutionUserID) {
+					taskID, ok = running, true
+				}
+			}
 		}
 		if !ok {
 			kept = append(kept, trigger)
@@ -295,6 +307,11 @@ func (h *Handler) loadTaskSupplementTarget(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil || !h.canInvokeAgent(r.Context(), agent, "member", userID, userID, uuidToString(issue.WorkspaceID)) {
 		writeErrorCode(w, http.StatusForbidden, "invocation_not_allowed", "you cannot run this agent")
+		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+	}
+	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	if !h.mayControlCredentialTask(r, task, actorType, actorID) {
+		writeErrorCode(w, http.StatusForbidden, "invocation_not_allowed", "you cannot steer this run")
 		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
 	}
 	return issue, task, authorID, true

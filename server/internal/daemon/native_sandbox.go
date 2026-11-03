@@ -27,7 +27,7 @@ func (d *Daemon) usesNativeSandbox() bool {
 	return d.cfg.SandboxEnabled && d.cfg.TaskSandboxBackend == "bwrap"
 }
 
-func (d *Daemon) nativeRuntime(ctx context.Context, provider, executable string) (sandbox.NativeRuntime, nativeResourceScope, error) {
+func (d *Daemon) nativeRuntime(ctx context.Context, provider, executable, executionUserID string) (sandbox.NativeRuntime, nativeResourceScope, error) {
 	d.nativeMu.Lock()
 	if d.nativeScope == nil {
 		d.nativeScope = &sandbox.NativeScope{BwrapPath: d.cfg.BwrapPath, Limits: sandbox.NativeLimits{MemoryBytes: d.cfg.DockerMemoryBytes, PIDsLimit: d.cfg.DockerPIDsLimit, NanoCPUs: d.cfg.DockerNanoCPUs}}
@@ -41,7 +41,7 @@ func (d *Daemon) nativeRuntime(ctx context.Context, provider, executable string)
 	if err := scope.Preflight(ctx); err != nil {
 		return sandbox.NativeRuntime{}, nil, fmt.Errorf("%w: native resource preflight: %w", errSandboxUnavailable, err)
 	}
-	request, err := d.nativeRuntimeRequest(provider, executable)
+	request, err := d.nativeRuntimeRequest(provider, executable, executionUserID)
 	if err != nil {
 		return sandbox.NativeRuntime{}, nil, err
 	}
@@ -54,7 +54,7 @@ func (d *Daemon) nativeRuntime(ctx context.Context, provider, executable string)
 
 var nativeSelectorKeys = []string{"CODEX_HOME", "CURSOR_DATA_DIR", "CURSOR_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}
 
-func (d *Daemon) nativeRuntimeRequest(provider, executable string) (sandbox.NativeRuntimeRequest, error) {
+func (d *Daemon) nativeRuntimeRequest(provider, executable, executionUserID string) (sandbox.NativeRuntimeRequest, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return sandbox.NativeRuntimeRequest{}, err
@@ -66,13 +66,13 @@ func (d *Daemon) nativeRuntimeRequest(provider, executable string) (sandbox.Nati
 		}
 	}
 	env["PATH"] = os.Getenv("PATH")
-	return sandbox.NativeRuntimeRequest{Provider: provider, Executable: executable, Home: home, Env: env, ForbiddenRoots: []string{d.cfg.WorkspacesRoot}}, nil
+	return sandbox.NativeRuntimeRequest{Provider: provider, Executable: executable, Home: home, ExecutionUserID: executionUserID, Env: env, ForbiddenRoots: []string{d.cfg.WorkspacesRoot}}, nil
 }
 
 // Version probes get an empty home and no repository, task credentials or shared
 // profile. A mutable provider config must not load plugins in the host daemon.
 func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable string) (string, error) {
-	request, err := d.nativeRuntimeRequest(provider, executable)
+	request, err := d.nativeRuntimeRequest(provider, executable, "")
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +123,7 @@ func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable s
 	}
 	probeEnv["PATH"] = strings.Join(append(append([]string{}, layout.BinDirs...), sandboxPath()), string(os.PathListSeparator))
 	policy := sandbox.Policy{TaskRoot: root, HomeDir: filepath.Join(root, "home"), HostHome: layout.Home, TempDir: filepath.Join(root, "tmp"), CheckoutDir: filepath.Join(root, "cwd"), ExtraMounts: extras, Links: layout.Links, AllowedRoots: []string{root}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(layout.Home, ".multica"), filepath.Join(layout.Home, ".ssh"), filepath.Join(layout.Home, ".docker")}, AllowedExactPaths: extraMountSources(extras), Env: probeEnv, Command: []string{executable, "--version"}}
-	args, err := sandbox.BuildArgs(policy, self)
+	args, err := sandbox.BuildRestrictedArgs(policy, self)
 	if err != nil {
 		return "", err
 	}
@@ -203,7 +203,7 @@ func (b *nativeAttemptBackend) Execute(ctx context.Context, prompt string, opts 
 	return session, err
 }
 
-func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv.Environment, profileDir, agentSocket, attemptID string, repos []workercheckout.Entry, extraCachePaths []string) (agent.Backend, error) {
+func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv.Environment, profileDir, agentSocket, attemptID, executionUserID string, repos []workercheckout.Entry, extraCachePaths []string) (agent.Backend, error) {
 	if env == nil {
 		return nil, fmt.Errorf("%w: no execution environment", errSandboxUnavailable)
 	}
@@ -217,7 +217,7 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	if _, err := exec.LookPath(bwrap); err != nil {
 		return nil, fmt.Errorf("%w: bwrap executable: %w", errSandboxUnavailable, err)
 	}
-	runtime, scope, err := d.nativeRuntime(context.Background(), provider, config.ExecutablePath)
+	runtime, scope, err := d.nativeRuntime(context.Background(), provider, config.ExecutablePath, executionUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -339,8 +339,8 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 			}
 			mounts = append(mounts, sandbox.Mount{Source: source, Target: target})
 		}
-		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: runtime.Home, TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(runtime.Home, ".multica"), filepath.Join(runtime.Home, ".ssh"), filepath.Join(runtime.Home, ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
-		args, err := sandbox.BuildArgs(policy, self)
+		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: operatorHome(runtime), TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(operatorHome(runtime), ".multica"), filepath.Join(operatorHome(runtime), ".ssh"), filepath.Join(operatorHome(runtime), ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
+		args, err := sandbox.BuildRestrictedArgs(policy, self)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
 		}
@@ -356,7 +356,7 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	return &nativeAttemptBackend{worker: worker, profile: runtime, prepare: prepare}, nil
 }
 
-func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, entry AgentEntry) (AgentEntry, string, *execenv.NativeProfile, error) {
+func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, entry AgentEntry, executionUserID string) (AgentEntry, string, *execenv.NativeProfile, error) {
 	if _, err := os.Stat(entry.Path); err != nil {
 		if entry.Command == "" {
 			return entry, "", nil, fmt.Errorf("native executable is missing: %w", err)
@@ -367,7 +367,7 @@ func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, e
 		}
 		entry.Path = path
 	}
-	runtime, _, err := d.nativeRuntime(ctx, provider, entry.Path)
+	runtime, _, err := d.nativeRuntime(ctx, provider, entry.Path, executionUserID)
 	if err != nil {
 		return entry, "", nil, err
 	}
@@ -375,4 +375,11 @@ func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, e
 		return entry, "", nil, fmt.Errorf("native runtime version: %w", err)
 	}
 	return entry, runtime.Version, &execenv.NativeProfile{Home: runtime.Home, Env: runtime.Env}, nil
+}
+
+func operatorHome(runtime sandbox.NativeRuntime) string {
+	if runtime.OperatorHome != "" {
+		return runtime.OperatorHome
+	}
+	return runtime.Home
 }

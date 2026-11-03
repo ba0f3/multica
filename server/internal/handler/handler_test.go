@@ -288,10 +288,12 @@ func createHandlerTestTaskForAgentOnIssue(t *testing.T, agentID, issueID string)
 	}
 
 	taskID := dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id": handlerTestRuntimeID(t),
-		"status":     "running",
-		"issue_id":   issueArg,
-		"started_at": testutil.Raw("now()"),
+		"runtime_id":           handlerTestRuntimeID(t),
+		"status":               "running",
+		"issue_id":             issueArg,
+		"originator_user_id":   testUserID,
+		"accountable_user_id":  testUserID,
+		"started_at":           testutil.Raw("now()"),
 	})
 	return taskID
 }

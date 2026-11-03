@@ -289,6 +289,81 @@ func (h *Handler) taskFromRequestHeader(r *http.Request) (db.AgentTaskQueue, boo
 	return task, true
 }
 
+// memberActorUserID returns the acting member's user id when the actor is a
+// member. An agent actor id is not a human and must never become execution
+// principal by itself (MUL-4302 §4; issue #109 F1).
+func memberActorUserID(actorType, actorID string) pgtype.UUID {
+	if actorType != "member" {
+		return pgtype.UUID{}
+	}
+	uid, err := util.ParseUUID(actorID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return uid
+}
+
+// executionActorUserID is the human whose SSH/Git credentials a new task run
+// must use. Members act as themselves; agent actors inherit the originator of
+// the authenticated task (X-Task-ID), matching invokeOriginatorFromRequest.
+func (h *Handler) executionActorUserID(r *http.Request, actorType, actorID string) pgtype.UUID {
+	if uid := memberActorUserID(actorType, actorID); uid.Valid {
+		return uid
+	}
+	if originator := h.invokeOriginatorFromRequest(r, actorType, actorID); originator != "" {
+		if uid, err := util.ParseUUID(originator); err == nil {
+			return uid
+		}
+	}
+	return pgtype.UUID{}
+}
+
+// credentialEnqueueActorUserID resolves the execution principal for a new
+// credential-bearing run. Agent actors without a live authenticated task (including
+// a terminal X-Task-ID) must not enqueue — issue #109 F1.
+func (h *Handler) credentialEnqueueActorUserID(r *http.Request, actorType, actorID string) (pgtype.UUID, bool) {
+	uid := h.executionActorUserID(r, actorType, actorID)
+	if actorType == "agent" && !uid.Valid {
+		return pgtype.UUID{}, false
+	}
+	return uid, true
+}
+
+// requestExecutionUserID names the human behind this HTTP actor for
+// credential-bearing operations (supplement/steering; issue #109 F3).
+func (h *Handler) requestExecutionUserID(r *http.Request, actorType, actorID string) string {
+	if actorType == "member" {
+		return actorID
+	}
+	return h.invokeOriginatorFromRequest(r, actorType, actorID)
+}
+
+// mayControlCredentialTask reports whether the caller may steer or supplement a
+// run that holds another user's signing identity. Collaboration on the issue
+// does not grant use of the task execution principal's Git credentials.
+func (h *Handler) mayControlCredentialTask(r *http.Request, task db.AgentTaskQueue, actorType, actorID string) bool {
+	if !task.OriginatorUserID.Valid {
+		return true
+	}
+	requester := h.requestExecutionUserID(r, actorType, actorID)
+	if requester == "" {
+		return false
+	}
+	return requester == uuidToString(task.OriginatorUserID)
+}
+
+// mayControlCredentialTaskForActor is the steer/comment path variant without
+// an http.Request; the caller already resolved the execution user id.
+func mayControlCredentialTaskForActor(task db.AgentTaskQueue, requestExecutionUserID string) bool {
+	if !task.OriginatorUserID.Valid {
+		return true
+	}
+	if requestExecutionUserID == "" {
+		return false
+	}
+	return requestExecutionUserID == uuidToString(task.OriginatorUserID)
+}
+
 // accessibleAgentIDs returns the set of agent IDs in the workspace the actor
 // is allowed to see, for use by workspace-wide aggregation endpoints
 // (run counts, activity histograms, task snapshots) that need to filter out

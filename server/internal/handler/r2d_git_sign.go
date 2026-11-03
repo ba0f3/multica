@@ -2,10 +2,13 @@ package handler
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/r2dgit"
 )
 
 // maxGitSignaturePayload bounds the bytes a daemon may ask the server to
@@ -34,13 +37,20 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	if !h.requireTaskRuntimeOwnedByDaemon(w, r, task, daemonID) {
 		return
 	}
+	if !taskEligibleForNewSigningLease(task) {
+		writeErrorCode(w, http.StatusForbidden, "git_signing_unavailable", "Git signing is not available for this task.")
+		return
+	}
 	service, ok := h.gitService(w)
 	if !ok {
 		return
 	}
 	var body struct {
 		ProviderID string `json:"provider_id"`
-		AttemptID  string `json:"attempt_id"`
+		// Existing daemons send their local attempt id. Accept it for wire
+		// compatibility with the strict JSON decoder, but never use it as
+		// authority: the lease scope comes only from the server task row.
+		AttemptID string `json:"attempt_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
 		return
@@ -50,12 +60,43 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := service.OpenSigningLease(r.Context(), taskID, body.AttemptID, body.ProviderID, daemonID)
+	lease, err := service.OpenSigningLease(r.Context(), taskID, taskSigningAttemptID(task.Attempt, task.DispatchedAt), body.ProviderID, daemonID)
 	if err != nil {
 		gitServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lease)
+}
+
+func taskSigningAttemptID(attempt int32, dispatchedAt pgtype.Timestamptz) string {
+	if dispatchedAt.Valid {
+		return fmt.Sprintf("%d:%d", attempt, dispatchedAt.Time.UTC().UnixNano())
+	}
+	return fmt.Sprintf("%d:undispatched", attempt)
+}
+
+func (h *Handler) requireGitSigningLeaseTaskEligible(w http.ResponseWriter, r *http.Request, service *r2dgit.Service, leaseID, daemonID string) bool {
+	taskID, leaseAttemptID, err := service.LeaseScope(r.Context(), leaseID, daemonID)
+	if err != nil {
+		gitServiceError(w, err)
+		return false
+	}
+	task, _, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
+		return false
+	}
+	if !h.requireTaskRuntimeOwnedByDaemon(w, r, task, daemonID) {
+		return false
+	}
+	if !taskEligibleForNewSigningLease(task) {
+		writeErrorCode(w, http.StatusForbidden, "git_signing_unavailable", "Git signing is not available for this task.")
+		return false
+	}
+	if leaseAttemptID != taskSigningAttemptID(task.Attempt, task.DispatchedAt) {
+		writeErrorCode(w, http.StatusForbidden, "git_signing_stale_attempt", "Git signing lease belongs to an older task attempt.")
+		return false
+	}
+	return true
 }
 
 // SignGitData signs bytes with the key a lease is bound to.
@@ -96,6 +137,9 @@ func (h *Handler) SignGitData(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "git_invalid_request", "The payload to sign is too large.")
 		return
 	}
+	if !h.requireGitSigningLeaseTaskEligible(w, r, service, body.LeaseID, daemonID) {
+		return
+	}
 
 	signature, err := service.Sign(r.Context(), body.LeaseID, daemonID, payload)
 	if err != nil {
@@ -121,6 +165,9 @@ func (h *Handler) RenewGitSigningLease(w http.ResponseWriter, r *http.Request) {
 		LeaseID string `json:"lease_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
+		return
+	}
+	if !h.requireGitSigningLeaseTaskEligible(w, r, service, body.LeaseID, daemonID) {
 		return
 	}
 	if err := service.RenewSigningLease(r.Context(), body.LeaseID, daemonID); err != nil {

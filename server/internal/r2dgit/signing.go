@@ -225,6 +225,47 @@ func (s *Service) OpenSigningLease(ctx context.Context, taskID, attemptID, provi
 	}, nil
 }
 
+// LeaseScope returns the task and server-authoritative attempt scope a live
+// lease belongs to after checking the daemon. Callers use both values to reject
+// a lease from an older dispatch of the same task.
+func (s *Service) LeaseScope(_ context.Context, leaseID, daemonID string) (taskID, attemptID string, err error) {
+	if !s.available() {
+		return "", "", ErrUnavailable
+	}
+	now := s.now().UTC()
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
+	lease, ok := s.leases[leaseID]
+	if !ok || daemonID == "" || lease.DaemonID != daemonID {
+		return "", "", ErrScope
+	}
+	if !now.Before(lease.ExpiresAt) || lease.Revoked {
+		return "", "", ErrScope
+	}
+	return lease.TaskID, lease.AttemptID, nil
+}
+
+// LeaseTaskID is kept for callers that only need the task identity.
+func (s *Service) LeaseTaskID(ctx context.Context, leaseID, daemonID string) (string, error) {
+	taskID, _, err := s.LeaseScope(ctx, leaseID, daemonID)
+	return taskID, err
+}
+
+// activeLeaseKey checks durable identity state, not just the historical key row
+// or this process's lease cache. Rotation on another backend leaves old key rows
+// Ready and cannot directly invalidate this process's in-memory leases.
+func (s *Service) activeLeaseKey(ctx context.Context, lease *signingLease) (Key, error) {
+	identity, err := s.store.GetIdentityForUser(ctx, lease.UserID, lease.ProviderID)
+	if err != nil || identity.ID != lease.IdentityID || identity.Revoked || identity.ActiveGeneration != lease.Generation {
+		return Key{}, ErrRevoked
+	}
+	key, err := s.store.GetKey(ctx, lease.IdentityID, lease.Generation)
+	if err != nil || key.State != Ready {
+		return Key{}, ErrRevoked
+	}
+	return key, nil
+}
+
 // RenewSigningLease extends an active daemon's lease without signing data.
 func (s *Service) RenewSigningLease(ctx context.Context, leaseID, daemonID string) error {
 	if !s.available() {
@@ -240,9 +281,8 @@ func (s *Service) RenewSigningLease(ctx context.Context, leaseID, daemonID strin
 	if lease.Revoked {
 		return ErrRevoked
 	}
-	key, err := s.store.GetKey(ctx, lease.IdentityID, lease.Generation)
-	if err != nil || key.State != Ready {
-		return ErrRevoked
+	if _, err := s.activeLeaseKey(ctx, lease); err != nil {
+		return err
 	}
 	next := now.Add(s.leaseTTL)
 	if cap := lease.IssuedAt.Add(maxSigningLeaseLifetime); next.After(cap) {
@@ -254,9 +294,8 @@ func (s *Service) RenewSigningLease(ctx context.Context, leaseID, daemonID strin
 
 // Sign signs data with the key a lease is bound to.
 //
-// The key is re-read before every signature: a lease that was issued before
-// a revocation must stop working the moment the key is revoked, and a lease
-// that outlives its key must not sign with a replacement generation.
+// Both the active identity generation and the key state are re-read before
+// every signature, including when rotation happened on a different backend.
 func (s *Service) Sign(ctx context.Context, leaseID, daemonID string, data []byte) ([]byte, error) {
 	if !s.available() {
 		return nil, ErrUnavailable
@@ -296,12 +335,9 @@ func (s *Service) Sign(ctx context.Context, leaseID, daemonID string, data []byt
 		return nil, ErrScope
 	}
 
-	key, err := s.store.GetKey(ctx, lease.IdentityID, lease.Generation)
+	key, err := s.activeLeaseKey(ctx, lease)
 	if err != nil {
-		return nil, ErrRevoked
-	}
-	if key.State != Ready {
-		return nil, ErrRevoked
+		return nil, err
 	}
 
 	var signature []byte

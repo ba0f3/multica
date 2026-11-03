@@ -82,31 +82,35 @@ func (h *Handler) shouldSuppressActiveSelfAssignment(ctx context.Context, actorT
 // clients and travels only with a run that actually starts. The squad path
 // still flows through enqueueSquadLeaderTask so the leader access gate and
 // pending dedup stay in one place.
-func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger service.IssueRunTrigger, actorType, actorID, handoffNote string) {
+func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger service.IssueRunTrigger, actorUserID pgtype.UUID, actorType, actorID, handoffNote string) {
 	switch trigger.AssigneeType {
 	case "agent":
-		// The member who performed this assign/promote is the accountable human
-		// for the run (MUL-4302 §4). An agent actor is not a human, so only a
-		// member actor is threaded; otherwise attribution falls back to the chain.
-		_, _ = h.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, memberActorUserID(actorType, actorID))
+		_, _ = h.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, actorUserID)
 	case "squad":
-		h.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, actorType, actorID, handoffNote)
+		h.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, actorUserID, actorType, actorID, handoffNote)
 	}
 }
 
-// memberActorUserID returns the acting member's user id as a pgtype.UUID when the
-// actor is a member, and an invalid UUID otherwise (an agent actor id is not a
-// human and must never become an accountable human). Used to thread the
-// assign/promote actor into the attribution resolver (MUL-4302 §4).
-func memberActorUserID(actorType, actorID string) pgtype.UUID {
-	if actorType != "member" {
-		return pgtype.UUID{}
+// runIssueDispatchAfterWrite performs the enqueue side effect when willRun is
+// true. It returns whether a run actually started and, when blocked, an outcome
+// for HTTP/WS subscribers (MUL-4525; issue #109 F1).
+func (h *Handler) runIssueDispatchAfterWrite(ctx context.Context, r *http.Request, issue db.Issue, trigger service.IssueRunTrigger, willRun bool, actorType, actorID, handoffNote string) (runStarted bool, blocked *DispatchOutcome) {
+	if !willRun {
+		return false, nil
 	}
-	uid, err := util.ParseUUID(actorID)
-	if err != nil {
-		return pgtype.UUID{}
+	actorUserID, ok := h.credentialEnqueueActorUserID(r, actorType, actorID)
+	if !ok {
+		return false, &DispatchOutcome{
+			Status:     DispatchBlocked,
+			ReasonCode: ReasonInvocationNotAllowed,
+			Target: &DispatchTarget{
+				Type: trigger.AssigneeType,
+				ID:   uuidToString(trigger.AgentID),
+			},
+		}
 	}
-	return uid
+	h.dispatchIssueRun(ctx, issue, trigger, actorUserID, actorType, actorID, handoffNote)
+	return true, nil
 }
 
 // IssueTriggerPreviewRequest asks "if I apply this assignee and/or status to

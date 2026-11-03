@@ -78,7 +78,7 @@ func newSandboxTestDaemon(t *testing.T, bwrapPath string) *Daemon {
 
 func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 	daemon := &Daemon{logger: newDiscardLogger()}
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", "", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSandboxBackendIsNilWhenTheSandboxIsDisabled(t *testing.T) {
 
 func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "bwrap"))
-	backend, err := daemon.sandboxedBackend("nonsense", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("nonsense", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", "", nil, nil)
 	if err == nil {
 		t.Fatal("expected unsupported provider to be rejected")
 	}
@@ -107,7 +107,7 @@ func TestSandboxRejectsUnsupportedProvider(t *testing.T) {
 func TestSandboxBackendFailsClosedWhenBwrapIsMissing(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, filepath.Join(t.TempDir(), "no-such-bwrap"))
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", "", nil, nil)
 	if err == nil {
 		t.Fatal("the daemon accepted a sandbox it cannot build")
 	}
@@ -134,7 +134,7 @@ func TestSandboxBackendUsesBwrapWithTheTaskBoundary(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, bwrap)
 	env := newSandboxTestEnv(t)
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1", ExecutablePath: daemon.cfg.SandboxSelfPath}, env, "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1", ExecutablePath: daemon.cfg.SandboxSelfPath}, env, "", "", "attempt-1", "", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestSandboxForbidsTheProfileTreeButAllowsANamedPerTaskPath(t *testing.T) {
 		t.Fatalf("write the fake bwrap: %v", err)
 	}
 	daemon := newSandboxTestDaemon(t, bwrap)
-	if _, err := daemon.sandboxedBackend("codex", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, env, profileRoot, "", "attempt-1", nil, nil); err != nil {
+	if _, err := daemon.sandboxedBackend("codex", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, env, profileRoot, "", "attempt-1", "", nil, nil); err != nil {
 		t.Fatalf("a named per-task path under the profile was refused: %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestSandboxBackendMountsTheSigningSocket(t *testing.T) {
 		t.Fatalf("create socket: %v", err)
 	}
 
-	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1", ExecutablePath: daemon.cfg.SandboxSelfPath}, env, "", socket, "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("codex", agent.Config{TaskID: "task-1", ExecutablePath: daemon.cfg.SandboxSelfPath}, env, "", socket, "attempt-1", "", nil, nil)
 	if err != nil {
 		t.Fatalf("sandboxedBackend: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestSandboxCredentialRootsHonourOperatorAdditions(t *testing.T) {
 func TestSandboxedBackendRejectsClaudeOnBwrap(t *testing.T) {
 	daemon := newSandboxTestDaemon(t, "bwrap")
 	daemon.cfg.TaskSandboxBackend = "bwrap"
-	backend, err := daemon.sandboxedBackend("claude", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", nil, nil)
+	backend, err := daemon.sandboxedBackend("claude", agent.Config{ExecutablePath: daemon.cfg.SandboxSelfPath}, newSandboxTestEnv(t), "", "", "attempt-1", "", nil, nil)
 	if err == nil {
 		t.Fatal("expected claude to be refused on the bwrap backend")
 	}

@@ -8126,7 +8126,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// custom-only host pays no wasted re-resolution.
 		var resolveErr error
 		if d.usesNativeSandbox() {
-			entry, resolvedVersion, nativeProfile, resolveErr = d.resolveNativeAgentEntry(prepareCtx, provider, entry)
+			entry, resolvedVersion, nativeProfile, resolveErr = d.resolveNativeAgentEntry(prepareCtx, provider, entry, task.ExecutionUserID)
 		} else {
 			entry, resolvedVersion, resolveErr = d.resolveAgentEntryForLaunch(prepareCtx, provider, entry)
 		}
@@ -9192,7 +9192,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		env.WorkerCABundlePath = bundlePath
 	}
-	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID, taskRepoCaches, extraCachePaths)
+	sandboxed, sandboxErr := d.sandboxedBackend(provider, backendConfig, env, profileDir, gitSocketPath, attemptID, task.ExecutionUserID, taskRepoCaches, extraCachePaths)
 	if sandboxErr != nil {
 		taskLog.Error("sandbox: the attempt cannot be isolated; refusing to run on the host", "error", sandboxErr)
 		return TaskResult{}, sandboxErr

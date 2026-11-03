@@ -53,6 +53,7 @@ func (d *Daemon) sandboxedBackend(
 	profileDir string,
 	agentSocket string,
 	attemptID string,
+	executionUserID string,
 	repos []workercheckout.Entry,
 	extraCachePaths []string,
 ) (agent.Backend, error) {
@@ -77,7 +78,7 @@ func (d *Daemon) sandboxedBackend(
 	case "docker":
 		return d.dockerBackend(provider, config, env, agentSocket, attemptID, repos, extraCachePaths)
 	case "bwrap":
-		return d.bwrapBackend(provider, config, env, profileDir, agentSocket, attemptID, repos, extraCachePaths)
+		return d.bwrapBackend(provider, config, env, profileDir, agentSocket, attemptID, executionUserID, repos, extraCachePaths)
 	default:
 		return nil, fmt.Errorf("%w: unknown sandbox backend %q", errSandboxUnavailable, backend)
 	}

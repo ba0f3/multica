@@ -97,6 +97,9 @@ type IssueResponse struct {
 	Properties  map[string]any          `json:"properties"`
 	Reactions   []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments []AttachmentResponse    `json:"attachments,omitempty"`
+	// RunDispatch reports a blocked assign/promote enqueue after the issue write
+	// succeeded (MUL-4525). Omitted when no run was attempted or one started.
+	RunDispatch *DispatchOutcome `json:"run_dispatch,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -2772,9 +2775,18 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	actorType, actorID := h.resolveActor(r, requesterID, workspaceID)
 	requesterUUID, ok := parseUUIDOrBadRequest(w, requesterID, "requester_id")
 	if !ok {
 		return
+	}
+	if actorType == "agent" {
+		executionPrincipal, principalOK := h.credentialEnqueueActorUserID(r, actorType, actorID)
+		if !principalOK {
+			h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
+			return
+		}
+		requesterUUID = executionPrincipal
 	}
 
 	// Resolve the actor to the agent that will actually run the task. For
@@ -3365,6 +3377,12 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
+	var authenticatedTaskID pgtype.UUID
+	if creatorType == "agent" {
+		if task, ok := h.taskFromRequestHeader(r); ok {
+			authenticatedTaskID = task.ID
+		}
+	}
 
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a
@@ -3463,9 +3481,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ProjectID:      projectID,
 		StartDate:      startDate,
 		DueDate:        dueDate,
-		OriginType:     originType,
-		OriginID:       originID,
-		Stage:          ptrToInt4(req.Stage),
+		OriginType:          originType,
+		OriginID:            originID,
+		AuthenticatedTaskID: authenticatedTaskID,
+		Stage:               ptrToInt4(req.Stage),
 		AttachmentIDs:  attachmentIDs,
 		LabelIDs:       labelIDs,
 		Properties:     properties,
@@ -3519,6 +3538,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, service.ErrIssueStatusUnavailable) {
 		writeError(w, http.StatusConflict,
 			"the target status was archived while this request was in flight; reload the status list and retry")
+		return
+	}
+	if errors.Is(err, service.ErrQuickCreateOriginMismatch) {
+		writeError(w, http.StatusForbidden, "quick-create origin must be the authenticated task")
 		return
 	}
 	if writeIssueCreatePropertyError(w, err) {
@@ -4128,6 +4151,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	)
 	willRun = willRun && !req.SuppressRun
 
+	runStarted, runBlocked := h.runIssueDispatchAfterWrite(r.Context(), r, issue, trigger, willRun, actorType, actorID, handoffNote)
+
 	updatedPayload := map[string]any{
 		"issue":               resp,
 		"assignee_changed":    assigneeChanged,
@@ -4154,7 +4179,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 	}
 	if handoff != nil {
-		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
+		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), runStarted)
+	}
+	if runBlocked != nil {
+		updatedPayload["run_dispatch"] = runBlocked
 	}
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
 	if attachmentsChanged {
@@ -4191,9 +4219,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil && req.StopPreviousAssigneeRuns {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if willRun {
-		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
-	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
 	// conditions): the write recorded the change; process it now. A failure
@@ -4202,6 +4227,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.processChildEvents(r.Context(), issue.ParentIssueID, prevIssue.ParentIssueID)
 	}
 
+	resp.RunDispatch = runBlocked
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -4922,6 +4948,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 		)
 		willRun = willRun && !req.Updates.SuppressRun
+		runStarted, runBlocked := h.runIssueDispatchAfterWrite(r.Context(), r, issue, trigger, willRun, actorType, actorID, batchHandoffNote)
 		batchPayload := map[string]any{
 			"issue":                      resp,
 			"assignee_changed":           assigneeChanged,
@@ -4933,7 +4960,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 		}
 		if handoff != nil {
-			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
+			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), runStarted)
+		}
+		if runBlocked != nil {
+			batchPayload["run_dispatch"] = runBlocked
 		}
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, batchPayload)
 
@@ -4945,9 +4975,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// drift, MUL-3375). suppress_run applies batch-wide.
 		if handoff != nil && req.Updates.StopPreviousAssigneeRuns {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
-		}
-		if willRun {
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
 
 		// No status change — not even → cancelled — cancels active tasks here,

@@ -15,11 +15,12 @@ import (
 // NativeRuntimeRequest is selected by the daemon from its own runtime account,
 // not from the task's environment or the human who requested a rerun.
 type NativeRuntimeRequest struct {
-	Provider       string
-	Executable     string
-	Home           string
-	Env            map[string]string
-	ForbiddenRoots []string
+	Provider          string
+	Executable        string
+	Home              string
+	ExecutionUserID   string
+	Env               map[string]string
+	ForbiddenRoots    []string
 }
 
 type NativeLink struct {
@@ -30,7 +31,12 @@ type NativeLink struct {
 type NativeRuntime struct {
 	Provider       string
 	Executable     string
+	// Home is the provider profile root selected for this task (scoped per
+	// execution user when ExecutionUserID is set).
 	Home           string
+	// OperatorHome is the daemon/runtime account home used for host-view masks
+	// and other security policy; it must not follow the scoped profile path.
+	OperatorHome   string
 	ProfileKey     string
 	Version        string
 	ReadOnly       []Mount
@@ -151,7 +157,7 @@ func ResolveNativeInstallation(request NativeRuntimeRequest) (NativeRuntime, err
 }
 
 func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []nativeWatch, error) {
-	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, Home: request.Home, Env: make(map[string]string)}
+	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, OperatorHome: request.Home, Home: nativeExecutionProfileHome(request), Env: make(map[string]string)}
 	var watch []nativeWatch
 	profilePaths, err := nativeProfilePaths(request, &result)
 	if err != nil {
@@ -164,6 +170,11 @@ func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []
 		if err := os.MkdirAll(path, 0700); err != nil {
 			return NativeRuntime{}, nil, fmt.Errorf("native sandbox profile directory: %w", err)
 		}
+	}
+	if err := seedNativeExecutionProfile(request, profilePaths); err != nil {
+		return NativeRuntime{}, nil, err
+	}
+	for _, path := range profilePaths {
 		resolved, links, err := nativeResolveLinks(path)
 		if err != nil {
 			return NativeRuntime{}, nil, err
@@ -224,40 +235,87 @@ func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []
 		return NativeRuntime{}, nil, err
 	}
 	// HOME aliases must not create independent leases for the same native store.
-	digest := sha256.Sum256([]byte(request.Provider + "\x00" + primary))
+	digest := sha256.Sum256([]byte(request.Provider + "\x00" + primary + "\x00" + request.ExecutionUserID))
 	result.ProfileKey = hex.EncodeToString(digest[:])
 	return result, watch, nil
 }
 
+// nativeExecutionProfileHome scopes provider writable state per execution user
+// so one native task cannot leave executable config for another user's run
+// (issue #109 F4). An empty ExecutionUserID keeps the legacy runtime-home layout.
+func nativeExecutionProfileHome(request NativeRuntimeRequest) string {
+	if strings.TrimSpace(request.ExecutionUserID) == "" {
+		return request.Home
+	}
+	sum := sha256.Sum256([]byte(request.ExecutionUserID))
+	return filepath.Join(request.Home, "multica-native-execution-profiles", hex.EncodeToString(sum[:16]))
+}
+
 func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]string, error) {
+	specs, err := nativeProfilePathSpecs(request, result)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(specs))
+	for i, spec := range specs {
+		paths[i] = spec.path
+	}
+	return paths, nil
+}
+
+type nativeProfilePathSpec struct {
+	role string
+	path string
+}
+
+func nativeProfilePathSpecs(request NativeRuntimeRequest, result *NativeRuntime) ([]nativeProfilePathSpec, error) {
+	home := nativeExecutionProfileHome(request)
+	scopedExecutionUser := strings.TrimSpace(request.ExecutionUserID) != ""
 	choose := func(key, fallback string) string {
-		if value := request.Env[key]; value != "" {
-			result.Env[key] = value
-			return value
+		if !scopedExecutionUser {
+			if value := request.Env[key]; value != "" {
+				result.Env[key] = value
+				return value
+			}
 		}
 		result.Env[key] = fallback
 		return fallback
 	}
-	home := request.Home
 	switch request.Provider {
 	case "codex":
-		return []string{choose("CODEX_HOME", filepath.Join(home, ".codex"))}, nil
+		return []nativeProfilePathSpec{{role: "codex_home", path: choose("CODEX_HOME", filepath.Join(home, ".codex"))}}, nil
 	case "cursor":
-		paths := []string{filepath.Join(home, ".cursor"), choose("CURSOR_CONFIG_DIR", filepath.Join(home, ".config", "cursor")), filepath.Join(home, ".cache", "cursor-compile-cache")}
-		if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
-			paths = append(paths, choose("CURSOR_DATA_DIR", selected))
+		specs := []nativeProfilePathSpec{
+			{role: "cursor_dot", path: filepath.Join(home, ".cursor")},
+			{role: "cursor_config", path: choose("CURSOR_CONFIG_DIR", filepath.Join(home, ".config", "cursor"))},
+			{role: "cursor_compile_cache", path: filepath.Join(home, ".cache", "cursor-compile-cache")},
 		}
-		return paths, nil
+		if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
+			dataPath := selected
+			if scopedExecutionUser {
+				dataPath = filepath.Join(home, ".cursor-data")
+			}
+			result.Env["CURSOR_DATA_DIR"] = dataPath
+			specs = append(specs, nativeProfilePathSpec{role: "cursor_data", path: dataPath})
+		}
+		return specs, nil
 	case "opencode":
 		configHome := choose("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 		dataHome := choose("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 		stateHome := choose("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 		cacheHome := choose("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 		config := filepath.Join(configHome, "opencode")
-		if selected := request.Env["OPENCODE_CONFIG_DIR"]; selected != "" {
-			config = choose("OPENCODE_CONFIG_DIR", selected)
+		if !scopedExecutionUser {
+			if selected := request.Env["OPENCODE_CONFIG_DIR"]; selected != "" {
+				config = choose("OPENCODE_CONFIG_DIR", selected)
+			}
 		}
-		return []string{filepath.Join(dataHome, "opencode"), config, filepath.Join(stateHome, "opencode"), filepath.Join(cacheHome, "opencode")}, nil
+		return []nativeProfilePathSpec{
+			{role: "opencode_data", path: filepath.Join(dataHome, "opencode")},
+			{role: "opencode_config", path: config},
+			{role: "opencode_state", path: filepath.Join(stateHome, "opencode")},
+			{role: "opencode_cache", path: filepath.Join(cacheHome, "opencode")},
+		}, nil
 	default:
 		return nil, fmt.Errorf("native sandbox: unsupported profile")
 	}

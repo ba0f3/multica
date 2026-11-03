@@ -29,6 +29,21 @@ func (h *Handler) requireDaemonSigningAccess(w http.ResponseWriter, r *http.Requ
 	return daemonID, true
 }
 
+// taskEligibleForNewSigningLease reports whether a task may receive a new Git
+// signing lease. Terminal and not-yet-dispatched rows must not mint credentials
+// (issue #109 F5).
+func taskEligibleForNewSigningLease(task db.AgentTaskQueue) bool {
+	if isTerminalTaskStatus(task.Status) {
+		return false
+	}
+	switch task.Status {
+	case "running", "waiting_local_directory", "dispatched":
+		return true
+	default:
+		return false
+	}
+}
+
 // requireTaskRuntimeOwnedByDaemon checks that the task runs on a runtime this
 // daemon hosts.
 //

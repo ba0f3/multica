@@ -77,6 +77,9 @@ type IssueCreateParams struct {
 	DueDate       pgtype.Date
 	OriginType    pgtype.Text
 	OriginID      pgtype.UUID
+	// AuthenticatedTaskID is the server-trusted X-Task-ID for agent creators.
+	// Explicit quick_create origins must match it (issue #109 F2).
+	AuthenticatedTaskID pgtype.UUID
 	AttachmentIDs []pgtype.UUID
 	// LabelIDs are the issue-scoped labels to attach to the new issue. They
 	// are validated and written inside the create transaction (see Create),
@@ -164,6 +167,10 @@ var ErrProjectNotFound = errors.New("project not found in this workspace")
 // create is rejected so a new issue is never born with a partial or wrong
 // label set. Callers translate this into their transport's 400.
 var ErrIssueLabelNotFound = errors.New("issue label not found in this workspace")
+
+// ErrQuickCreateOriginMismatch signals that an agent create named a quick_create
+// origin task other than the authenticated X-Task-ID task (issue #109 F2).
+var ErrQuickCreateOriginMismatch = errors.New("quick-create origin must be the authenticated task")
 
 // ErrIssuePropertiesTooLarge is the existing row-level 16KB properties-bag
 // constraint surfaced as a client error. The same database constraint applies
@@ -437,6 +444,11 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		})
 		if taskErr != nil {
 			return IssueCreateResult{}, fmt.Errorf("load quick-create origin task: %w", taskErr)
+		}
+		if p.CreatorType == "agent" {
+			if !p.AuthenticatedTaskID.Valid || p.AuthenticatedTaskID != p.OriginID {
+				return IssueCreateResult{}, ErrQuickCreateOriginMismatch
+			}
 		}
 		if p.CreatorType != "agent" || !p.CreatorID.Valid || p.CreatorID != task.AgentID {
 			return IssueCreateResult{}, errors.New("quick-create origin task does not belong to the creating agent")

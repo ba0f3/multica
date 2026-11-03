@@ -130,7 +130,7 @@ func TestRealProviderDockerWorkers(t *testing.T) {
 				backend, err := daemon.sandboxedBackend(provider, agent.Config{
 					ExecutablePath: path, CLIVersion: version, BuiltinRuntime: provider == "opencode",
 					TaskID: "smoke-" + provider, Env: agentEnv, Logger: logger,
-				}, env, "", "", fmt.Sprintf("smoke-%s-%s-%d", provider, round, time.Now().UnixNano()), nil, nil)
+				}, env, "", "", fmt.Sprintf("smoke-%s-%s-%d", provider, round, time.Now().UnixNano()), "", nil, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
