@@ -129,3 +129,10 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 - Use names, types, and tests to express behavior. Code comments are English and kept for non-obvious rationale and constraints; remove superseded plans and incident narratives when updating code. Preserve tool directives and mixed-version contracts.
 - New global pre-workspace routes use a single word or `/{noun}/{verb}`, not hyphenated root names. Update `server/internal/handler/reserved_slugs.json`, run `pnpm generate:reserved-slugs`, and commit `packages/core/paths/reserved-slugs.ts` when changing reserved slugs.
 - Use atomic conventional commits and the repository PR template. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.
+
+## Cursor Cloud specific instructions
+
+- `.cursor/cloud-install.sh` installs the Go toolchain onto `/usr/local/bin` (ahead of Ubuntu's `/usr/bin/go`) and Docker. `.cursor/cloud-start.sh` starts the daemon, then `make up`.
+- Docker inside the agent VM uses `fuse-overlayfs` and legacy iptables. `overlay2` cannot mount on the VM root filesystem. Do not start Docker from `install`; processes do not survive the build snapshot.
+- `make up` creates `.env` when it is missing, migrates, and starts the API and web app. Sign in as `dev@localhost` with verification code `888888`. `make down` keeps the database.
+- Desktop and mobile are not part of the default boot. Use `make up C=desktop` only when a display is available.
