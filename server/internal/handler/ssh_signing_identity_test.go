@@ -253,6 +253,15 @@ func TestCreateTaskSupplement_DeniesCrossUserCredentialTask(t *testing.T) {
 	}
 }
 
+func TestCreateTaskSupplement_AllowsSameExecutionUser(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
+	dbfx.Exec(t, `UPDATE agent_task_queue SET originator_user_id = $2, accountable_user_id = $2 WHERE id = $1`, f.taskID, testUserID)
+	supplementRequest(t, f, "0199a4e8-22ce-7b01-bba5-444444444444", "same-user").Want(http.StatusCreated)
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id=$1`, f.taskID); n != 1 {
+		t.Fatalf("same-user supplement persisted %d rows, want 1", n)
+	}
+}
+
 // TestOpenGitSigningLease_RejectsTerminalTask is issue #109 F5.
 func TestOpenGitSigningLease_RejectsTerminalTask(t *testing.T) {
 	installGitSigningService(t)
@@ -347,6 +356,70 @@ func TestSignGitData_RejectsLeaseAfterTaskTerminal(t *testing.T) {
 	signReq.Header.Set("Content-Type", "application/json")
 	protectedSign := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.SignGitData))
 	testutil.Call(t, protectedSign.ServeHTTP, signReq).Want(http.StatusForbidden)
+}
+
+func TestSignGitData_RejectsLeaseAfterTaskRedispatch(t *testing.T) {
+	installGitSigningService(t)
+	provider := newGitTestProvider(t, "github", "github.com")
+	recorder := httptest.NewRecorder()
+	testHandler.GenerateGitIdentity(recorder, gitRequest(t, http.MethodPost, "/api/me/git-identities", `{"provider_id":"`+provider+`","request_id":"redispatch-lease"}`, testUserID))
+	var identity r2dgit.PublicIdentity
+	if err := json.Unmarshal(recorder.Body.Bytes(), &identity); err != nil {
+		t.Fatal(err)
+	}
+	verify := gitRequest(t, http.MethodPost, "/api/me/git-identities/"+identity.ID+"/"+itoa(identity.Generation)+"/verify", "", testUserID)
+	verify = testutil.WithURLParams(verify, "identityId", identity.ID, "generation", itoa(identity.Generation))
+	testutil.Call(t, testHandler.VerifyGitIdentity, verify).Want(http.StatusOK)
+
+	runtime := dbfx.Runtime(t, "redispatch lease runtime", testutil.Cols{"daemon_id": testDaemonID})
+	agent := dbfx.Agent(t, "redispatch lease agent", runtime)
+	issue := dbfx.Issue(t, "redispatch lease issue")
+	task := dbfx.Task(t, agent, testutil.Cols{
+		"runtime_id": runtime, "issue_id": issue, "status": "queued",
+		"originator_user_id": testUserID, "accountable_user_id": testUserID,
+	})
+
+	claim := withURLParam(newRequest(http.MethodPost, "/api/daemon/runtimes/"+runtime+"/tasks/claim", map[string]any{}), "runtimeId", runtime)
+	var response struct {
+		Task *AgentTaskResponse `json:"task"`
+	}
+	testutil.Call(t, testHandler.ClaimTaskByRuntime, claim).Want(http.StatusOK).JSON(&response)
+	if response.Task == nil || response.Task.GitSigningDaemonToken == "" {
+		t.Fatal("expected signing daemon token from claim")
+	}
+
+	// The daemon-supplied attempt_id is deliberately forged. The server must
+	// ignore it and bind the lease to the task row's authoritative dispatch.
+	openReq := httptest.NewRequest(http.MethodPost, "/api/daemon/tasks/"+task+"/git-signing-lease", strings.NewReader(`{"provider_id":"`+provider+`","attempt_id":"forged-client-attempt"}`))
+	openReq.Header.Set("Authorization", "Bearer "+response.Task.GitSigningDaemonToken)
+	openReq.Header.Set("Content-Type", "application/json")
+	openReq = testutil.WithURLParams(openReq, "taskId", task)
+	protectedOpen := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.OpenGitSigningLease))
+	var lease struct {
+		LeaseID string `json:"lease_id"`
+	}
+	testutil.Call(t, protectedOpen.ServeHTTP, openReq).Want(http.StatusOK).JSON(&lease)
+
+	// Positive control: the current dispatch may sign.
+	protectedSign := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.SignGitData))
+	signBody := func() *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/api/daemon/git-signing/sign", strings.NewReader(`{"lease_id":"`+lease.LeaseID+`","data":"ZGF0YQ=="}`))
+		req.Header.Set("Authorization", "Bearer "+response.Task.GitSigningDaemonToken)
+		req.Header.Set("Content-Type", "application/json")
+		return req
+	}
+	testutil.Call(t, protectedSign.ServeHTTP, signBody()).Want(http.StatusOK)
+
+	// Simulate a new dispatch generation on the same task without making it
+	// terminal. The old lease must become stale immediately.
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_task_queue
+		SET dispatched_at = dispatched_at + interval '1 second'
+		WHERE id = $1
+	`, task); err != nil {
+		t.Fatalf("advance dispatch generation: %v", err)
+	}
+	testutil.Call(t, protectedSign.ServeHTTP, signBody()).Want(http.StatusForbidden)
 }
 
 func TestMayControlCredentialTaskForActor(t *testing.T) {
