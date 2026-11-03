@@ -31,7 +31,8 @@ type Mount struct {
 type Policy struct {
 	TaskRoot string
 	// HomeDir is task storage for runtimes without an original host HOME.
-	// HostHome selects the original read-only HOME; explicit profile grants are writable.
+	// HostHome selects the original home pathname. BuildRestrictedArgs creates
+	// an empty directory there; only explicit profile grants expose host data.
 	HomeDir           string
 	HostHome          string
 	TempDir           string
@@ -48,7 +49,14 @@ type Policy struct {
 	Env               map[string]string
 }
 
+// BuildArgs retains the historical host-compatible view for existing callers.
+// Credential-bearing native workers and version probes must use
+// BuildRestrictedArgs; read-only host mounts are not a confidentiality boundary.
 func BuildArgs(policy Policy, self string) ([]string, error) {
+	return buildArgs(policy, self, false)
+}
+
+func buildArgs(policy Policy, self string, restricted bool) ([]string, error) {
 	if strings.TrimSpace(self) == "" {
 		return nil, fmt.Errorf("sandbox: the worker executable is required")
 	}
@@ -81,6 +89,12 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if restricted {
+		view.args, err = restrictedHostViewArgs()
+		if err != nil {
+			return nil, err
+		}
+	}
 	args = append(args, view.args...)
 	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/run", "--dir", "/run/multica", "--tmpfs", "/sys")
 	if err := checkMountSource(policy.TempDir, policy, allowedExact); err != nil {
@@ -88,7 +102,11 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	}
 	args = append(args, "--bind", policy.TempDir, sandboxTemp)
 	if policy.HostHome != "" {
-		args = append(args, "--ro-bind", homeTarget, homeTarget)
+		if restricted {
+			args = append(args, "--dir", homeTarget)
+		} else {
+			args = append(args, "--ro-bind", homeTarget, homeTarget)
+		}
 	}
 	for _, mask := range view.early {
 		args = appendHostMask(args, mask)
@@ -127,6 +145,9 @@ func BuildArgs(policy Policy, self string) ([]string, error) {
 	for _, link := range links {
 		if _, err := os.Lstat(link.Path); err == nil {
 			inherited := !underPrivateView(link.Path) || (view.home != "" && isUnder(link.Path, view.home))
+			if restricted {
+				inherited = restrictedHostPathInherited(link.Path)
+			}
 			for _, mask := range view.early {
 				if link.Path == mask.path || mask.directory && isUnder(link.Path, mask.path) {
 					inherited = false
