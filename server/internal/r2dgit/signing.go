@@ -225,22 +225,30 @@ func (s *Service) OpenSigningLease(ctx context.Context, taskID, attemptID, provi
 	}, nil
 }
 
-// LeaseTaskID returns the task a live lease belongs to after checking the daemon.
-func (s *Service) LeaseTaskID(_ context.Context, leaseID, daemonID string) (string, error) {
+// LeaseScope returns the task and server-authoritative attempt scope a live
+// lease belongs to after checking the daemon. Callers use both values to reject
+// a lease from an older dispatch of the same task.
+func (s *Service) LeaseScope(_ context.Context, leaseID, daemonID string) (taskID, attemptID string, err error) {
 	if !s.available() {
-		return "", ErrUnavailable
+		return "", "", ErrUnavailable
 	}
 	now := s.now().UTC()
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
 	lease, ok := s.leases[leaseID]
 	if !ok || daemonID == "" || lease.DaemonID != daemonID {
-		return "", ErrScope
+		return "", "", ErrScope
 	}
 	if !now.Before(lease.ExpiresAt) || lease.Revoked {
-		return "", ErrScope
+		return "", "", ErrScope
 	}
-	return lease.TaskID, nil
+	return lease.TaskID, lease.AttemptID, nil
+}
+
+// LeaseTaskID is kept for callers that only need the task identity.
+func (s *Service) LeaseTaskID(ctx context.Context, leaseID, daemonID string) (string, error) {
+	taskID, _, err := s.LeaseScope(ctx, leaseID, daemonID)
+	return taskID, err
 }
 
 // RenewSigningLease extends an active daemon's lease without signing data.
