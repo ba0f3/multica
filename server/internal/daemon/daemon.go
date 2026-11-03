@@ -8126,7 +8126,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// custom-only host pays no wasted re-resolution.
 		var resolveErr error
 		if d.usesNativeSandbox() {
-			entry, resolvedVersion, nativeProfile, resolveErr = d.resolveNativeAgentEntry(prepareCtx, provider, entry)
+			entry, resolvedVersion, nativeProfile, resolveErr = d.resolveNativeAgentEntry(prepareCtx, provider, entry, task.ExecutionUserID)
 		} else {
 			entry, resolvedVersion, resolveErr = d.resolveAgentEntryForLaunch(prepareCtx, provider, entry)
 		}

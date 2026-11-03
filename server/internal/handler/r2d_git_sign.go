@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/r2dgit"
 )
 
 // maxGitSignaturePayload bounds the bytes a daemon may ask the server to
@@ -62,6 +63,26 @@ func (h *Handler) OpenGitSigningLease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, lease)
 }
 
+func (h *Handler) requireGitSigningLeaseTaskEligible(w http.ResponseWriter, r *http.Request, service *r2dgit.Service, leaseID, daemonID string) bool {
+	taskID, err := service.LeaseTaskID(r.Context(), leaseID, daemonID)
+	if err != nil {
+		gitServiceError(w, err)
+		return false
+	}
+	task, _, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
+		return false
+	}
+	if !h.requireTaskRuntimeOwnedByDaemon(w, r, task, daemonID) {
+		return false
+	}
+	if !taskEligibleForNewSigningLease(task) {
+		writeErrorCode(w, http.StatusForbidden, "git_signing_unavailable", "Git signing is not available for this task.")
+		return false
+	}
+	return true
+}
+
 // SignGitData signs bytes with the key a lease is bound to.
 //
 // The private key never leaves the custody store: the daemon forwards the
@@ -100,6 +121,9 @@ func (h *Handler) SignGitData(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "git_invalid_request", "The payload to sign is too large.")
 		return
 	}
+	if !h.requireGitSigningLeaseTaskEligible(w, r, service, body.LeaseID, daemonID) {
+		return
+	}
 
 	signature, err := service.Sign(r.Context(), body.LeaseID, daemonID, payload)
 	if err != nil {
@@ -125,6 +149,9 @@ func (h *Handler) RenewGitSigningLease(w http.ResponseWriter, r *http.Request) {
 		LeaseID string `json:"lease_id"`
 	}
 	if !gitJSONBody(w, r, &body) {
+		return
+	}
+	if !h.requireGitSigningLeaseTaskEligible(w, r, service, body.LeaseID, daemonID) {
 		return
 	}
 	if err := service.RenewSigningLease(r.Context(), body.LeaseID, daemonID); err != nil {

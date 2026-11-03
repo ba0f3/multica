@@ -239,32 +239,17 @@ func seedQuickCreateTask(t *testing.T, ctx context.Context, agentID, originatorI
 	return taskID
 }
 
-// TestSteerComment_DeniesCrossUserCredentialTask is issue #109 F3.
-func TestSteerComment_DeniesCrossUserCredentialTask(t *testing.T) {
-	f := newSupplementFixture(t, "codex", "running", false)
+// TestCreateTaskSupplement_DeniesCrossUserCredentialTask is issue #109 F3.
+func TestCreateTaskSupplement_DeniesCrossUserCredentialTask(t *testing.T) {
+	f := newSupplementFixture(t, "codex", "running", true)
 	ctx := context.Background()
-	userB := seedSecurityTestOwner(t, "steer-b")
+	userB := seedSecurityTestOwner(t, "supplement-b")
 	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET originator_user_id = $2, accountable_user_id = $2 WHERE id = $1`, f.taskID, userB); err != nil {
 		t.Fatalf("retarget task originator: %v", err)
 	}
-
-	w := httptest.NewRecorder()
-	body := map[string]any{
-		"content":        "please push",
-		"steer":          true,
-		"steer_task_ids": []string{f.taskID},
-	}
-	req := withURLParam(newRequest(http.MethodPost, "/api/issues/"+f.issueID+"/comments", body), "id", f.issueID)
-	testHandler.CreateComment(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateComment: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-	var count int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM task_supplement WHERE task_id = $1`, f.taskID).Scan(&count); err != nil {
-		t.Fatalf("count supplements: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("cross-user steer created %d supplements, want 0", count)
+	supplementRequest(t, f, "0199a4e8-22ce-7b01-bba5-333333333333", "cross-user").Want(http.StatusForbidden)
+	if n := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id=$1`, f.taskID); n != 0 {
+		t.Fatalf("cross-user supplement persisted %d rows", n)
 	}
 }
 
@@ -308,6 +293,60 @@ func TestOpenGitSigningLease_RejectsTerminalTask(t *testing.T) {
 	req = testutil.WithURLParams(req, "taskId", task)
 	protected := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.OpenGitSigningLease))
 	testutil.Call(t, protected.ServeHTTP, req).Want(http.StatusForbidden)
+}
+
+func TestSignGitData_RejectsLeaseAfterTaskTerminal(t *testing.T) {
+	installGitSigningService(t)
+	provider := newGitTestProvider(t, "github", "github.com")
+	recorder := httptest.NewRecorder()
+	testHandler.GenerateGitIdentity(recorder, gitRequest(t, http.MethodPost, "/api/me/git-identities", `{"provider_id":"`+provider+`","request_id":"live-lease"}`, testUserID))
+	var identity r2dgit.PublicIdentity
+	if err := json.Unmarshal(recorder.Body.Bytes(), &identity); err != nil {
+		t.Fatal(err)
+	}
+	verify := gitRequest(t, http.MethodPost, "/api/me/git-identities/"+identity.ID+"/"+itoa(identity.Generation)+"/verify", "", testUserID)
+	verify = testutil.WithURLParams(verify, "identityId", identity.ID, "generation", itoa(identity.Generation))
+	testutil.Call(t, testHandler.VerifyGitIdentity, verify).Want(http.StatusOK)
+
+	runtime := dbfx.Runtime(t, "live lease runtime", testutil.Cols{"daemon_id": testDaemonID})
+	agent := dbfx.Agent(t, "live lease agent", runtime)
+	issue := dbfx.Issue(t, "live lease issue")
+	task := dbfx.Task(t, agent, testutil.Cols{
+		"runtime_id": runtime, "issue_id": issue, "status": "queued",
+		"originator_user_id": testUserID, "accountable_user_id": testUserID,
+	})
+
+	claim := withURLParam(newRequest(http.MethodPost, "/api/daemon/runtimes/"+runtime+"/tasks/claim", map[string]any{}), "runtimeId", runtime)
+	var response struct {
+		Task *AgentTaskResponse `json:"task"`
+	}
+	testutil.Call(t, testHandler.ClaimTaskByRuntime, claim).Want(http.StatusOK).JSON(&response)
+	if response.Task == nil || response.Task.GitSigningDaemonToken == "" {
+		t.Fatal("expected signing daemon token from claim")
+	}
+
+	openReq := httptest.NewRequest(http.MethodPost, "/api/daemon/tasks/"+task+"/git-signing-lease", strings.NewReader(`{"provider_id":"`+provider+`","attempt_id":"attempt-1"}`))
+	openReq.Header.Set("Authorization", "Bearer "+response.Task.GitSigningDaemonToken)
+	openReq.Header.Set("Content-Type", "application/json")
+	openReq = testutil.WithURLParams(openReq, "taskId", task)
+	protectedOpen := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.OpenGitSigningLease))
+	var lease struct {
+		LeaseID string `json:"lease_id"`
+	}
+	testutil.Call(t, protectedOpen.ServeHTTP, openReq).Want(http.StatusOK).JSON(&lease)
+	if lease.LeaseID == "" {
+		t.Fatal("expected lease id")
+	}
+
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task); err != nil {
+		t.Fatalf("mark task terminal: %v", err)
+	}
+
+	signReq := httptest.NewRequest(http.MethodPost, "/api/daemon/git-signing/sign", strings.NewReader(`{"lease_id":"`+lease.LeaseID+`","data":"ZGF0YQ=="}`))
+	signReq.Header.Set("Authorization", "Bearer "+response.Task.GitSigningDaemonToken)
+	signReq.Header.Set("Content-Type", "application/json")
+	protectedSign := middleware.DaemonAuth(testHandler.Queries, nil, nil, nil)(http.HandlerFunc(testHandler.SignGitData))
+	testutil.Call(t, protectedSign.ServeHTTP, signReq).Want(http.StatusForbidden)
 }
 
 func TestMayControlCredentialTaskForActor(t *testing.T) {

@@ -31,7 +31,12 @@ type NativeLink struct {
 type NativeRuntime struct {
 	Provider       string
 	Executable     string
+	// Home is the provider profile root selected for this task (scoped per
+	// execution user when ExecutionUserID is set).
 	Home           string
+	// OperatorHome is the daemon/runtime account home used for host-view masks
+	// and other security policy; it must not follow the scoped profile path.
+	OperatorHome   string
 	ProfileKey     string
 	Version        string
 	ReadOnly       []Mount
@@ -152,7 +157,7 @@ func ResolveNativeInstallation(request NativeRuntimeRequest) (NativeRuntime, err
 }
 
 func resolveNativeRuntimeLayout(request NativeRuntimeRequest) (NativeRuntime, []nativeWatch, error) {
-	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, Home: nativeExecutionProfileHome(request), Env: make(map[string]string)}
+	result := NativeRuntime{Provider: request.Provider, Executable: request.Executable, OperatorHome: request.Home, Home: nativeExecutionProfileHome(request), Env: make(map[string]string)}
 	var watch []nativeWatch
 	profilePaths, err := nativeProfilePaths(request, &result)
 	if err != nil {
@@ -247,6 +252,23 @@ func nativeExecutionProfileHome(request NativeRuntimeRequest) string {
 }
 
 func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]string, error) {
+	specs, err := nativeProfilePathSpecs(request, result)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(specs))
+	for i, spec := range specs {
+		paths[i] = spec.path
+	}
+	return paths, nil
+}
+
+type nativeProfilePathSpec struct {
+	role string
+	path string
+}
+
+func nativeProfilePathSpecs(request NativeRuntimeRequest, result *NativeRuntime) ([]nativeProfilePathSpec, error) {
 	home := nativeExecutionProfileHome(request)
 	scopedExecutionUser := strings.TrimSpace(request.ExecutionUserID) != ""
 	choose := func(key, fallback string) string {
@@ -261,15 +283,19 @@ func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]
 	}
 	switch request.Provider {
 	case "codex":
-		return []string{choose("CODEX_HOME", filepath.Join(home, ".codex"))}, nil
+		return []nativeProfilePathSpec{{role: "codex_home", path: choose("CODEX_HOME", filepath.Join(home, ".codex"))}}, nil
 	case "cursor":
-		paths := []string{filepath.Join(home, ".cursor"), choose("CURSOR_CONFIG_DIR", filepath.Join(home, ".config", "cursor")), filepath.Join(home, ".cache", "cursor-compile-cache")}
+		specs := []nativeProfilePathSpec{
+			{role: "cursor_dot", path: filepath.Join(home, ".cursor")},
+			{role: "cursor_config", path: choose("CURSOR_CONFIG_DIR", filepath.Join(home, ".config", "cursor"))},
+			{role: "cursor_compile_cache", path: filepath.Join(home, ".cache", "cursor-compile-cache")},
+		}
 		if !scopedExecutionUser {
 			if selected := request.Env["CURSOR_DATA_DIR"]; selected != "" {
-				paths = append(paths, choose("CURSOR_DATA_DIR", selected))
+				specs = append(specs, nativeProfilePathSpec{role: "cursor_data", path: choose("CURSOR_DATA_DIR", selected)})
 			}
 		}
-		return paths, nil
+		return specs, nil
 	case "opencode":
 		configHome := choose("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 		dataHome := choose("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
@@ -281,7 +307,12 @@ func nativeProfilePaths(request NativeRuntimeRequest, result *NativeRuntime) ([]
 				config = choose("OPENCODE_CONFIG_DIR", selected)
 			}
 		}
-		return []string{filepath.Join(dataHome, "opencode"), config, filepath.Join(stateHome, "opencode"), filepath.Join(cacheHome, "opencode")}, nil
+		return []nativeProfilePathSpec{
+			{role: "opencode_data", path: filepath.Join(dataHome, "opencode")},
+			{role: "opencode_config", path: config},
+			{role: "opencode_state", path: filepath.Join(stateHome, "opencode")},
+			{role: "opencode_cache", path: filepath.Join(cacheHome, "opencode")},
+		}, nil
 	default:
 		return nil, fmt.Errorf("native sandbox: unsupported profile")
 	}

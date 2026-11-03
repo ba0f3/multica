@@ -339,7 +339,7 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 			}
 			mounts = append(mounts, sandbox.Mount{Source: source, Target: target})
 		}
-		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: runtime.Home, TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(runtime.Home, ".multica"), filepath.Join(runtime.Home, ".ssh"), filepath.Join(runtime.Home, ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
+		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: operatorHome(runtime), TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(operatorHome(runtime), ".multica"), filepath.Join(operatorHome(runtime), ".ssh"), filepath.Join(operatorHome(runtime), ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
 		args, err := sandbox.BuildArgs(policy, self)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
@@ -356,7 +356,7 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	return &nativeAttemptBackend{worker: worker, profile: runtime, prepare: prepare}, nil
 }
 
-func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, entry AgentEntry) (AgentEntry, string, *execenv.NativeProfile, error) {
+func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, entry AgentEntry, executionUserID string) (AgentEntry, string, *execenv.NativeProfile, error) {
 	if _, err := os.Stat(entry.Path); err != nil {
 		if entry.Command == "" {
 			return entry, "", nil, fmt.Errorf("native executable is missing: %w", err)
@@ -367,7 +367,7 @@ func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, e
 		}
 		entry.Path = path
 	}
-	runtime, _, err := d.nativeRuntime(ctx, provider, entry.Path, "")
+	runtime, _, err := d.nativeRuntime(ctx, provider, entry.Path, executionUserID)
 	if err != nil {
 		return entry, "", nil, err
 	}
@@ -375,4 +375,11 @@ func (d *Daemon) resolveNativeAgentEntry(ctx context.Context, provider string, e
 		return entry, "", nil, fmt.Errorf("native runtime version: %w", err)
 	}
 	return entry, runtime.Version, &execenv.NativeProfile{Home: runtime.Home, Env: runtime.Env}, nil
+}
+
+func operatorHome(runtime sandbox.NativeRuntime) string {
+	if runtime.OperatorHome != "" {
+		return runtime.OperatorHome
+	}
+	return runtime.Home
 }

@@ -2775,9 +2775,18 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	actorType, actorID := h.resolveActor(r, requesterID, workspaceID)
 	requesterUUID, ok := parseUUIDOrBadRequest(w, requesterID, "requester_id")
 	if !ok {
 		return
+	}
+	if actorType == "agent" {
+		executionPrincipal, principalOK := h.credentialEnqueueActorUserID(r, actorType, actorID)
+		if !principalOK {
+			h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
+			return
+		}
+		requesterUUID = executionPrincipal
 	}
 
 	// Resolve the actor to the agent that will actually run the task. For

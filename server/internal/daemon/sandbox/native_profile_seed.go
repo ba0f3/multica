@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
@@ -25,40 +24,6 @@ func dirSet(names ...string) map[string]bool {
 	return set
 }
 
-func operatorProfilePaths(request NativeRuntimeRequest) ([]string, error) {
-	operator := request
-	operator.ExecutionUserID = ""
-	var runtime NativeRuntime
-	runtime.Env = make(map[string]string)
-	return nativeProfilePaths(operator, &runtime)
-}
-
-func operatorSourceForScopedProfilePath(request NativeRuntimeRequest, scopedPath string) (string, bool) {
-	operatorPaths, err := operatorProfilePaths(request)
-	if err != nil {
-		return "", false
-	}
-	scopedHome := nativeExecutionProfileHome(request)
-	operatorHome := nativeExecutionProfileHome(NativeRuntimeRequest{Home: request.Home})
-	rel, err := filepath.Rel(scopedHome, scopedPath)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", false
-	}
-	candidate := filepath.Join(operatorHome, rel)
-	for _, path := range operatorPaths {
-		if path == candidate {
-			return path, true
-		}
-	}
-	base := filepath.Base(scopedPath)
-	for _, path := range operatorPaths {
-		if filepath.Base(path) == base {
-			return path, true
-		}
-	}
-	return "", false
-}
-
 // seedNativeExecutionProfile copies the runtime owner's logged-in provider state
 // into a per-execution-user writable tree (issue #109 F4). Host selector env vars
 // are ignored for the destination layout, so credentials must be seeded explicitly.
@@ -66,14 +31,35 @@ func seedNativeExecutionProfile(request NativeRuntimeRequest, scopedPaths []stri
 	if strings.TrimSpace(request.ExecutionUserID) == "" {
 		return nil
 	}
+	operator := request
+	operator.ExecutionUserID = ""
+	var operatorRuntime NativeRuntime
+	operatorRuntime.Env = make(map[string]string)
+	var scopedRuntime NativeRuntime
+	scopedRuntime.Env = make(map[string]string)
+	operatorSpecs, err := nativeProfilePathSpecs(operator, &operatorRuntime)
+	if err != nil {
+		return err
+	}
+	scopedSpecs, err := nativeProfilePathSpecs(request, &scopedRuntime)
+	if err != nil {
+		return err
+	}
+	scopedByRole := make(map[string]string, len(scopedSpecs))
+	for _, spec := range scopedSpecs {
+		scopedByRole[spec.role] = spec.path
+	}
+	if len(scopedPaths) != len(scopedSpecs) {
+		return fmt.Errorf("native sandbox: scoped profile path count mismatch")
+	}
 	skip := nativeScopedProfileSeedSkipDirs[request.Provider]
-	for _, dest := range scopedPaths {
-		src, ok := operatorSourceForScopedProfilePath(request, dest)
+	for _, spec := range operatorSpecs {
+		dest, ok := scopedByRole[spec.role]
 		if !ok {
 			continue
 		}
-		if err := execenv.MirrorProviderTree(src, dest, skip, nil); err != nil {
-			return fmt.Errorf("seed native profile from %q: %w", src, err)
+		if err := execenv.MirrorProviderTree(spec.path, dest, skip, nil); err != nil {
+			return fmt.Errorf("seed native profile role %q from %q: %w", spec.role, spec.path, err)
 		}
 	}
 	return nil

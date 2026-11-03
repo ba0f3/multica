@@ -246,7 +246,7 @@ func TestNativeAgentEntryHealsWithoutUnboundedHostVersionProbe(t *testing.T) {
 	d.nativeResolver = sandbox.NewNativeRuntimeResolver(func(context.Context, string, string) (string, error) { calls++; return "0.163.0", nil })
 	entry := AgentEntry{Path: filepath.Join(t.TempDir(), "deleted-release"), Command: exe}
 	for range 2 {
-		resolved, version, profile, err := d.resolveNativeAgentEntry(t.Context(), "codex", entry)
+		resolved, version, profile, err := d.resolveNativeAgentEntry(t.Context(), "codex", entry, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -314,8 +314,14 @@ printf '%s\n' '{"type":"worker_ready"}' '{"type":"cli_started"}' '{"type":"messa
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !manifest.Exec.NativeProfile || manifest.Config.Env["HOME"] != home || manifest.Config.Env["CODEX_HOME"] != filepath.Dir(auth) || manifest.Config.Env["MULTICA_TOKEN"] != task.AuthToken || manifest.Config.Env["TMPDIR"] != "/tmp" {
+		scopedHome := manifest.Config.Env["HOME"]
+		codexHome := manifest.Config.Env["CODEX_HOME"]
+		if !manifest.Exec.NativeProfile || !strings.Contains(scopedHome, "multica-native-execution-profiles") || codexHome != filepath.Join(scopedHome, ".codex") || manifest.Config.Env["MULTICA_TOKEN"] != task.AuthToken || manifest.Config.Env["TMPDIR"] != "/tmp" {
 			t.Fatalf("task/profile selection lost: %+v", manifest.Config.Env)
+		}
+		seededAuth, err := os.ReadFile(filepath.Join(codexHome, "auth.json"))
+		if err != nil || string(seededAuth) != "original auth sentinel" {
+			t.Fatalf("scoped profile auth = %q, err = %v, want seeded operator auth", seededAuth, err)
 		}
 		if got := readManifestRepos(t, filepath.Join(result.EnvRoot, workercheckout.ManifestFileName)); len(got) != 1 || got[0].CachePath != bare {
 			t.Fatalf("native task repo manifest: %+v", got)
