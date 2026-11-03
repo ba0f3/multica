@@ -80,3 +80,44 @@ func TestSeedNativeExecutionProfileCopiesCustomCodexSelector(t *testing.T) {
 		t.Fatalf("scoped auth = %q", string(data))
 	}
 }
+
+
+func TestSeedNativeExecutionProfileCopiesCustomCursorData(t *testing.T) {
+	root := t.TempDir()
+	operatorHome := filepath.Join(root, "runtime")
+	operatorData := filepath.Join(root, "srv", "cursor-data")
+	if err := os.MkdirAll(operatorData, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(operatorData, "credentials.json"), []byte(`{"token":"cursor-external"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req := NativeRuntimeRequest{
+		Home:            operatorHome,
+		Provider:        "cursor",
+		ExecutionUserID: "user-a",
+		Env: map[string]string{
+			"CURSOR_DATA_DIR": operatorData,
+		},
+	}
+	var runtime NativeRuntime
+	runtime.Env = make(map[string]string)
+	scopedPaths, err := nativeProfilePaths(req, &runtime)
+	if err != nil {
+		t.Fatalf("nativeProfilePaths: %v", err)
+	}
+	if err := seedNativeExecutionProfile(req, scopedPaths); err != nil {
+		t.Fatalf("seedNativeExecutionProfile: %v", err)
+	}
+	scopedData := runtime.Env["CURSOR_DATA_DIR"]
+	if scopedData == "" || scopedData == operatorData {
+		t.Fatalf("CURSOR_DATA_DIR = %q, want isolated scoped path", scopedData)
+	}
+	data, err := os.ReadFile(filepath.Join(scopedData, "credentials.json"))
+	if err != nil {
+		t.Fatalf("read scoped cursor credentials: %v", err)
+	}
+	if string(data) != `{"token":"cursor-external"}` {
+		t.Fatalf("scoped cursor credentials = %q", string(data))
+	}
+}
