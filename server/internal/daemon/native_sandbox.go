@@ -123,7 +123,7 @@ func (d *Daemon) detectNativeVersion(ctx context.Context, provider, executable s
 	}
 	probeEnv["PATH"] = strings.Join(append(append([]string{}, layout.BinDirs...), sandboxPath()), string(os.PathListSeparator))
 	policy := sandbox.Policy{TaskRoot: root, HomeDir: filepath.Join(root, "home"), HostHome: layout.Home, TempDir: filepath.Join(root, "tmp"), CheckoutDir: filepath.Join(root, "cwd"), ExtraMounts: extras, Links: layout.Links, AllowedRoots: []string{root}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(layout.Home, ".multica"), filepath.Join(layout.Home, ".ssh"), filepath.Join(layout.Home, ".docker")}, AllowedExactPaths: extraMountSources(extras), Env: probeEnv, Command: []string{executable, "--version"}}
-	args, err := sandbox.BuildArgs(policy, self)
+	args, err := sandbox.BuildRestrictedArgs(policy, self)
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +340,7 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 			mounts = append(mounts, sandbox.Mount{Source: source, Target: target})
 		}
 		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: operatorHome(runtime), TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(operatorHome(runtime), ".multica"), filepath.Join(operatorHome(runtime), ".ssh"), filepath.Join(operatorHome(runtime), ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
-		args, err := sandbox.BuildArgs(policy, self)
+		args, err := sandbox.BuildRestrictedArgs(policy, self)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
 		}
