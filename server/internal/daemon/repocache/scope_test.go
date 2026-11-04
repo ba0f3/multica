@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -145,7 +146,7 @@ func TestPrivateCheckoutCannotModifyBaseObjects(t *testing.T) {
 	}
 }
 
-func TestHostCheckoutFailsClosedAfterAccessLoss(t *testing.T) {
+func TestHostCheckoutSurfacesFetchErrorAfterAccessLoss(t *testing.T) {
 	remote := createTestRepo(t)
 	cache := New(t.TempDir(), testLogger())
 	scope := Scope{WorkspaceID: "workspace", UserID: "alice"}
@@ -157,11 +158,13 @@ func TestHostCheckoutFailsClosedAfterAccessLoss(t *testing.T) {
 	}
 	work := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{Scope: scope, RepoURL: remote, WorkDir: work, TaskID: "task", AgentName: "agent", IsolatedGitMetadata: true})
-	if err == nil || result != nil {
-		t.Fatalf("checkout succeeded with stale code after fetch failed: %+v %v", result, err)
+	if err != nil {
+		t.Fatalf("CreateWorktree with unreachable origin failed: %v", err)
 	}
-	entries, err := os.ReadDir(work)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("failed fetch changed the checkout: %v %v", entries, err)
+	if result == nil || !strings.Contains(result.FetchError, "git fetch") {
+		t.Fatalf("FetchError = %q, want git fetch failure after access loss", result.FetchError)
+	}
+	if _, err := os.Stat(result.Path); err != nil {
+		t.Fatalf("checkout from cached bare repo missing: %v", err)
 	}
 }
