@@ -1388,3 +1388,85 @@ func TestEnqueueChatTaskDefersForChannelMediaAndPromotesWhenReady(t *testing.T) 
 		t.Fatalf("promoted task = status %q fire_at %v, want queued with no deadline", status, fireAt)
 	}
 }
+
+// TestAttributionFromComment_TerminalSourceTaskDoesNotInherit is issue #109 F1:
+// a finished authoring run must not delegate its human through comment.source_task_id.
+func TestAttributionFromComment_TerminalSourceTaskDoesNotInherit(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	workspaceID, userID, agentID, issueID := seedAttributionFixture(t, pool)
+	svc := &TaskService{Queries: q}
+
+	var runtimeID string
+	if err := pool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+
+	var terminalTaskID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context, originator_user_id, accountable_user_id)
+		VALUES ($1, $2, $3, 'completed', 0, '{}'::jsonb, $4, $4)
+		RETURNING id`, agentID, runtimeID, issueID, userID).Scan(&terminalTaskID); err != nil {
+		t.Fatalf("seed terminal task: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, terminalTaskID) })
+
+	var commentID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO comment (issue_id, author_type, author_id, content, source_task_id)
+		VALUES ($1, 'agent', $2, 'follow-up', $3)
+		RETURNING id`, issueID, agentID, terminalTaskID).Scan(&commentID); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM comment WHERE id = $1`, commentID) })
+
+	got := svc.ResolveOriginatorFromTriggerComment(ctx, util.MustParseUUID(workspaceID), util.MustParseUUID(commentID))
+	if got.Valid {
+		t.Fatalf("terminal source task must not inherit originator, got %s", util.UUIDToString(got))
+	}
+}
+
+// TestAttributionForIssueTask_TerminalAgentCreateOrigin is issue #109 F1 for agent_create.
+func TestAttributionForIssueTask_TerminalAgentCreateOrigin(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
+	svc := &TaskService{Queries: q}
+
+	var runtimeID string
+	if err := pool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+
+	var originTaskID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context, originator_user_id, accountable_user_id)
+		VALUES ($1, $2, 'completed', 0, '{}'::jsonb, $3, $3)
+		RETURNING id`, agentID, runtimeID, userID).Scan(&originTaskID); err != nil {
+		t.Fatalf("seed origin task: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, originTaskID) })
+
+	var issueID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, creator_type, creator_id, origin_type, origin_id, priority)
+		VALUES ($1, 'agent create', 'agent', $2, 'agent_create', $3, 'medium')
+		RETURNING id`, workspaceID, agentID, originTaskID).Scan(&issueID); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	got := svc.OriginatorForIssueTask(ctx, db.Issue{
+		ID:          util.MustParseUUID(issueID),
+		WorkspaceID: util.MustParseUUID(workspaceID),
+		CreatorType: "agent",
+		CreatorID:   util.MustParseUUID(agentID),
+		OriginType:  pgtype.Text{String: "agent_create", Valid: true},
+		OriginID:    util.MustParseUUID(originTaskID),
+	}, pgtype.UUID{})
+	if got.Valid && got.Bytes == util.MustParseUUID(userID).Bytes {
+		t.Fatalf("terminal agent_create origin must not inherit human %s", userID)
+	}
+}
