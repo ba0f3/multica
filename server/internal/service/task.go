@@ -479,10 +479,12 @@ func (s *TaskService) attributionFromComment(ctx context.Context, comment db.Com
 	// For an agent-authored comment, walk comment.source_task_id → parent task →
 	// parent.originator_user_id (set by every agent comment-write path since
 	// migration 120). A NULL/missing source task leaves ParentOriginator
-	// invalid, which ClassifyComment maps to unattributed.
+	// invalid, which ClassifyComment maps to unattributed. A terminal source
+	// task lends no human either (issue #109 F1): the finished run must not
+	// delegate invoke rights or signing identity through attribution.
 	if comment.AuthorType == "agent" && comment.SourceTaskID.Valid {
 		facts.SourceTaskID = comment.SourceTaskID
-		if parent, err := s.Queries.GetAgentTask(ctx, comment.SourceTaskID); err == nil {
+		if parent, err := s.Queries.GetAgentTask(ctx, comment.SourceTaskID); err == nil && !taskStatusIsTerminal(parent.Status) {
 			facts.ParentOriginator = parent.OriginatorUserID
 			facts.ParentAccountable = parent.AccountableUserID
 		}
@@ -589,12 +591,22 @@ func (s *TaskService) attributionForIssueTask(ctx context.Context, issue db.Issu
 		(issue.OriginType.String == "quick_create" || issue.OriginType.String == "agent_create") {
 		facts.OriginType = issue.OriginType.String
 		facts.OriginTaskID = issue.OriginID
-		if task, err := s.Queries.GetAgentTask(ctx, issue.OriginID); err == nil {
+		if task, err := s.Queries.GetAgentTask(ctx, issue.OriginID); err == nil && !taskStatusIsTerminal(task.Status) {
 			facts.OriginOriginator = task.OriginatorUserID
 			facts.OriginAccountable = task.AccountableUserID
 		}
 	}
 	return attribution.ClassifyDirect(facts)
+}
+
+// taskStatusIsTerminal mirrors handler.isTerminalTaskStatus and the
+// agent_task_queue status CHECK constraint. Keep in sync when either side changes.
+func taskStatusIsTerminal(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	}
+	return false
 }
 
 // ruleOwnerAttribution resolves the rule_owner attribution for an autopilot run
@@ -6418,6 +6430,13 @@ func SettleTerminalTaskState(ctx context.Context, q *db.Queries, tasks ...db.Age
 	}
 	if _, err := q.SettleTerminalTaskSupplements(ctx, taskIDs); err != nil {
 		return fmt.Errorf("settle terminal task supplements: %w", err)
+	}
+	for _, task := range tasks {
+		if err := q.DeleteTaskTokensByTask(ctx, task.ID); err != nil {
+			// Best-effort: expiry and FK cascade are durable guards (MUL-2600).
+			slog.Warn("settle terminal task: failed to revoke task tokens",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		}
 	}
 	return SettleDeliveredDelegatedFailureRecoveries(ctx, q, tasks...)
 }
