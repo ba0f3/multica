@@ -1,5 +1,6 @@
 export type { Issue, IssueStatus, BuiltInIssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, SourceContextAttachment, SourceContextAuthor, SourceContextIssueSnapshot, SourceContextCommentSnapshot, SourceContextSnapshot, SourceContextLimitUsage, SourceContextPreview, SourceContextAuthorState, IssueSourceContext,
   IssueDuplicateOf,
+  IssueUnread,
 } from "./issue";
 export type {
   IssueStatusCategory,
@@ -274,6 +275,8 @@ export type {
   ListWecomInstallationsResponse,
   RegisterWecomBYORequest,
   RedeemWecomBindingTokenResponse,
+  BeginWecomInstallResponse,
+  WecomInstallStatusResponse,
 } from "./wecom";
 export type {
   TelegramInstallation,

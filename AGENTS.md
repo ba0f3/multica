@@ -8,6 +8,16 @@ Multica is a task management platform where people and agents collaborate on iss
 - For naming, translations, or Chinese UI/docs copy, read [conventions.mdx](apps/docs/content/docs/developers/conventions.mdx) and [conventions.zh.mdx](apps/docs/content/docs/developers/conventions.zh.mdx).
 - Maintain shared rules here and mobile-specific rules in the mobile file. `CLAUDE.md` files only import them. Update instructions in the same change that alters the referenced workflow or boundary; do not add incident timelines, dependency version lists, or duplicate rules.
 
+## Fork (`ba0f3/multica`)
+
+This checkout tracks [multica-ai/multica](https://github.com/multica-ai/multica) with security and isolation changes that are not upstream yet. Treat upstream as the product baseline; preserve fork behavior when merging releases.
+
+- **Remotes and releases:** Day-to-day work lands on `ba0f3/multica`. Integrate upstream with annotated tags such as `upstream-v0.8.0`, merge on `integrate/upstream-v*`, then fast-forward `main`. Published fork versions use patch suffixes (`v0.8.0-p1`, …). See [.github/RELEASING.md](.github/RELEASING.md) for GHCR defaults (`ghcr.io/ba0f3/...`) and Homebrew tap variables.
+- **CLI auto-update:** `multica update` still queries `multica-ai/multica` unless `MULTICA_RELEASE_API_BASE_URL` and `MULTICA_RELEASE_DOWNLOAD_BASE_URL` mirror this fork. Keep `MULTICA_DAEMON_AUTO_UPDATE` off on patched installs so an update does not silently replace the fork binary with upstream.
+- **Workspace and repo isolation:** Daemon repo caches and task env roots are scoped by server-proven `repocache.Scope{WorkspaceID, UserID}` (execution user from task originator / actor, not the daemon owner). Do not clone user repositories during workspace registration with daemon-owner credentials. Task checkout, alternates, env reuse, and native worker host views must keep that same identity. Native workers use the masked read-only host view and private PID namespaces; only explicit task or profile grants are writable.
+- **SSH commit signing:** Per-user Ed25519 keys and signing leases live under `server/internal/r2dgit/`. The handler resolves the execution user from the authenticated actor and task originator before issuing leases or steering git/signing RPCs; agents must not sign as another user or reuse another user's socket. Workspace deletion keeps `r2d_git_*` rows (credentials belong to the person). Design notes: [docs/security/tool-isolation.md](docs/security/tool-isolation.md), [docs/security/ssh-key-security-review-2026-11-03.md](docs/security/ssh-key-security-review-2026-11-03.md). Regressions: `.github/workflows/ssh-boundary.yml`, `server/internal/handler/ssh_*_test.go`.
+- **Do not drop fork-only deps or tests** (for example `sshsig`, signing handlers, execution-user path suffixes in execenv) when resolving merge conflicts unless the fork behavior is intentionally retired.
+
 ## Sharing Rules and Package Boundaries
 
 | Location | Responsibility and constraints |
@@ -100,7 +110,7 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 
 ## Web/Desktop UI Rules
 
-- For Button and Dialog usage, read `packages/ui/docs/button.md` and `packages/ui/docs/dialog.md`. These component contracts also power UI Lab documentation.
+- For Button and Dialog usage, read `packages/ui/docs/button.md` and `packages/ui/docs/dialog.md`.
 - Prefer existing shadcn/Base UI primitives. Add components with `pnpm ui:add <component>`.
 - For `pnpm ui:add @reui/<name>`, decline overwrite prompts. Keep `REUI_LICENSE_KEY` in the environment, never in repo files. Adapt vendored primitives into `packages/ui/components/ui/` and compositions into `packages/views/`.
 - Import icons from `@multica/ui/icons`; no icon library is installed. If the icon you need is missing, draw it by following `.agents/skills/multica-icons/SKILL.md`. Do not substitute an inline SVG or an emoji. Rewrite icon imports in `ui:add` output before committing.
@@ -118,8 +128,6 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 - Default tests must not resolve or execute user-installed agent CLIs; pass test-created fake or missing executable paths. New default agent commands go in `scripts/agent-cli-command-names.txt`.
 - Synthetic Git transport probes use ephemeral keys and repositories: `MULTICA_DOCKER_GIT_SMOKE=1 go -C server test -tags=agentintegration ./internal/daemon -run '^TestDockerWorkerGitRoundTrip$' -count=1 -v`. Native uses `MULTICA_NATIVE_GIT_SMOKE=1 MULTICA_GIT_SMOKE_WORKER=<built-multica>` and `TestNativeWorkerGitRoundTrip`. They require no provider login and must not target a real repository.
 - Only run real-agent smoke tests when explicitly authorized. Gate them behind `agentintegration` and check `MULTICA_RUN_REAL_AGENT_SMOKE=1` before executable lookup/account access. Run the specific test: `(cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 go test -tags=agentintegration ./pkg/agent -run '<test-name>' -count=1 -v)`. For Codex, Cursor, OpenCode and MCode Docker workers, `make test-agent-workers` builds the worker image and tests startup migrations, fresh sessions, resume and provider changes using the current user's authenticated accounts. For supported Codex, Cursor and OpenCode Linux native workers, `make test-agent-native-workers` tests the original profiles, fresh/resumed sessions, provider changes, restart, and host/worker coexistence. Set `MULTICA_SMOKE_MCODE_REFRESH=1` to also verify concurrent MCode token rotation and session resume after refresh.
-
-- Repository caches are scoped by server-proven workspace and execution user, independently of Git signing. Do not clone user code during workspace registration with daemon-owner credentials. Task checkout, alternates and environment reuse must preserve that same user identity. Native workers use the masked read-only host view with private PID namespaces. Only explicit task/profile grants are writable; provider credential secrecy is currently deferred.
 
 ## Change and Delivery Rules
 
