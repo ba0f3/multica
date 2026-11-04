@@ -178,6 +178,33 @@ Môi trường: Go 1.27.3, PostgreSQL 17.11 cục bộ, migrations `cmd/migrate 
 4. Chạy smoke test provider CLI thật (2 tài khoản + repo Git thật) để đóng mục nghiệm thu còn mở của #109.
 5. Giữ `.github/workflows/ssh-boundary.yml` bắt buộc trong CI của nhánh chính — đó là chốt chặn duy nhất cho probe bwrap.
 
+## Phụ lục — test hồi quy theo mã
+
+| Mã | Test hồi quy | File |
+| --- | --- | --- |
+| F1 | `TestRerunIssue_ExecutionPrincipalOverridesSourceOriginator` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F1 | `TestRerunIssue_AgentTerminalTaskRefusesCredentialEnqueue` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F1 | `TestUpdateIssue_AgentTerminalTaskReportsBlockedRunDispatch` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F2 | `TestIssueService_QuickCreateOriginMustMatchAuthenticatedTask` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F3 | `TestSSHSteeringPrincipalMatrix` | `server/internal/handler/ssh_steering_matrix_test.go` |
+| F3 | `TestCreateTaskSupplement_DeniesCrossUserCredentialTask` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F3 | `TestCreateTaskSupplement_AllowsSameExecutionUser` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F3 | `TestMayControlCredentialTaskForActor` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F4 | `TestNativeExecutionProfileHomeScopesByUser` | `server/internal/daemon/sandbox/native_execution_profile_test.go` |
+| F4 | `TestNativeProfilePathsIgnoreHostSelectorsWhenExecutionUserScoped` | `server/internal/daemon/sandbox/native_execution_profile_test.go` |
+| F4 | `TestSeedNativeExecutionProfileCopiesAuth` (+ `...CustomCodexSelector`, `...CustomCursorData`) | `server/internal/daemon/sandbox/native_profile_seed_test.go` |
+| F4 | `TestRestrictedViewDoesNotInheritHostDataRoots` | `server/internal/daemon/sandbox/restricted_view_test.go` |
+| F4 | `TestRestrictedViewRecreatesCustomInstallationLinks` | `server/internal/daemon/sandbox/restricted_view_test.go` |
+| F4 | `TestRestrictedViewBwrapDeniesPeerReadAndLateSocket` (probe bwrap thật) | `server/internal/daemon/sandbox/restricted_view_test.go` |
+| F5 | `TestOpenGitSigningLease_RejectsTerminalTask` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F5 | `TestSignGitData_RejectsLeaseAfterTaskTerminal` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F5 | `TestSignGitData_RejectsLeaseAfterTaskRedispatch` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F5 | `TestTaskEligibleForNewSigningLease` | `server/internal/handler/ssh_signing_identity_test.go` |
+| F5 | `TestSSHSigningWireContractAndLifecycle` | `server/internal/handler/ssh_signing_wire_test.go` |
+| C1 | `TestSigningLeaseRejectsRotationFromAnotherBackend` | `server/internal/r2dgit/signing_replica_test.go` |
+
+CI bắt buộc: `.github/workflows/ssh-boundary.yml` chạy `go test -count=1 -v ./internal/daemon/sandbox -run '^TestRestrictedView'` với `MULTICA_REQUIRE_BWRAP_SECURITY_TESTS=1` (fail nếu probe bwrap bị skip) và `go test -count=1 ./internal/r2dgit ./internal/daemon/gitagent`.
+
 ## Tham chiếu bất biến
 
 Tất cả đường dẫn trong báo cáo này trỏ tới `c864efca5f2ef939681afdeec5f82acaa9f8eb6d` trong repo `r2d-ai/multica` (fork của `ba0f3/multica`; hai repo cùng trỏ main head này). Báo cáo gốc của #109: `docs/security/ssh-key-security-review-2026-11-03.md` @ `f86a27d6e3f98fd3bdac59757c7ca3a502c1ffd6`.
