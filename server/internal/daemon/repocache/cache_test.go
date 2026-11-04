@@ -788,11 +788,11 @@ func TestCreateWorktreeReportsFailedFetch(t *testing.T) {
 			t.Parallel()
 			sourceRepo := createTestRepo(t)
 			cache := New(t.TempDir(), testLogger())
-			if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+			if err := cache.Sync(Scope{WorkspaceID: "ws-1", UserID: "test-user"}, []RepoInfo{{URL: sourceRepo}}); err != nil {
 				t.Fatalf("sync failed: %v", err)
 			}
 			params := WorktreeParams{
-				WorkspaceID:         "ws-1",
+				Scope:               Scope{WorkspaceID: "ws-1", UserID: "test-user"},
 				RepoURL:             sourceRepo,
 				WorkDir:             t.TempDir(),
 				AgentName:           "QA",
