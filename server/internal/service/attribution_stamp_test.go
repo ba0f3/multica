@@ -1414,9 +1414,9 @@ func TestAttributionFromComment_TerminalSourceTaskDoesNotInherit(t *testing.T) {
 
 	var commentID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO comment (issue_id, author_type, author_id, content, source_task_id)
-		VALUES ($1, 'agent', $2, 'follow-up', $3)
-		RETURNING id`, issueID, agentID, terminalTaskID).Scan(&commentID); err != nil {
+		INSERT INTO comment (issue_id, author_type, author_id, content, source_task_id, workspace_id)
+		VALUES ($1, 'agent', $2, 'follow-up', $3, $4)
+		RETURNING id`, issueID, agentID, terminalTaskID, workspaceID).Scan(&commentID); err != nil {
 		t.Fatalf("seed comment: %v", err)
 	}
 	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM comment WHERE id = $1`, commentID) })
@@ -1451,8 +1451,8 @@ func TestAttributionForIssueTask_TerminalAgentCreateOrigin(t *testing.T) {
 
 	var issueID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, creator_type, creator_id, origin_type, origin_id, priority)
-		VALUES ($1, 'agent create', 'agent', $2, 'agent_create', $3, 'medium')
+		INSERT INTO issue (workspace_id, title, creator_type, creator_id, origin_type, origin_id, priority, number)
+		VALUES ($1, 'agent create', 'agent', $2, 'agent_create', $3, 'medium', 1)
 		RETURNING id`, workspaceID, agentID, originTaskID).Scan(&issueID); err != nil {
 		t.Fatalf("seed issue: %v", err)
 	}
