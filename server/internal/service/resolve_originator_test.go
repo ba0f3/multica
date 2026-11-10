@@ -176,12 +176,12 @@ func seedOriginatorFanout(t *testing.T, pool *pgxpool.Pool) (memberCommentID, ag
 	}
 
 	// Agent A's task carries the originator (the human U). This is the
-	// row the resolver must follow back through comment.source_task_id.
+	// active row the resolver must follow back through comment.source_task_id.
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, issue_id, status, priority, originator_user_id, accountable_user_id
 		)
-		VALUES ($1, $2, $3, 'completed', 0, $4, $4)
+		VALUES ($1, $2, $3, 'running', 0, $4, $4)
 		RETURNING id
 	`, agentAID, runtimeID, issueID, userIDStr).Scan(&taskAIDStr); err != nil {
 		t.Fatalf("seed task A: %v", err)
@@ -232,8 +232,8 @@ func TestResolveOriginatorFromTriggerComment_MemberAuthored(t *testing.T) {
 }
 
 // TestResolveOriginatorFromTriggerComment_AgentAuthoredInheritsFromParent
-// — the load-bearing fanout case. Agent A finished a task it ran on
-// behalf of human U; A then posts a comment that triggers agent B. The
+// — the load-bearing fanout case. Agent A is running on behalf of human U
+// and posts a comment that triggers agent B. The
 // trigger comment's author is A (not a human), but resolving the
 // originator must walk comment.source_task_id → parent task →
 // parent.originator_user_id, yielding U.

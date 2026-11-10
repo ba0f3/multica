@@ -87,7 +87,7 @@ func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger 
 	case "agent":
 		_, _ = h.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, actorUserID)
 	case "squad":
-		h.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, actorUserID, actorType, actorID, handoffNote)
+		h.enqueueSquadLeaderTask(ctx, issue, actorUserID, actorType, actorID, handoffNote, trigger.WorkflowHandoff)
 	}
 }
 

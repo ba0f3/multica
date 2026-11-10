@@ -1186,7 +1186,7 @@ func commentMentionsAnyone(content string) bool {
 // paths go through computeCommentAgentTriggers so preview and create share the
 // same trigger set.
 // It returns true only when a leader task was actually enqueued.
-func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, actorUserID pgtype.UUID, authorType, authorID, handoffNote string) bool {
+func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, actorUserID pgtype.UUID, authorType, authorID, handoffNote string, workflowHandoff bool) bool {
 	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -1198,8 +1198,7 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 	// The gate must judge the SAME human the enqueue path will persist on the
 	// leader task row (actorUserID from credentialEnqueueActorUserID /
 	// executionActorUserID). When no execution principal is resolved, fall back
-	// to the issue origin chain for system-triggered assigns. triggerCommentID
-	// is always empty on the assign/promote path.
+	// to the issue origin chain for system-triggered assigns.
 	leaderOriginator := ""
 	if actorUserID.Valid {
 		leaderOriginator = uuidToString(actorUserID)
@@ -1212,22 +1211,25 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 		return false
 	}
 
-	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: issue.ID,
-		AgentID: squad.LeaderID,
-		// Key dedup on the reviewed head (TEN-356).
-		HeadSha: h.TaskService.ResolveIssueReviewSHAParam(ctx, issue.ID),
-	})
-	if err != nil || hasPending {
-		return false
+	if !workflowHandoff {
+		hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
+			IssueID: issue.ID,
+			AgentID: squad.LeaderID,
+			// Key dedup on the reviewed head (TEN-356).
+			HeadSha: h.TaskService.ResolveIssueReviewSHAParam(ctx, issue.ID),
+		})
+		if err != nil || hasPending {
+			return false
+		}
 	}
 
-	// triggerCommentID is always empty on the assign/promote path; legacy
-	// handoff text rides its dedicated task column instead.
-	_ = triggerCommentID
-	// The execution principal resolved above is persisted on the leader task row
-	// (MUL-4302 §4; issue #109 F1).
-	if _, err := h.TaskService.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, squad.ID, handoffNote, actorUserID); err != nil {
+	// Persist the same execution principal used by the access gate.
+	if workflowHandoff {
+		_, err = h.TaskService.EnqueueTaskForWorkflowSquadLeader(ctx, issue, squad.LeaderID, squad.ID, handoffNote, actorUserID)
+	} else {
+		_, err = h.TaskService.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, squad.ID, handoffNote, actorUserID)
+	}
+	if err != nil {
 		slog.Warn("enqueue squad leader task failed",
 			"issue_id", uuidToString(issue.ID),
 			"squad_id", uuidToString(squad.ID),
