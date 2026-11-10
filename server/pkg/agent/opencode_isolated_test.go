@@ -44,13 +44,13 @@ func TestEnforceOpenCodeIsolatedLaunch(t *testing.T) {
 		}
 	})
 
-	t.Run("injects standalone for acp v2", func(t *testing.T) {
+	t.Run("does not inject standalone for acp v2", func(t *testing.T) {
 		args, err := enforceOpenCodeIsolatedLaunch([]string{"acp"}, true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, standalone := opencodeConnectionFromArgs(args); !standalone {
-			t.Fatalf("expected --standalone in %v", args)
+		if _, standalone := opencodeConnectionFromArgs(args); standalone {
+			t.Fatalf("acp must not receive --standalone: %v", args)
 		}
 	})
 }

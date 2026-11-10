@@ -334,9 +334,8 @@ func (b *opencodeBackend) executeACP(ctx context.Context, execPath, prompt strin
 	procCtx, procCancel := context.WithCancel(context.Background())
 	args := []string{"acp"}
 	if opts.IsolatedToolBoundary {
-		// Same boundary rules as the run transport: no external --server, and
-		// OpenCode 2.x gets --standalone so its private server stays inside the
-		// worker instead of attaching to a host-side background service.
+		// Reject external servers; ACP starts its private server inside the
+		// worker process tree and does not accept --standalone.
 		var isolateErr error
 		args, isolateErr = enforceOpenCodeIsolatedLaunch(args, usesV2)
 		if isolateErr != nil {

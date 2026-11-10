@@ -12,14 +12,15 @@ var ErrOpenCodeIsolatedExternalServer = errors.New(
 
 // enforceOpenCodeIsolatedLaunch applies argv rules for Docker/bwrap workers.
 // External --server URLs would let the agent reach a host-side or shared
-// background service outside the boundary; 2.x runs get --standalone so the
-// service stays in the worker process tree.
+// background service outside the boundary. OpenCode 2.x `run` gets --standalone
+// so the service stays in the worker process tree. The `acp` subcommand does
+// not accept --standalone; it starts a private server in the worker process tree.
 func enforceOpenCodeIsolatedLaunch(args []string, usesV2 bool) ([]string, error) {
 	server, standalone := opencodeConnectionFromArgs(args)
 	if server != "" {
 		return nil, fmt.Errorf("%w (url redacted)", ErrOpenCodeIsolatedExternalServer)
 	}
-	if usesV2 && !standalone {
+	if usesV2 && !standalone && len(args) > 0 && args[0] == "run" {
 		args = append(args, "--standalone")
 	}
 	return args, nil
