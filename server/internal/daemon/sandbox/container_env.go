@@ -29,6 +29,11 @@ const RepoCABundlePath = HomePath + "/.multica/ca-bundle.pem"
 // it at its own host path, so only Docker needs this fixed container path.
 const ClaudeSettingsPath = HomePath + "/.multica/claude-settings.json"
 
+// DockerWorkerCLIPath is where the task-worker image installs multica
+// (docker/task-worker/Dockerfile). Isolated workers must not inherit the
+// daemon host's MULTICA_CLI_PATH.
+const DockerWorkerCLIPath = "/usr/local/bin/multica"
+
 // CAEnv returns the environment variables that point a worker's TLS tooling at
 // the mounted CA bundle, all set to bundlePath.
 func CAEnv(bundlePath string) map[string]string {
@@ -77,6 +82,9 @@ func ContainerEnv(env map[string]string) map[string]string {
 	rewriteIfSet(rewritten, "XDG_CONFIG_HOME", filepath.Join(HomePath, ".config"))
 	rewriteIfSet(rewritten, "XDG_DATA_HOME", filepath.Join(HomePath, ".local", "share"))
 	rewriteIfSet(rewritten, "XDG_CACHE_HOME", filepath.Join(HomePath, ".cache"))
+	if _, ok := rewritten["MULTICA_CLI_PATH"]; ok {
+		rewritten["MULTICA_CLI_PATH"] = DockerWorkerCLIPath
+	}
 	return rewritten
 }
 

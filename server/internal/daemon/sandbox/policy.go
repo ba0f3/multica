@@ -16,7 +16,10 @@ const (
 	sandboxTemp        = "/tmp"
 	sandboxAgentSocket = "/run/multica/ssh-agent.sock"
 	sandboxWorker      = "/run/multica/worker"
-	CheckoutPath       = sandboxRepo
+	// WorkerCLIPath is the in-sandbox Multica CLI (symlink to the worker binary
+	// under bwrap). Host daemon paths must not appear in MULTICA_CLI_PATH.
+	WorkerCLIPath = "/run/multica/multica"
+	CheckoutPath  = sandboxRepo
 	HomePath           = sandboxHome
 	TempPath           = sandboxTemp
 	WorkerArg          = "__multica_internal_task_worker"

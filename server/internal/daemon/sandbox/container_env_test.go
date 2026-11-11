@@ -80,6 +80,13 @@ func TestContainerEnvPreservesOpenclawConfigPath(t *testing.T) {
 	}
 }
 
+func TestContainerEnvRewritesMulticaCLIPath(t *testing.T) {
+	env := ContainerEnv(map[string]string{"MULTICA_CLI_PATH": "/home/agent/.local/bin/multica"})
+	if got := env["MULTICA_CLI_PATH"]; got != DockerWorkerCLIPath {
+		t.Fatalf("MULTICA_CLI_PATH = %q, want %q", got, DockerWorkerCLIPath)
+	}
+}
+
 func TestContainerEnvIncludesToolchainPath(t *testing.T) {
 	env := ContainerEnv(nil)
 	path := env["PATH"]

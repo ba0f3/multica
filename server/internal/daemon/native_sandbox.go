@@ -305,6 +305,9 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	if provider == "opencode" && env.OpenCodeCredentialsPath != "" {
 		agentEnv[sandbox.OpenCodeCredentialsEnv] = sandbox.OpenCodeCredentialsPath
 	}
+	if agentEnv["MULTICA_CLI_PATH"] != "" {
+		agentEnv["MULTICA_CLI_PATH"] = sandbox.WorkerCLIPath
+	}
 	config.Env = agentEnv
 	config.CLIVersion = runtime.Version
 	if provider == "codex" {
@@ -345,7 +348,7 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 			}
 			mounts = append(mounts, sandbox.Mount{Source: source, Target: target})
 		}
-		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: operatorHome(runtime), TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: "/run/multica/multica", Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(operatorHome(runtime), ".multica"), filepath.Join(operatorHome(runtime), ".ssh"), filepath.Join(operatorHome(runtime), ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
+		policy := sandbox.Policy{TaskRoot: env.RootDir, HomeDir: dirs["home"], HostHome: operatorHome(runtime), TempDir: dirs["tmp"], OutputDir: output, CheckoutDir: env.WorkDir, CheckoutTarget: env.WorkDir, ExtraMounts: mounts, Links: append(append([]sandbox.NativeLink{}, runtime.Links...), sandbox.NativeLink{Path: sandbox.WorkerCLIPath, Target: "worker"}), AgentSocket: agentSocket, AllowedRoots: []string{env.RootDir}, ForbiddenRoots: []string{d.cfg.WorkspacesRoot, filepath.Join(operatorHome(runtime), ".multica"), filepath.Join(operatorHome(runtime), ".ssh"), filepath.Join(operatorHome(runtime), ".docker")}, AllowedExactPaths: append([]string{agentSocket}, extraMountSources(mounts)...), Env: map[string]string{"PATH": agentEnv["PATH"]}}
 		args, err := sandbox.BuildRestrictedArgs(policy, self)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errSandboxUnavailable, err)
