@@ -7,6 +7,32 @@ import (
 	"testing"
 )
 
+func TestPruneOpenCodeDatabaseRemovesSQLiteFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "opencode")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"opencode.db", "opencode.db-shm", "opencode.db-wal"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PruneOpenCodeDatabase(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"opencode.db", "opencode.db-shm", "opencode.db-wal"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be removed", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "auth.json")); err != nil {
+		t.Fatal("auth.json should remain")
+	}
+}
+
 func TestPrepareOpenCodeIsolatedHomeCopiesConfigAndAuthData(t *testing.T) {
 	srcConfig := filepath.Join(t.TempDir(), "config", "opencode")
 	srcData := filepath.Join(t.TempDir(), "data", "opencode")

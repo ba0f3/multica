@@ -61,6 +61,11 @@ func seedNativeExecutionProfile(request NativeRuntimeRequest, scopedPaths []stri
 		if err := execenv.MirrorProviderTree(spec.path, dest, skip, nil); err != nil {
 			return fmt.Errorf("seed native profile role %q from %q: %w", spec.role, spec.path, err)
 		}
+		if request.Provider == "opencode" && spec.role == "opencode_data" {
+			if err := execenv.PruneOpenCodeDatabase(dest); err != nil {
+				return fmt.Errorf("seed native profile opencode data: %w", err)
+			}
+		}
 	}
 	return nil
 }

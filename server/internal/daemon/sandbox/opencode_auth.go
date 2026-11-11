@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 const OpenCodeCredentialsPath = "/run/multica/opencode-credentials.json"
@@ -15,6 +19,13 @@ func importWorkerOpenCodeCredentials(ctx context.Context, manifest Manifest) err
 	path := manifest.Config.Env[OpenCodeCredentialsEnv]
 	if manifest.Provider != "opencode" || path == "" {
 		return nil
+	}
+	dataHome := strings.TrimSpace(manifest.Config.Env["XDG_DATA_HOME"])
+	if dataHome == "" {
+		dataHome = filepath.Join(strings.TrimSpace(manifest.Config.Env["HOME"]), ".local", "share")
+	}
+	if err := execenv.PruneOpenCodeDatabase(filepath.Join(dataHome, "opencode")); err != nil {
+		return fmt.Errorf("reset worker OpenCode database before import: %w", err)
 	}
 	input, err := os.Open(path)
 	if err != nil {

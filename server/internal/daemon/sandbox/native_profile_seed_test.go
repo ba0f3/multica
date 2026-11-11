@@ -121,3 +121,44 @@ func TestSeedNativeExecutionProfileCopiesCustomCursorData(t *testing.T) {
 		t.Fatalf("scoped cursor credentials = %q", string(data))
 	}
 }
+
+func TestSeedNativeExecutionProfilePrunesOpenCodeDatabase(t *testing.T) {
+	root := t.TempDir()
+	operatorHome := filepath.Join(root, "runtime")
+	opencodeData := filepath.Join(operatorHome, ".local", "share", "opencode")
+	if err := os.MkdirAll(opencodeData, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeData, "auth.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeData, "opencode.db"), []byte("host-db"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req := NativeRuntimeRequest{
+		Home:            operatorHome,
+		Provider:        "opencode",
+		ExecutionUserID: "user-a",
+		Env:             map[string]string{},
+	}
+	var runtime NativeRuntime
+	runtime.Env = make(map[string]string)
+	scopedPaths, err := nativeProfilePaths(req, &runtime)
+	if err != nil {
+		t.Fatalf("nativeProfilePaths: %v", err)
+	}
+	if err := seedNativeExecutionProfile(req, scopedPaths); err != nil {
+		t.Fatalf("seedNativeExecutionProfile: %v", err)
+	}
+	scopedData := runtime.Env["XDG_DATA_HOME"]
+	if scopedData == "" {
+		t.Fatal("missing scoped XDG_DATA_HOME")
+	}
+	scopedOpenCode := filepath.Join(scopedData, "opencode")
+	if _, err := os.Stat(filepath.Join(scopedOpenCode, "opencode.db")); !os.IsNotExist(err) {
+		t.Fatalf("opencode.db should be pruned after seed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(scopedOpenCode, "auth.json")); err != nil {
+		t.Fatalf("auth.json should be copied: %v", err)
+	}
+}

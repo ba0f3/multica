@@ -124,3 +124,19 @@ func exportOpenCodeCredentials(executable, destination string) error {
 	}
 	return writeFileAtomic(destination, data, 0600)
 }
+
+// PruneOpenCodeDatabase removes OpenCode's SQLite store under dataDir. Native
+// execution profiles must not inherit the operator's opencode.db: it is tied to
+// host paths and breaks ACP session/new with CatalogNotReady while `opencode
+// models` still lists entries.
+func PruneOpenCodeDatabase(dataDir string) error {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil
+	}
+	for _, name := range []string{"opencode.db", "opencode.db-shm", "opencode.db-wal"} {
+		if err := os.Remove(filepath.Join(dataDir, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}

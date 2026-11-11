@@ -263,6 +263,9 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 	if env.GitKnownHostsPath != "" {
 		extras = append(extras, sandbox.Mount{Source: env.GitKnownHostsPath, Target: env.GitKnownHostsPath, ReadOnly: true})
 	}
+	if provider == "opencode" && env.OpenCodeCredentialsPath != "" {
+		extras = append(extras, sandbox.Mount{Source: env.OpenCodeCredentialsPath, Target: sandbox.OpenCodeCredentialsPath, ReadOnly: true})
+	}
 	if env.WorkerCABundlePath != "" {
 		extras = append(extras, sandbox.Mount{Source: env.WorkerCABundlePath, Target: env.WorkerCABundlePath, ReadOnly: true})
 	}
@@ -298,6 +301,9 @@ func (d *Daemon) bwrapBackend(provider string, config agent.Config, env *execenv
 		for key, value := range sandbox.CAEnv(env.WorkerCABundlePath) {
 			agentEnv[key] = value
 		}
+	}
+	if provider == "opencode" && env.OpenCodeCredentialsPath != "" {
+		agentEnv[sandbox.OpenCodeCredentialsEnv] = sandbox.OpenCodeCredentialsPath
 	}
 	config.Env = agentEnv
 	config.CLIVersion = runtime.Version
