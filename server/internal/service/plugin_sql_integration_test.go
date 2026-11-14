@@ -39,13 +39,16 @@ func TestDeleteWorkspacePluginDataClearsEveryPluginTable(t *testing.T) {
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("connect database: %v", err)
+		t.Skipf("database not reachable: %v", err)
 	}
 	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		t.Skipf("database not reachable: %v", err)
+	}
 
 	var schemaReady bool
 	if err := pool.QueryRow(ctx, `SELECT to_regclass('plugin_installation') IS NOT NULL`).Scan(&schemaReady); err != nil {
-		t.Fatalf("check plugin schema: %v", err)
+		t.Skipf("check plugin schema: %v", err)
 	}
 	if !schemaReady {
 		t.Skip("plugin migrations are not applied")

@@ -74,11 +74,15 @@ func TestIssueRequesterAttributionAndCreatedSurfaces(t *testing.T) {
 			if tc.historical {
 				id = dbfx.Issue(t, title, testutil.Cols{"creator_type": creatorType, "creator_id": creatorID, "origin_type": tc.origin, "origin_id": origin})
 			} else {
-				result, err := testHandler.IssueService.Create(ctx, service.IssueCreateParams{
+				params := service.IssueCreateParams{
 					WorkspaceID: parseUUID(testWorkspaceID), Title: title, Status: "todo", Priority: "none",
 					CreatorType: creatorType, CreatorID: parseUUID(creatorID), OriginID: origin,
 					OriginType: pgtype.Text{String: tc.origin, Valid: tc.origin != ""},
-				}, service.IssueCreateOpts{})
+				}
+				if creatorType == "agent" && tc.origin == "quick_create" && origin.Valid {
+					params.AuthenticatedTaskID = origin
+				}
+				result, err := testHandler.IssueService.Create(ctx, params, service.IssueCreateOpts{})
 				if err != nil {
 					t.Fatal(err)
 				}

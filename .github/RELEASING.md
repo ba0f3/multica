@@ -57,6 +57,35 @@ The daemon defaults to `ghcr.io/ba0f3/multica-task-worker:latest`. Set
 or use an image digest to pin a worker release. Other forks must set this
 variable to their own published image.
 
+### Manual release (`make` / script)
+
+When CI cannot run the Release workflow, publish from a tagged checkout on a machine with Docker Buildx, GoReleaser, and `gh` authenticated (`repo` + `write:packages`):
+
+```bash
+git checkout v0.9.0-p1
+export GITHUB_TOKEN="$(gh auth token)"   # or a PAT with contents + packages write
+
+make release-verify RELEASE_TAG=v0.9.0-p1
+make release-publish RELEASE_TAG=v0.9.0-p1
+```
+
+Targets map to `scripts/release-publish.sh`:
+
+| Target | Action |
+| --- | --- |
+| `release-build` | `goreleaser release --snapshot` → `dist/` only |
+| `release-verify` | Same tests + `govulncheck` as the CI `verify` job |
+| `release-cli` | GoReleaser → GitHub Release assets (+ Homebrew when `HOMEBREW_TAP_GITHUB_TOKEN` is set) |
+| `release-images` | `multica-backend`, `multica-web`, `multica-task-worker` → `ghcr.io/<owner>/` |
+| `release-images-worker` | Worker image only (`RELEASE_TAG=latest` allowed) |
+| `release-publish` | `verify` + `cli` + `images` (skip with `SKIP_VERIFY=1`, `SKIP_CLI=1`, or `SKIP_IMAGES=1`) |
+
+Override image namespace with `GHCR_OWNER`. Multi-arch defaults to `linux/amd64,linux/arm64` (`PLATFORMS`). Worker smoke uses `linux/amd64` (`SMOKE_PLATFORM`).
+
+`release-verify` / `verify` runs the same Go suite as CI. When `.env` or `.env.worktree` exists, it also runs `scripts/ensure-postgres.sh` and migrations (`RELEASE_ENSURE_DB=1`, same idea as `make test`). Set `RELEASE_ENSURE_DB=0` to skip that step. If `DATABASE_URL` is set in your shell but Postgres is down, either unset it, run `make up`, or rely on the auto-prepare when `.env` is present.
+
+Lib tests: `bash scripts/release-publish-lib.test.sh`.
+
 ### Publish only the worker image
 
 The Worker image workflow also supports manual runs without creating a release

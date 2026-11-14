@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon task-worker-image test-agent-workers test-agent-native-workers cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon task-worker-image test-agent-workers test-agent-native-workers cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev release-build release-verify release-cli release-images release-images-worker release-publish
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -322,6 +322,32 @@ task-worker-image: ## Build Docker task worker; tag local name and daemon defaul
 		--build-arg VERSION=dev --build-arg COMMIT=$(COMMIT) \
 		.
 	docker tag multica/task-worker:local ghcr.io/ba0f3/multica-task-worker:latest
+
+RELEASE_TAG ?=
+SKIP_VERIFY ?=
+SKIP_CLI ?=
+SKIP_IMAGES ?=
+
+release-build: ## Local GoReleaser snapshot into dist/ (no upload)
+	bash scripts/release-publish.sh build
+
+release-verify: ## Pre-release Go tests + govulncheck (TAG=$(RELEASE_TAG) optional)
+	@TAG="$(RELEASE_TAG)" bash scripts/release-publish.sh verify
+
+release-cli: ## Publish CLI/daemon to GitHub Releases (TAG=$(RELEASE_TAG), GITHUB_TOKEN or gh auth)
+	@test -n "$(RELEASE_TAG)" || (echo "Set RELEASE_TAG=vX.Y.Z"; exit 1)
+	@TAG="$(RELEASE_TAG)" bash scripts/release-publish.sh cli
+
+release-images: ## Push backend, web, worker images to GHCR (TAG=$(RELEASE_TAG))
+	@test -n "$(RELEASE_TAG)" || (echo "Set RELEASE_TAG=vX.Y.Z"; exit 1)
+	@TAG="$(RELEASE_TAG)" bash scripts/release-publish.sh images
+
+release-images-worker: ## Push only task-worker image (RELEASE_TAG unset → latest)
+	@TAG="$(RELEASE_TAG)" bash scripts/release-publish.sh images-worker
+
+release-publish: ## Full release: verify, GoReleaser, GHCR (TAG=$(RELEASE_TAG); SKIP_*=1 to skip steps)
+	@test -n "$(RELEASE_TAG)" || (echo "Set RELEASE_TAG=vX.Y.Z"; exit 1)
+	@TAG="$(RELEASE_TAG)" SKIP_VERIFY="$(SKIP_VERIFY)" SKIP_CLI="$(SKIP_CLI)" SKIP_IMAGES="$(SKIP_IMAGES)" bash scripts/release-publish.sh all
 
 test-agent-workers: task-worker-image ## Test Codex, Cursor, OpenCode and MCode workers using your authenticated accounts
 	cd server && MULTICA_RUN_REAL_AGENT_SMOKE=1 MULTICA_REAL_AGENT_HOME="$(HOME)" \

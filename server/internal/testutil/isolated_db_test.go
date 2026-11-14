@@ -30,6 +30,15 @@ func TestIsolatedDBCleanup(t *testing.T) {
 	if dsn == "" {
 		t.Skip("explicit disposable DATABASE_URL required")
 	}
+	probe, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Skipf("database not reachable: %v", err)
+	}
+	if err := probe.Ping(context.Background()); err != nil {
+		probe.Close(context.Background())
+		t.Skipf("database not reachable: %v", err)
+	}
+	probe.Close(context.Background())
 	var name string
 	t.Run("migrated database", func(t *testing.T) {
 		pool := IsolatedDB(t, dsn)
