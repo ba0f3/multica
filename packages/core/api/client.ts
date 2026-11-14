@@ -97,6 +97,7 @@ import type {
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
+  TaskContextReceiptResponse,
   Attachment,
   ChatSession,
   ChatPinnedAgent,
@@ -190,6 +191,10 @@ import type {
   PluginConfigRequest,
   IssuePullRequestsResponse,
   IssueEnvironmentsResponse,
+  IssueEnvironmentAction,
+  IssueEnvironmentCommand,
+  StartIssueEnvironmentRequest,
+  IssuePullRequestSummariesResponse,
   ListGitHubInstallationsResponse,
   ListGitHubRepositoriesResponse,
   GitHubConnectResponse,
@@ -281,12 +286,14 @@ import { type Logger, noopLogger } from "../logger";
 import { createRequestId, createSafeId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
+import { getApiRequestObserver } from "./request-observer";
 import {
   RuntimeProfileSchema,
   RuntimeProfileListSchema,
   AgentTaskListSchema,
   AgentTaskPageSchema,
   AgentActivityBucketListSchema,
+  AttachmentListSchema,
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChatDraftRestoresResponseSchema,
@@ -343,6 +350,10 @@ import {
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
   type AppConfigResponse,
+  StoreThemeListSchema,
+  EMPTY_STORE_THEME_LIST,
+  type StoreTheme,
+  type StoreThemeMode,
   type RefreshSessionResponse,
   RefreshSessionResponseSchema,
   EMPTY_REFRESH_SESSION_RESPONSE,
@@ -371,6 +382,7 @@ import {
   SearchIssuesResponseSchema,
   ProjectSchema,
   ListProjectMembersResponseSchema,
+  ProjectSubscriptionSchema,
   ListProjectsResponseSchema,
   EMPTY_PROJECT,
   EMPTY_LIST_PROJECTS_RESPONSE,
@@ -383,6 +395,7 @@ import {
   SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
   TaskMessageListSchema,
+  TaskContextReceiptResponseSchema,
   TimelineEntriesSchema,
   UserSchema,
   WebhookDeliveryResponseSchema,
@@ -460,7 +473,9 @@ import {
   TeamAppImpactSchema,
   EMPTY_ISSUE_UNREAD_PAGE,
   SubscribedIssueIdsSchema,
+  InvolvedSquadIdsSchema,
   IssueInboxReadSchema,
+  InboxDeleteSchema,
   InboxItemListSchema,
   ArchivedInboxPageSchema,
   ArchivedInboxFacetsSchema,
@@ -502,6 +517,9 @@ import {
   IssuePullRequestsResponseSchema,
   EMPTY_ISSUE_ENVIRONMENTS_RESPONSE,
   IssueEnvironmentsResponseSchema,
+  IssueEnvironmentCommandSchema,
+  EMPTY_ISSUE_PULL_REQUEST_SUMMARIES_RESPONSE,
+  IssuePullRequestSummariesResponseSchema,
   ResourceLabelsResponseSchema,
   EMPTY_LABEL,
   EMPTY_LIST_LABELS_RESPONSE,
@@ -801,6 +819,9 @@ function subscriberTarget(
  */
 type WorkspaceScope = string | { workspaceId: string };
 
+/** `readOnly` marks a POST that changes nothing on the server. */
+type ApiRequestInit = RequestInit & { readOnly?: boolean };
+
 function workspaceHeader(
   scope?: WorkspaceScope,
 ): Record<string, string> | undefined {
@@ -989,11 +1010,14 @@ export class ApiClient {
   // path, plain text for the attachment-preview proxy, etc.
   private async fetchRaw(
     path: string,
-    init?: RequestInit & { extraHeaders?: Record<string, string> },
+    init?: ApiRequestInit & { extraHeaders?: Record<string, string> },
   ): Promise<Response> {
     const rid = createRequestId();
     const start = Date.now();
     const method = init?.method ?? "GET";
+    const observer = getApiRequestObserver();
+    const refusal = observer?.refuse?.({ method, path, readOnly: init?.readOnly === true });
+    if (refusal) throw new Error(refusal);
 
     // Rebuilt per attempt rather than captured once: authHeaders() reads the
     // CSRF cookie at call time, and the retry below exists precisely because
@@ -1011,12 +1035,30 @@ export class ApiClient {
 
     this.logger.info(`→ ${method} ${path}`, { rid });
 
-    const send = () =>
-      fetch(`${this.baseUrl}${path}`, {
-        ...init,
-        headers: buildHeaders(),
-        credentials: "include",
-      });
+    observer?.onStart({
+      requestId: rid,
+      method,
+      path,
+      body: typeof init?.body === "string" ? init.body : null,
+    });
+
+    const { readOnly: _readOnly, ...requestInit } = init ?? {};
+    const send = async () => {
+      try {
+        return await fetch(`${this.baseUrl}${path}`, {
+          ...requestInit,
+          headers: buildHeaders(),
+          credentials: "include",
+        });
+      } catch (err) {
+        observer?.onEnd({
+          requestId: rid,
+          status: null,
+          error: err instanceof Error && err.name === "AbortError" ? "aborted" : String(err),
+        });
+        throw err;
+      }
+    };
 
     let res = await send();
 
@@ -1047,14 +1089,16 @@ export class ApiClient {
       const { message, body } = await this.parseErrorBody(res, `API error: ${res.status} ${res.statusText}`);
       const logLevel = res.status === 404 ? "warn" : "error";
       this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
+      observer?.onEnd({ requestId: rid, status: res.status, error: message });
       throw new ApiError(message, res.status, res.statusText, body);
     }
 
     this.logger.info(`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms` });
+    observer?.onEnd({ requestId: rid, status: res.status, error: null });
     return res;
   }
 
-  private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
+  private async fetch<T>(path: string, init?: ApiRequestInit): Promise<T> {
     const res = await this.fetchRaw(path, {
       ...init,
       extraHeaders: { "Content-Type": "application/json" },
@@ -1214,6 +1258,7 @@ export class ApiClient {
     if (params?.assignee_ids?.length) search.set("assignee_ids", params.assignee_ids.join(","));
     if (params?.assignee_types?.length) search.set("assignee_types", params.assignee_types.join(","));
     if (params?.creator_id) search.set("creator_id", params.creator_id);
+    if (params?.created_by_user_id) search.set("created_by_user_id", params.created_by_user_id);
     if (params?.project_id) search.set("project_id", params.project_id);
     if (params?.assignee_filters?.length) {
       search.set("assignee_filters", params.assignee_filters.map((f) => `${f.type}:${f.id}`).join(","));
@@ -1253,12 +1298,23 @@ export class ApiClient {
         method: "POST",
         body: JSON.stringify(Object.fromEntries(search)),
       });
+      if (params?.created_by_user_id && (
+        !raw || typeof raw !== "object" || !("created_by_user_id" in raw) ||
+        raw.created_by_user_id !== params.created_by_user_id
+      )) {
+        return this.listIssues({ ...params, created_by_user_id: undefined, creator_id: params.creator_id ?? params.created_by_user_id });
+      }
       return parseWithFallback(raw, ListIssuesResponseSchema, EMPTY_LIST_ISSUES_RESPONSE, {
         endpoint: "POST /api/issues/query",
       });
     }
     const path = `/api/issues?${search}`;
     const raw = await this.fetch<unknown>(path);
+    // Older servers silently ignore unknown query parameters. Never expose
+    // their unfiltered response as a Created list.
+    if (params?.created_by_user_id && (!raw || typeof raw !== "object" || !("created_by_user_id" in raw) || raw.created_by_user_id !== params.created_by_user_id)) {
+      return this.listIssues({ ...params, created_by_user_id: undefined, creator_id: params.creator_id ?? params.created_by_user_id });
+    }
     return parseWithFallback(raw, ListIssuesResponseSchema, EMPTY_LIST_ISSUES_RESPONSE, {
       endpoint: "GET /api/issues",
     });
@@ -1275,6 +1331,7 @@ export class ApiClient {
     if (params.assignee_id) search.set("assignee_id", params.assignee_id);
     if (params.assignee_ids?.length) search.set("assignee_ids", params.assignee_ids.join(","));
     if (params.creator_id) search.set("creator_id", params.creator_id);
+    if (params.created_by_user_id) search.set("created_by_user_id", params.created_by_user_id);
     if (params.project_id) search.set("project_id", params.project_id);
     if (params.involves_user_id) search.set("involves_user_id", params.involves_user_id);
     if (params.metadata && Object.keys(params.metadata).length > 0) {
@@ -1301,6 +1358,9 @@ export class ApiClient {
     if (params.sort_by) search.set("sort", params.sort_by);
     if (params.sort_direction) search.set("direction", params.sort_direction);
     const raw = await this.fetch<unknown>(`/api/issues/grouped?${search}`);
+    if (params.created_by_user_id && (!raw || typeof raw !== "object" || !("created_by_user_id" in raw) || raw.created_by_user_id !== params.created_by_user_id)) {
+      return this.listGroupedIssues({ ...params, created_by_user_id: undefined, creator_id: params.creator_id ?? params.created_by_user_id });
+    }
     return parseWithFallback(raw, GroupedIssuesResponseSchema, EMPTY_GROUPED_ISSUES_RESPONSE, {
       endpoint: "GET /api/issues/grouped",
     });
@@ -1309,6 +1369,7 @@ export class ApiClient {
   async listIssueTableGroups(params: IssueTableGroupsRequest): Promise<IssueTableGroupsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/groups", {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify(params),
     });
     return parseWithFallback(
@@ -1322,6 +1383,7 @@ export class ApiClient {
   async listIssueTableRows(params: IssueTableRowsRequest): Promise<IssueTableRowsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/rows", {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify(params),
     });
     return parseWithFallback(
@@ -1335,6 +1397,7 @@ export class ApiClient {
   async listIssueTableFacets(params: IssueTableFacetsRequest): Promise<IssueTableFacetsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/facets", {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify(params),
     });
     return parseWithFallback(
@@ -1757,8 +1820,9 @@ export class ApiClient {
   }
 
   // Comments
-  async listComments(issueId: string): Promise<Comment[]> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/comments`);
+  async listComments(issueId: string, options?: { thread: string }): Promise<Comment[]> {
+    const query = options ? `?${new URLSearchParams({ thread: options.thread })}` : "";
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/comments${query}`);
     return parseWithFallback(raw, CommentsListSchema, [], {
       endpoint: "GET /api/issues/:id/comments",
     });
@@ -1789,6 +1853,7 @@ export class ApiClient {
   async previewCommentTriggers(issueId: string, content: string, parentId?: string, editingCommentId?: string): Promise<CommentTriggerPreview> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/comments/trigger-preview`, {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify({
         content,
         ...(parentId ? { parent_id: parentId } : {}),
@@ -1807,6 +1872,7 @@ export class ApiClient {
   async previewIssueTrigger(params: IssueTriggerPreviewParams): Promise<IssueTriggerPreview> {
     const raw = await this.fetch<unknown>("/api/issues/preview-trigger", {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify({
         ...(params.issueIds?.length ? { issue_ids: params.issueIds } : {}),
         ...(params.isCreate ? { is_create: true } : {}),
@@ -2125,7 +2191,7 @@ export class ApiClient {
   }
 
   async listQoderEnvironments(wsId: string, token: string, baseUrl: string, signal?: AbortSignal) {
-    return parseQoderCatalog(await this.fetch(`/api/workspaces/${wsId}/qoder/environments`, { method: "POST", body: JSON.stringify({ qoder_token: token, base_url: baseUrl }), signal }));
+    return parseQoderCatalog(await this.fetch(`/api/workspaces/${wsId}/qoder/environments`, { method: "POST", readOnly: true, body: JSON.stringify({ qoder_token: token, base_url: baseUrl }), signal }));
   }
   async listQoderAgents(wsId: string) {
     return parseQoderCatalog(await this.fetch(`/api/workspaces/${wsId}/qoder/agents`));
@@ -2977,10 +3043,22 @@ export class ApiClient {
     });
   }
 
-  async listTasksByIssue(issueId: string, includeDescendants = false): Promise<AgentTask[]> {
-    const raw = await this.fetch<unknown>(
-      `/api/issues/${issueId}/task-runs${includeDescendants ? "?scope=subtree" : ""}`,
+  async getTaskContextReceipt(taskId: string): Promise<TaskContextReceiptResponse> {
+    const raw = await this.fetch<unknown>(`/api/tasks/${taskId}/context-receipt`);
+    return parseWithFallback<TaskContextReceiptResponse>(
+      raw,
+      TaskContextReceiptResponseSchema,
+      { receipt: null },
+      { endpoint: "GET /api/tasks/:id/context-receipt" },
     );
+  }
+
+  async listTasksByIssue(issueId: string, includeDescendants = false, options?: { view: "timeline" }): Promise<AgentTask[]> {
+    const search = new URLSearchParams();
+    if (includeDescendants) search.set("scope", "subtree");
+    if (options?.view) search.set("view", options.view);
+    const query = search.size ? `?${search}` : "";
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/task-runs${query}`);
     return parseWithFallback<AgentTask[]>(raw, AgentTaskListSchema, [], {
       endpoint: "GET /api/issues/:id/task-runs",
     });
@@ -3076,6 +3154,13 @@ export class ApiClient {
 
   async archiveInbox(id: string): Promise<InboxItem> {
     return this.fetch(`/api/inbox/${id}/archive`, { method: "POST" });
+  }
+
+  async deleteInbox(id: string): Promise<{ count: number | null }> {
+    const raw = await this.fetch<unknown>(`/api/inbox/${id}`, { method: "DELETE" });
+    return parseWithFallback<{ count: number | null }>(raw, InboxDeleteSchema, { count: null }, {
+      endpoint: "DELETE /api/inbox/{id}",
+    });
   }
 
   // Archived notifications, backing the inbox's "Archived" sub-view. Capped
@@ -3212,6 +3297,38 @@ export class ApiClient {
     return parseWithFallback<AppConfigResponse>(raw, AppConfigSchema, EMPTY_APP_CONFIG, {
       endpoint: "GET /api/config",
     });
+  }
+
+  // Theme store
+  async listStoreThemes(): Promise<StoreTheme[]> {
+    const raw = await this.fetch<unknown>("/api/theme-store/themes");
+    return parseWithFallback(raw, StoreThemeListSchema, EMPTY_STORE_THEME_LIST, {
+      endpoint: "GET /api/theme-store/themes",
+    }).themes as StoreTheme[];
+  }
+
+  /** The theme's checked theme.zip, for the same reader as an imported theme. */
+  async getStoreThemePackage(id: string): Promise<Uint8Array> {
+    const res = await this.fetchRaw(`/api/theme-store/themes/${encodeURIComponent(id)}/package`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  // Fetched as bytes rather than linked: Desktop authenticates with a bearer
+  // token that an <img> request would not carry.
+  // The revision only keeps the browser's HTTP cache from answering for an
+  // older screenshot; the server ignores it.
+  async getStoreThemeScreenshot(
+    id: string,
+    mode: StoreThemeMode,
+    revision?: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    const res = await this.fetchRaw(
+      `/api/theme-store/themes/${encodeURIComponent(id)}/screenshots/${mode}${query}`,
+      { signal },
+    );
+    return res.blob();
   }
 
   // Workspaces
@@ -3435,6 +3552,7 @@ export class ApiClient {
   async previewPlugin(workspaceId: string, request: PluginPreviewRequest): Promise<PluginPreview> {
     const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/plugins/preview`, {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify(request),
     });
     return parseWithFallback(raw, PluginPreviewSchema, EMPTY_PLUGIN_PREVIEW, {
@@ -4210,7 +4328,10 @@ export class ApiClient {
   }
 
   async listAttachments(issueId: string): Promise<Attachment[]> {
-    return this.fetch(`/api/issues/${issueId}/attachments`);
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/attachments`);
+    return parseWithFallback<Attachment[]>(raw, AttachmentListSchema, [], {
+      endpoint: "GET /api/issues/:id/attachments",
+    });
   }
 
   // Fetches a fresh attachment metadata record. The server re-signs
@@ -4332,6 +4453,25 @@ export class ApiClient {
     return parseWithFallback(raw, ListProjectMembersResponseSchema, { members: [], total: 0 }, {
       endpoint: "GET /api/projects/:id/members",
     });
+  }
+
+  async getProjectSubscription(id: string): Promise<boolean> {
+    return this.parseProjectSubscription(
+      await this.fetch<unknown>(`/api/projects/${id}/subscription`),
+      "GET /api/projects/:id/subscription",
+    );
+  }
+
+  async setProjectSubscription(id: string, subscribed: boolean): Promise<boolean> {
+    const method = subscribed ? "PUT" : "DELETE";
+    return this.parseProjectSubscription(
+      await this.fetch<unknown>(`/api/projects/${id}/subscription`, { method }),
+      `${method} /api/projects/:id/subscription`,
+    );
+  }
+
+  private parseProjectSubscription(raw: unknown, endpoint: string): boolean {
+    return parseWithFallback(raw, ProjectSubscriptionSchema, { subscribed: false }, { endpoint }).subscribed;
   }
 
   async addProjectMembers(id: string, userIds: string[]): Promise<ListProjectMembersResponse> {
@@ -4543,6 +4683,7 @@ export class ApiClient {
   async dryRunProjectWorkflow(projectId: string, workflowId: string | null): Promise<IssueWorkflowDryRunResponse> {
     const raw = await this.fetch<unknown>(`/api/projects/${projectId}/workflow`, {
       method: "POST",
+      readOnly: true,
       body: JSON.stringify({ workflow_id: workflowId, dry_run: true }),
     });
     return parseWithFallback(raw, IssueWorkflowDryRunResponseSchema, EMPTY_ISSUE_WORKFLOW_DRY_RUN, {
@@ -4942,6 +5083,15 @@ export class ApiClient {
     }) as Squad[];
   }
 
+  async listInvolvedSquadIds(): Promise<string[]> {
+    const raw = await this.fetch<unknown>("/api/squads/involved");
+    const parsed = parseWithFallback<{ squad_ids: string[] } | null>(raw, InvolvedSquadIdsSchema, null, {
+      endpoint: "GET /api/squads/involved",
+    });
+    if (!parsed) throw new Error("GET /api/squads/involved returned a malformed body");
+    return parsed.squad_ids;
+  }
+
   async getSquad(id: string): Promise<Squad> {
     const raw = await this.fetch<unknown>(`/api/squads/${id}`);
     return parseWithFallback(raw, SquadSchema, EMPTY_SQUAD, {
@@ -5195,13 +5345,10 @@ export class ApiClient {
   // GitHub integration
   async getGitHubConnectURL(
     workspaceId: string,
-    returnTo?: "github" | "repositories",
+    options?: { desktop?: boolean },
   ): Promise<GitHubConnectResponse> {
-    const search = new URLSearchParams();
-    if (returnTo) search.set("return_to", returnTo);
-    const suffix = search.size > 0 ? `?${search.toString()}` : "";
     const raw = await this.fetch<unknown>(
-      `/api/workspaces/${workspaceId}/github/connect${suffix}`,
+      `/api/workspaces/${workspaceId}/github/connect${options?.desktop ? "?desktop=1" : ""}`,
     );
     return parseWithFallback(
       raw,
@@ -5267,6 +5414,53 @@ export class ApiClient {
       IssueEnvironmentsResponseSchema,
       EMPTY_ISSUE_ENVIRONMENTS_RESPONSE,
       { endpoint: "GET /api/issues/:id/environments" },
+    );
+  }
+
+  /** Ask the environment's machine to stop it. Resolves once queued. */
+  async stopIssueEnvironment(issueId: string, environmentId: string): Promise<IssueEnvironmentCommand> {
+    return this.issueEnvironmentCommand(`/api/issues/${issueId}/environments/${environmentId}/stop`, "stop", { method: "POST" });
+  }
+
+  /** Ask the environment's machine to start it again from the same code. */
+  async restartIssueEnvironment(issueId: string, environmentId: string): Promise<IssueEnvironmentCommand> {
+    return this.issueEnvironmentCommand(`/api/issues/${issueId}/environments/${environmentId}/restart`, "restart", { method: "POST" });
+  }
+
+  /** Ask the environment's machine for the end of its log; poll the command for it. */
+  async readIssueEnvironmentLogs(issueId: string, environmentId: string): Promise<IssueEnvironmentCommand> {
+    return this.issueEnvironmentCommand(`/api/issues/${issueId}/environments/${environmentId}/logs`, "logs", { method: "POST" });
+  }
+
+  /** Start an environment the latest run on a machine declared. */
+  async startIssueEnvironment(issueId: string, body: StartIssueEnvironmentRequest): Promise<IssueEnvironmentCommand> {
+    return this.issueEnvironmentCommand(`/api/issues/${issueId}/environments/start`, "start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getIssueEnvironmentCommand(issueId: string, commandId: string): Promise<IssueEnvironmentCommand> {
+    return this.issueEnvironmentCommand(`/api/issues/${issueId}/environment-commands/${commandId}`, "logs");
+  }
+
+  private async issueEnvironmentCommand(path: string, action: IssueEnvironmentAction, init?: RequestInit): Promise<IssueEnvironmentCommand> {
+    const raw = await this.fetch<unknown>(path, init);
+    const fallback: IssueEnvironmentCommand = {
+      id: "", action, status: "failed", error: "", environment_id: null, runtime_id: "", task_id: null, repo: "", name: "",
+      actor_type: "member", actor_id: null, created_at: new Date().toISOString(), completed_at: null, output: null,
+    };
+    return parseWithFallback(raw, IssueEnvironmentCommandSchema, fallback, { endpoint: `${init?.method ?? "GET"} ${path.replace(/[0-9a-f-]{36}/g, ":id")}` });
+  }
+
+  /** Every linked PR in the workspace, for PR chips on issue cards and rows. */
+  async listIssuePullRequestSummaries(): Promise<IssuePullRequestSummariesResponse> {
+    const raw = await this.fetch<unknown>("/api/issues/pull-requests");
+    return parseWithFallback(
+      raw,
+      IssuePullRequestSummariesResponseSchema,
+      EMPTY_ISSUE_PULL_REQUEST_SUMMARIES_RESPONSE,
+      { endpoint: "GET /api/issues/pull-requests" },
     );
   }
 
