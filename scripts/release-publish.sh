@@ -73,6 +73,16 @@ release_resolve_owner() {
 		printf '%s\n' "$GHCR_OWNER"
 		return
 	fi
+	local url owner
+	url=$(git -C "$ROOT_DIR" config --get remote.origin.url 2>/dev/null || true)
+	if [[ -n "$url" ]]; then
+		if [[ "$url" =~ github\.com[:/]([^/]+)/[^/]+ ]]; then
+			owner="${BASH_REMATCH[1]}"
+			owner="${owner%.git}"
+			printf '%s\n' "$owner"
+			return
+		fi
+	fi
 	require_cmd gh
 	gh repo view --json owner -q .owner.login
 }
