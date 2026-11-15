@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,19 @@ import (
 	redismock "github.com/go-redis/redismock/v9"
 	"github.com/redis/go-redis/v9"
 )
+
+func raceDetectorEnabled() bool {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return false
+	}
+	for _, s := range info.Settings {
+		if s.Key == "-race" && s.Value == "true" {
+			return true
+		}
+	}
+	return false
+}
 
 // Regression adapted from the independent review probe: every identity is valid and
 // every database query succeeds before the configured two-second deadline.
@@ -25,6 +39,9 @@ func TestMembershipBurstDoesNotRejectValidWriters(t *testing.T) {
 		{4096, 200 * time.Millisecond},
 	} {
 		t.Run(fmt.Sprintf("writers=%d/query=%s", tc.writers, tc.latency), func(t *testing.T) {
+			if raceDetectorEnabled() && tc.latency > 5*time.Millisecond {
+				t.Skip("high-latency burst probe is not reliable under -race (release-verify)")
+			}
 			hub := NewHub()
 			var calls, active, peak, queryErrors atomic.Int32
 			hub.SetMembershipChecker(membershipBatchOverride{

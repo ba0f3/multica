@@ -435,13 +435,14 @@ func TestCheckoutRefusesPathHoldingAnotherRepository(t *testing.T) {
 					}
 					a, b := sources[0], sources[1]
 					cache := New(t.TempDir(), testLogger())
-					if err := cache.Sync("ws-1", []RepoInfo{{URL: a}, {URL: b}}); err != nil {
+					scope := Scope{WorkspaceID: "ws-1", UserID: "test-user"}
+					if err := cache.Sync(scope, []RepoInfo{{URL: a}, {URL: b}}); err != nil {
 						t.Fatalf("sync failed: %v", err)
 					}
 					workDir := t.TempDir()
 					checkout := func(url string, isolated, fresh bool) (*WorktreeResult, error) {
 						return cache.CreateWorktree(WorktreeParams{
-							WorkspaceID:         "ws-1",
+							Scope:               scope,
 							RepoURL:             url,
 							WorkDir:             workDir,
 							AgentName:           "Agent",
@@ -454,10 +455,10 @@ func TestCheckoutRefusesPathHoldingAnotherRepository(t *testing.T) {
 					if err != nil {
 						t.Fatalf("checkout of A failed: %v", err)
 					}
-					if !CheckoutBelongsTo(context.Background(), cache.Lookup("ws-1", a), first.Path) {
+					if !CheckoutBelongsTo(context.Background(), cache.Lookup(scope, a), first.Path) {
 						t.Fatal("A's checkout does not belong to A's cache")
 					}
-					if CheckoutBelongsTo(context.Background(), cache.Lookup("ws-1", b), first.Path) {
+					if CheckoutBelongsTo(context.Background(), cache.Lookup(scope, b), first.Path) {
 						t.Fatal("A's checkout belongs to B's cache")
 					}
 					originBefore, _ := runGitOutput("-C", first.Path, "config", "--get", "remote.origin.url")

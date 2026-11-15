@@ -102,8 +102,11 @@ printf '{"type":"step_finish","sessionID":"ses","part":{"reason":"stop","tokens"
 	if strings.Contains(joined, "--server") {
 		t.Fatalf("unexpected --server in argv log: %s", joined)
 	}
-	if !strings.Contains(joined, "--standalone") {
-		t.Fatalf("expected --standalone for isolated OpenCode 2.x, argv log: %s", joined)
+	if !strings.Contains(joined, "acp") {
+		t.Fatalf("expected isolated OpenCode 2.x to launch acp, argv log: %s", joined)
+	}
+	if strings.Contains(joined, "--standalone") {
+		t.Fatalf("acp must not receive --standalone, argv log: %s", joined)
 	}
 }
 
@@ -183,7 +186,7 @@ exec "` + real + `" "$@"
 	}
 	version := strings.TrimSpace(string(versionOut))
 	if !strings.Contains(version, "2.") && !strings.Contains(version, "v2") {
-		t.Skipf("real smoke expects OpenCode 2.x for --standalone, got %q", version)
+		t.Skipf("real smoke expects OpenCode 2.x for acp isolation wiring, got %q", version)
 	}
 
 	backend, err := agentpkg.New("opencode", agentpkg.Config{
@@ -213,8 +216,15 @@ exec "` + real + `" "$@"
 	if err != nil || len(raw) == 0 {
 		t.Fatalf("wrapper did not capture argv (opencode may not have started): %v", err)
 	}
-	if !strings.Contains(string(raw), "--standalone") {
-		t.Fatalf("expected --standalone in real argv log: %s", raw)
+	joined := string(raw)
+	if strings.Contains(joined, "--server") {
+		t.Fatalf("unexpected --server in real argv log: %s", joined)
+	}
+	if !strings.Contains(joined, "acp") {
+		t.Fatalf("expected acp in real argv log: %s", joined)
+	}
+	if strings.Contains(joined, "--standalone") {
+		t.Fatalf("acp must not receive --standalone in real argv log: %s", joined)
 	}
 }
 

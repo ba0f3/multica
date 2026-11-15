@@ -113,7 +113,7 @@ func TestIssueWakeupInstructionPreservesQueuedRunAndChecksScope(t *testing.T) {
 	if err = s.EditInstruction(ctx, parseTestUUID(t, other), w.ID, owner, in); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("cross issue: %v", err)
 	}
-	outsider := f.User(t, "outsider", "edit-outsider@multica.test")
+	outsider := f.User(t, "outsider", principalTestEmail(t, "edit-outsider"))
 	if err = s.EditInstruction(ctx, issue, w.ID, parseTestUUID(t, outsider), in); !errors.Is(err, ErrWakeupForbidden) {
 		t.Fatalf("outsider: %v", err)
 	}

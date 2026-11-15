@@ -13,7 +13,7 @@ import (
 
 func TestIssueWakeupMemberFilterPreservesOnceUntilMatchingComment(t *testing.T) {
 	f, s, issue, agent := wakeFixture(t)
-	other := f.User(t, "monitored member", "wakeup-member@multica.test")
+	other := f.User(t, "monitored member", principalTestEmail(t, "wakeup-member"))
 	f.Member(t, f.WorkspaceID, other, "member")
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, FilterActorType: "member", FilterActorID: other, Instruction: "continue after member reply"})
 	f.Comment(t, util.UUIDToString(issue), "another member")
@@ -39,7 +39,7 @@ func TestIssueWakeupMemberFilterPreservesOnceUntilMatchingComment(t *testing.T) 
 
 func TestIssueWakeupActorMatchesEditorNotOriginalAuthor(t *testing.T) {
 	f, s, issue, agent := wakeFixture(t)
-	other := f.User(t, "editor", "wakeup-editor@multica.test")
+	other := f.User(t, "editor", principalTestEmail(t, "wakeup-editor"))
 	f.Member(t, f.WorkspaceID, other, "member")
 	comment := f.Comment(t, util.UUIDToString(issue), "original")
 	makeRule := func(kind, id string) db.IssueWakeup {

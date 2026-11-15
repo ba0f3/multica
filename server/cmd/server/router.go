@@ -458,8 +458,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	// Per-user Git credentials are optional: without a custody
 	// configuration there is no service and the credential endpoints
-	// answer that the capability is unavailable.
-	h.GitSecurity = gitCredentialService(queries)
+	// answer that the capability is unavailable. Router wiring tests pass a
+	// nil pool; do not bootstrap MULTICA_GIT_PROVIDERS against a dead DB.
+	if pool != nil {
+		h.GitSecurity = gitCredentialService(queries)
+	}
 	invitationRateLimits := handler.DefaultInvitationRateLimits()
 	invitationRateLimits.Actor.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_ACTOR_10M", invitationRateLimits.Actor.Limit)
 	invitationRateLimits.Workspace.Limit = envNonNegativeInt("RATE_LIMIT_INVITATION_WORKSPACE_24H", invitationRateLimits.Workspace.Limit)

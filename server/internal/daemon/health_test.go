@@ -730,10 +730,11 @@ func newRepoCheckoutHarness(t *testing.T, isolated bool, urls ...string) *repoCh
 	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, nil, "v1", repos, nil)
 	root := t.TempDir()
 	d.registerActiveRepoCheckoutTask("mat_repo_checkout_test", activeRepoCheckoutTask{
-		WorkspaceID: workspaceID,
-		TaskID:      "task-1",
-		AgentName:   "Test Agent",
-		WorkDir:     root,
+		WorkspaceID:     workspaceID,
+		ExecutionUserID: "test-user",
+		TaskID:          "task-1",
+		AgentName:       "Test Agent",
+		WorkDir:         root,
 	})
 	return &repoCheckoutHarness{d: d, root: root, isolated: isolated}
 }

@@ -16,6 +16,8 @@ import (
 func TestRouterCORSContract(t *testing.T) {
 	const origin = "https://cors-client.example"
 	t.Setenv("CORS_ALLOWED_ORIGINS", origin)
+	// Router tests pass a nil DB pool; do not inherit MULTICA_GIT_PROVIDERS from .env.
+	t.Setenv("MULTICA_GIT_PROVIDERS", "")
 	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
 
 	t.Run("preflight accepts browser request headers", func(t *testing.T) {
