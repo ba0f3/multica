@@ -33,8 +33,12 @@ Commands:
 
 Environment:
   TAG                      Release tag (vX.Y.Z); default: exact tag on HEAD
-  GITHUB_TOKEN             contents:write + packages:write (gh auth token -s ...)
-  GHCR_OWNER               Image namespace (default: gh repo owner)
+  GITHUB_TOKEN             GoReleaser / GitHub API (repo scope)
+  GHCR_TOKEN               PAT for GHCR push (write:packages); preferred for images
+  GHCR_PUSH_TOKEN          Alias for GHCR_TOKEN
+  GITHUB_PACKAGES_TOKEN    Alias for GHCR_TOKEN
+  SKIP_GHCR_LOGIN=1        Keep existing docker login (e.g. after docker login with PAT)
+  GHCR_OWNER               Image namespace (default: git remote origin owner)
   PLATFORMS                Docker platforms (default: linux/amd64,linux/arm64)
   HOMEBREW_TAP_GITHUB_TOKEN  Optional; omit to skip Homebrew tap upload
   HOMEBREW_TAP_OWNER       Tap owner (default: GHCR_OWNER)
@@ -106,13 +110,45 @@ release_ensure_token() {
 		export GITHUB_TOKEN
 		return
 	fi
-	die "Set GITHUB_TOKEN or run 'gh auth login' with packages + repo scope."
+	die "Set GITHUB_TOKEN or run 'gh auth login' with repo scope (GoReleaser)."
+}
+
+# GHCR push often fails while `docker push ghcr.io/ba0f3/ccload` works: plain docker
+# push reuses an older `docker login` (classic PAT with write:packages), but this
+# script used to always overwrite ghcr.io with `gh auth token` (repo-only OAuth).
+release_ghcr_token() {
+	local t
+	for t in "${GHCR_TOKEN:-}" "${GHCR_PUSH_TOKEN:-}" "${GITHUB_PACKAGES_TOKEN:-}"; do
+		if [[ -n "$t" ]]; then
+			printf '%s\n' "$t"
+			return
+		fi
+	done
+	if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+		printf '%s\n' "$GITHUB_TOKEN"
+		return
+	fi
+	if ! gh auth token >/dev/null 2>&1; then
+		die "GHCR: set GHCR_TOKEN (PAT with write:packages), or gh auth login, or SKIP_GHCR_LOGIN=1 after docker login"
+	fi
+	local status scopes
+	status=$(gh auth status 2>&1) || true
+	scopes=$(printf '%s\n' "$status" | sed -n 's/.*Token scopes: //p' | head -1)
+	if [[ "$scopes" != *write:packages* ]]; then
+		die "GHCR push needs write:packages; gh token scopes: ${scopes:-unknown}. Fix: gh auth refresh -h github.com -s write:packages -s read:packages; or export GHCR_TOKEN=<classic PAT>; or docker login ghcr.io then SKIP_GHCR_LOGIN=1. (docker push ccload can work with old login; this script overwrites ghcr.io unless you use GHCR_TOKEN or SKIP_GHCR_LOGIN.)"
+	fi
+	gh auth token
 }
 
 release_login_ghcr() {
-	local owner=$1
-	release_ensure_token
-	printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io -u "$owner" --password-stdin >/dev/null
+	local owner=$1 token
+	if [[ "${SKIP_GHCR_LOGIN:-}" == 1 ]]; then
+		echo "==> SKIP_GHCR_LOGIN=1: using existing docker/ghcr.io credentials (buildx)"
+		return 0
+	fi
+	token=$(release_ghcr_token)
+	printf '%s\n' "$token" | docker login ghcr.io -u "$owner" --password-stdin >/dev/null
+	echo "==> logged in to ghcr.io as $owner"
 }
 
 release_ensure_buildx() {

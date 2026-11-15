@@ -80,7 +80,11 @@ Targets map to `scripts/release-publish.sh`:
 | `release-images-worker` | Worker image only (`RELEASE_TAG=latest` allowed) |
 | `release-publish` | `verify` + `cli` + `images` (skip with `SKIP_VERIFY=1`, `SKIP_CLI=1`, or `SKIP_IMAGES=1`) |
 
-Override image namespace with `GHCR_OWNER`. Multi-arch defaults to `linux/amd64,linux/arm64` (`PLATFORMS`). Worker smoke uses `linux/amd64` (`SMOKE_PLATFORM`).
+Override image namespace with `GHCR_OWNER` when needed. Forks that track `ba0f3/multica` should publish under `ghcr.io/ba0f3/…` (owner from `git remote origin`, not `gh repo view` upstream).
+
+**GHCR login:** `make release-images` logs into `ghcr.io` unless `SKIP_GHCR_LOGIN=1`. Token order: `GHCR_TOKEN` (or `GHCR_PUSH_TOKEN` / `GITHUB_PACKAGES_TOKEN`), then `GITHUB_TOKEN`, then `gh auth token` — and the latter must include `write:packages` or push fails with `permission_denied`. A plain `docker push ghcr.io/ba0f3/ccload:latest` can still work when an older `docker login` used a classic PAT, while the release script overwrote GHCR with an OAuth token that only has `repo`. Fix: `gh auth refresh -h github.com -s write:packages -s read:packages`, or `export GHCR_TOKEN=<classic PAT with write:packages>`, or `docker login ghcr.io` then `SKIP_GHCR_LOGIN=1 make release-images …`. Fine-grained PATs must allow write to each container package (`multica-backend`, `multica-web`, `multica-task-worker`), not only `ccload`.
+
+Multi-arch defaults to `linux/amd64,linux/arm64` (`PLATFORMS`). Worker smoke uses `linux/amd64` (`SMOKE_PLATFORM`).
 
 `release-verify` / `verify` runs the same Go suite as CI. When `.env` or `.env.worktree` exists, it also runs `scripts/ensure-postgres.sh` and migrations (`RELEASE_ENSURE_DB=1`, same idea as `make test`). Set `RELEASE_ENSURE_DB=0` to skip that step. If `DATABASE_URL` is set in your shell but Postgres is down, either unset it, run `make up`, or rely on the auto-prepare when `.env` is present.
 
