@@ -100,7 +100,8 @@ exit 1
 				d.cfg.SandboxEnabled = true
 				d.cfg.TaskSandboxBackend = "unsupported-test-boundary"
 			}
-			d.handleTask(context.Background(), task, 0)
+			d.handleTask(context.Background(), task, newTestTaskSlot(0))
+
 			select {
 			case report := <-reports:
 				if tc.isolated {

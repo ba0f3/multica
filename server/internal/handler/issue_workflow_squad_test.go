@@ -281,7 +281,7 @@ func TestSquadHandoffPreservesExecutionPrincipal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !testHandler.enqueueSquadLeaderTask(t.Context(), issue, parseUUID(executionUserID), "agent", fx.AgentID, "", workflowHandoff) {
+			if status, _ := testHandler.enqueueSquadLeaderTask(t.Context(), issue, parseUUID(executionUserID), "agent", fx.AgentID, "", workflowHandoff); status != DispatchQueued {
 				t.Fatal("squad handoff was not enqueued")
 			}
 			tasks, err := testHandler.Queries.ListTasksByIssue(t.Context(), issue.ID)
