@@ -256,7 +256,7 @@ func TestIPCBackendRepointsTheHookRelayAtTheSandboxWorker(t *testing.T) {
 	backend := newTestBackend(t, script)
 
 	session, err := backend.Execute(context.Background(), "prompt", agent.ExecOptions{
-		CursorHookCommand: []string{"/home/someone/.local/bin/multica", "__cursor_hook"},
+		SupplementHookCommand: []string{"/home/someone/.local/bin/multica", "__cursor_hook"},
 	})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -271,14 +271,14 @@ func TestIPCBackendRepointsTheHookRelayAtTheSandboxWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode the manifest: %v", err)
 	}
-	if len(manifest.Exec.CursorHookCommand) != 2 {
-		t.Fatalf("hook command = %v", manifest.Exec.CursorHookCommand)
+	if len(manifest.Exec.SupplementHookCommand) != 2 {
+		t.Fatalf("hook command = %v", manifest.Exec.SupplementHookCommand)
 	}
-	if manifest.Exec.CursorHookCommand[0] != sandboxWorker {
-		t.Fatalf("hook binary = %q, want %q", manifest.Exec.CursorHookCommand[0], sandboxWorker)
+	if manifest.Exec.SupplementHookCommand[0] != sandboxWorker {
+		t.Fatalf("hook binary = %q, want %q", manifest.Exec.SupplementHookCommand[0], sandboxWorker)
 	}
-	if manifest.Exec.CursorHookCommand[1] != "__cursor_hook" {
-		t.Fatalf("hook argument = %q, want it preserved", manifest.Exec.CursorHookCommand[1])
+	if manifest.Exec.SupplementHookCommand[1] != "__cursor_hook" {
+		t.Fatalf("hook argument = %q, want it preserved", manifest.Exec.SupplementHookCommand[1])
 	}
 }
 
