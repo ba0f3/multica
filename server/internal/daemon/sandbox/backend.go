@@ -67,9 +67,9 @@ func (b *IPCBackend) Execute(ctx context.Context, prompt string, opts agent.Exec
 		// from. This keeps the host layout out of the container manifest.
 		spec.ClaudeSettingsPath = b.ClaudeSettingsPath
 	}
-	if len(spec.CursorHookCommand) > 0 {
-		spec.CursorHookCommand = append([]string(nil), spec.CursorHookCommand...)
-		spec.CursorHookCommand[0] = sandboxWorker
+	if len(spec.SupplementHookCommand) > 0 {
+		spec.SupplementHookCommand = append([]string(nil), spec.SupplementHookCommand...)
+		spec.SupplementHookCommand[0] = sandboxWorker
 	}
 	attemptID := b.Config.AttemptID
 	if attemptID == "" {

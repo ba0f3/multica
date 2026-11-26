@@ -76,7 +76,7 @@ type ExecSpec struct {
 	ServiceTier                string          `json:"service_tier,omitempty"`
 	OpenclawMode               string          `json:"openclaw_mode,omitempty"`
 	ClaudeSettingsPath         string          `json:"claude_settings_path,omitempty"`
-	CursorHookCommand          []string        `json:"cursor_hook_command,omitempty"`
+	SupplementHookCommand      []string        `json:"supplement_hook_command,omitempty"`
 	IsolatedToolBoundary       bool            `json:"isolated_tool_boundary,omitempty"`
 }
 
@@ -144,7 +144,7 @@ func ConvertExecOptions(opts agent.ExecOptions) ExecSpec {
 		ServiceTier:                opts.ServiceTier,
 		OpenclawMode:               opts.OpenclawMode,
 		ClaudeSettingsPath:         opts.ClaudeSettingsPath,
-		CursorHookCommand:          append([]string(nil), opts.CursorHookCommand...),
+		SupplementHookCommand:      append([]string(nil), opts.SupplementHookCommand...),
 		IsolatedToolBoundary:       opts.IsolatedToolBoundary,
 	}
 }
@@ -178,7 +178,7 @@ func (s ExecSpec) ExecOptions() agent.ExecOptions {
 		ServiceTier:                s.ServiceTier,
 		OpenclawMode:               s.OpenclawMode,
 		ClaudeSettingsPath:         s.ClaudeSettingsPath,
-		CursorHookCommand:          append([]string(nil), s.CursorHookCommand...),
+		SupplementHookCommand:      append([]string(nil), s.SupplementHookCommand...),
 		IsolatedToolBoundary:       s.IsolatedToolBoundary,
 	}
 }
